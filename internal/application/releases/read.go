@@ -5,8 +5,10 @@ import (
 	"errors"
 	"fmt"
 
+	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
@@ -82,6 +84,8 @@ type ResourceStatus struct {
 	// Actual is the runtime state: running/healthy, exited, present or missing.
 	Actual string `json:"actual"`
 	Health string `json:"health,omitempty"`
+	// Backend is the alias a proxy routes to.
+	Backend string `json:"backend,omitempty"`
 }
 
 // StatusReport is the desired vs actual state of a release (tech design §10.3).
@@ -132,7 +136,7 @@ func (s *Service) Status(ctx context.Context, name string) (*StatusReport, error
 			st.Desired = "failed"
 		}
 		switch a.Kind {
-		case resource.KindWorkload:
+		case resource.KindWorkload, deployment.KindProxy:
 			tracked[ports.ObjectWorkload+"/"+a.RuntimeName] = true
 			ws, err := rt.GetWorkload(ctx, a.RuntimeName)
 			switch {
@@ -142,6 +146,9 @@ func (s *Service) Status(ctx context.Context, name string) (*StatusReport, error
 				return nil, err
 			default:
 				st.Actual, st.Health = ws.State, ws.Health
+			}
+			if a.Kind == deployment.KindProxy {
+				st.Backend, _ = envoy.Backend(deployment.ProxyDir(s.Home, name, a.Name))
 			}
 		case resource.KindNetwork, resource.KindVolume:
 			kind := ports.ObjectNetwork

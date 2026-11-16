@@ -306,9 +306,13 @@ func newStatusCmd(a *app) *cobra.Command {
 					r.Name, r.Status, r.CurrentRevision, r.PackageName, r.PackageVersion, ago(r.UpdatedAt))
 				var rows [][]string
 				for _, x := range rep.Resources {
-					rows = append(rows, []string{x.Kind, x.Name, x.RuntimeName, strconv.Itoa(x.Revision), x.Desired, x.Actual, x.Health})
+					health := x.Health
+					if x.Backend != "" {
+						health = "-> " + x.Backend
+					}
+					rows = append(rows, []string{x.Kind, x.Name, x.RuntimeName, strconv.Itoa(x.Revision), x.Desired, x.Actual, health})
 				}
-				if err := a.table("KIND\tNAME\tRUNTIME NAME\tREVISION\tDESIRED\tACTUAL\tHEALTH", rows); err != nil {
+				if err := a.table("KIND\tNAME\tRUNTIME NAME\tREVISION\tDESIRED\tACTUAL\tHEALTH/BACKEND", rows); err != nil {
 					return err
 				}
 				if len(rep.Orphans) > 0 {
