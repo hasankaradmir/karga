@@ -1,0 +1,2 @@
+# healthy selects the healthcheck command: true passes, false fails.
+healthy: true
