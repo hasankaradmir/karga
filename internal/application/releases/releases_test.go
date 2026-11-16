@@ -388,3 +388,48 @@ func TestReconcileBeforePlan(t *testing.T) {
 		t.Fatal("repaired workload should be applied again")
 	}
 }
+
+const pgPkg = "../../../examples/postgres"
+
+func TestWriteOnlyValuesNotStored(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	pg := func(sets ...string) packages.Options {
+		return packages.Options{Sets: append([]string{"network.port=" + e.port}, sets...)}
+	}
+	if _, err := e.svc.Install(ctx, InstallRequest{CommonOptions: common(), Name: "db", Package: pgPkg, Values: pg("database.password=hunter2")}); err != nil {
+		t.Fatal(err)
+	}
+	rev := must[release.Revision](t)(e.svc.Store.GetRevision(ctx, "db", 1))
+	for _, v := range []map[string]any{rev.Values, rev.ValuesAll} {
+		if v["database"].(map[string]any)["password"] != "<redacted>" {
+			t.Fatalf("stored values: %#v", v)
+		}
+	}
+	shown := must[map[string]any](t)(e.svc.GetValues(ctx, "db", 0, true))
+	if shown["database"].(map[string]any)["password"] != "<redacted>" {
+		t.Fatalf("get values --all: %#v", shown)
+	}
+
+	// Same values: no-op. A new password is a change even though both are stored as <redacted>.
+	if res := must[*Result](t)(e.svc.Install(ctx, InstallRequest{CommonOptions: common(), Name: "db", Package: pgPkg, Values: pg("database.password=hunter2")})); !res.NoOp {
+		t.Fatalf("same password should be a no-op: %+v", res)
+	}
+	if _, err := e.svc.Install(ctx, InstallRequest{CommonOptions: common(), Name: "db", Package: pgPkg, Values: pg("database.password=other")}); !errors.Is(err, ErrExists) {
+		t.Fatalf("changed password: want ErrExists, got %v", err)
+	}
+
+	// --reuse-values asks for writeOnly values again.
+	_, err := e.svc.Upgrade(ctx, UpgradeRequest{CommonOptions: common(), Name: "db", Package: pgPkg, ReuseValues: true})
+	if err == nil || !strings.Contains(err.Error(), "database.password is writeOnly") {
+		t.Fatalf("reuse without password: %v", err)
+	}
+	if _, err := e.svc.Upgrade(ctx, UpgradeRequest{CommonOptions: common(), Name: "db", Package: pgPkg, ReuseValues: true,
+		Values: packages.Options{Sets: []string{"database.password=hunter3"}}}); err != nil {
+		t.Fatalf("reuse with password: %v", err)
+	}
+	vals := must[map[string]any](t)(e.svc.GetValues(ctx, "db", 0, false))
+	if vals["network"].(map[string]any)["port"] == nil {
+		t.Fatalf("reused values lost: %#v", vals)
+	}
+}

@@ -4,11 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/application/packages"
 	"github.com/hasankaradmir/karga/internal/domain/pkg"
 	"github.com/hasankaradmir/karga/internal/domain/release"
+	"github.com/hasankaradmir/karga/internal/infrastructure/values"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
@@ -83,7 +85,7 @@ func (s *Service) render(ctx context.Context, name, path string, opts packages.O
 		return deployInput{}, err
 	}
 	return deployInput{Name: name, Package: p.Metadata, PackageDigest: digest, Overrides: m.Overrides,
-		Values: m.Values, Resources: m.Resources(), Revision: revision}, nil
+		Values: m.Values, Resources: m.Resources(), Revision: revision, SecretPaths: m.SecretPaths}, nil
 }
 
 // Install installs a package. Installing again with the same package and values is a no-op (A8).
@@ -141,7 +143,20 @@ func (s *Service) Upgrade(ctx context.Context, req UpgradeRequest) (*Result, err
 		if err != nil {
 			return nil, err
 		}
-		opts.BaseOverrides = cur.Values
+		// writeOnly values were never stored: they must be given again.
+		hidden := values.RedactedPaths(cur.Values)
+		if len(hidden) > 0 {
+			given, err := packages.Overrides(opts)
+			if err != nil {
+				return nil, err
+			}
+			for _, p := range hidden {
+				if !values.Has(given, p) {
+					return nil, fmt.Errorf("%s is writeOnly and was not stored; pass it again with --set %s=<value>", strings.Join(p, "."), strings.Join(p, "."))
+				}
+			}
+		}
+		opts.BaseOverrides = values.Drop(cur.Values, hidden)
 	}
 	in, err := s.render(ctx, req.Name, req.Package, opts)
 	if err != nil {

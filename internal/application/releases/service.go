@@ -20,6 +20,7 @@ import (
 	"github.com/hasankaradmir/karga/internal/domain/pkg"
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga/internal/infrastructure/values"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
@@ -200,6 +201,8 @@ type deployInput struct {
 	Revision      int
 	// Strategy overrides the workloads' updateStrategy ("" = use the spec).
 	Strategy string
+	// SecretPaths are writeOnly values: stored as <redacted>, never in plain text.
+	SecretPaths [][]string
 	// Existing is the current release row, nil for a new release.
 	Existing *release.Release
 }
@@ -321,7 +324,7 @@ func (s *Service) run(ctx context.Context, rt ports.Runtime, op *release.Operati
 	if err := s.Store.CreateRevision(ctx, release.Revision{
 		Release: in.Name, Number: in.Revision, PackageName: in.Package.Name, PackageVersion: in.Package.Version,
 		RuntimeSupported: in.Package.Runtime.Supported, PackageDigest: in.PackageDigest, ValuesDigest: valuesDigest, ManifestDigest: manifestDigest,
-		Values: in.Overrides, ValuesAll: in.Values, Manifest: manifest,
+		Values: values.Mask(in.Overrides, in.SecretPaths), ValuesAll: values.Mask(in.Values, in.SecretPaths), Manifest: manifest,
 		Status: release.RevisionPending, Description: in.Description, CreatedAt: now,
 	}); err != nil {
 		return err
