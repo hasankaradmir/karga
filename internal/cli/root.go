@@ -67,6 +67,6 @@ func NewRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	root.PersistentFlags().BoolVar(&a.debug, "debug", false, "enable debug logging")
 	root.PersistentFlags().StringVar(&a.logFormat, "log-format", "text", "log format on stderr: text|json")
 
-	root.AddCommand(newVersionCmd(a))
+	root.AddCommand(newVersionCmd(a), newTemplateCmd(a), newLintCmd(a), newShowCmd(a))
 	return root
 }
