@@ -5,6 +5,7 @@ package integration
 import (
 	"context"
 	"io"
+	"maps"
 	"net/http"
 	"runtime"
 	"strconv"
@@ -72,6 +73,13 @@ func startHostPinger(port int) *hostPinger {
 
 func (p *hostPinger) halt() { close(p.stop); p.done.Wait() }
 
+// seen returns a copy of the response bodies counted so far.
+func (p *hostPinger) seen() map[string]int {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	return maps.Clone(p.bodies)
+}
+
 func (p *hostPinger) reset() { p.ok.Store(0); p.failed.Store(0) }
 
 func TestProxyReplaceWithoutLoss(t *testing.T) {
@@ -123,13 +131,14 @@ func TestProxyReplaceWithoutLoss(t *testing.T) {
 	time.Sleep(time.Second)
 
 	netOut := logs(t, net)
-	t.Logf("host: %d ok, %d failed, bodies %v; network: %d failed of %d", host.ok.Load(), host.failed.Load(), host.bodies,
+	bodies := host.seen()
+	t.Logf("host: %d ok, %d failed, bodies %v; network: %d failed of %d", host.ok.Load(), host.failed.Load(), bodies,
 		strings.Count(netOut, "FAIL"), strings.Count(netOut, "\n")/2)
 	if host.failed.Load() != 0 || strings.Count(netOut, "FAIL") != 0 {
 		t.Fatalf("requests failed behind the proxy:\n%s", netOut)
 	}
-	if host.bodies["v2"] == 0 || host.bodies["v3"] != 0 {
-		t.Fatalf("unexpected content: %v", host.bodies)
+	if bodies["v2"] == 0 || bodies["v3"] != 0 {
+		t.Fatalf("unexpected content: %v", bodies)
 	}
 	if r := currentRelease(t, s, name); r.Status != release.StatusDeployed || r.CurrentRevision != 2 {
 		t.Fatalf("release after failed replace: %+v", r)
