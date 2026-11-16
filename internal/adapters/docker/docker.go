@@ -19,6 +19,8 @@ type Runtime struct {
 	c *client.Client
 }
 
+var _ ports.Runtime = (*Runtime)(nil)
+
 // New connects to Docker (DOCKER_HOST or the active docker context) and checks the daemon answers.
 func New(ctx context.Context) (*Runtime, error) {
 	opts := []client.Opt{client.FromEnv}
