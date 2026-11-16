@@ -176,14 +176,18 @@ func (s *Store) CreateRevision(ctx context.Context, rev release.Revision) error 
 	if err != nil {
 		return err
 	}
+	supported, err := json.Marshal(rev.RuntimeSupported)
+	if err != nil {
+		return err
+	}
 	manifest := rev.Manifest
 	if len(manifest) == 0 {
 		manifest = json.RawMessage("[]")
 	}
-	_, err = s.db.ExecContext(ctx, `INSERT INTO revisions (release, revision, package_name, package_version, package_digest,
-		values_digest, manifest_digest, values_json, values_all_json, manifest_json, status, description, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
-		rev.Release, rev.Number, rev.PackageName, rev.PackageVersion, rev.PackageDigest, rev.ValuesDigest, rev.ManifestDigest,
+	_, err = s.db.ExecContext(ctx, `INSERT INTO revisions (release, revision, package_name, package_version, runtime_supported,
+		package_digest, values_digest, manifest_digest, values_json, values_all_json, manifest_json, status, description, created_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		rev.Release, rev.Number, rev.PackageName, rev.PackageVersion, string(supported), rev.PackageDigest, rev.ValuesDigest, rev.ManifestDigest,
 		string(vals), string(all), string(manifest), string(rev.Status), rev.Description, ts(rev.CreatedAt))
 	return err
 }
@@ -208,14 +212,17 @@ func (s *Store) UpdateRevisionStatus(ctx context.Context, rel string, number int
 	return nil
 }
 
-const revisionColumns = `release, revision, package_name, package_version, package_digest, values_digest, manifest_digest,
+const revisionColumns = `release, revision, package_name, package_version, runtime_supported, package_digest, values_digest, manifest_digest,
 	values_json, values_all_json, manifest_json, status, description, created_at`
 
 func scanRevision(row scanner) (release.Revision, error) {
 	var r release.Revision
-	var vals, all, manifest, status, created string
-	if err := row.Scan(&r.Release, &r.Number, &r.PackageName, &r.PackageVersion, &r.PackageDigest, &r.ValuesDigest,
+	var supported, vals, all, manifest, status, created string
+	if err := row.Scan(&r.Release, &r.Number, &r.PackageName, &r.PackageVersion, &supported, &r.PackageDigest, &r.ValuesDigest,
 		&r.ManifestDigest, &vals, &all, &manifest, &status, &r.Description, &created); err != nil {
+		return r, err
+	}
+	if err := json.Unmarshal([]byte(supported), &r.RuntimeSupported); err != nil {
 		return r, err
 	}
 	var err error

@@ -58,7 +58,7 @@ func TestReleaseRevisionResourceCRUD(t *testing.T) {
 	}
 
 	rev := release.Revision{
-		Release: "web", Number: 1, PackageName: "redis", PackageVersion: "1.0.0",
+		Release: "web", Number: 1, PackageName: "redis", PackageVersion: "1.0.0", RuntimeSupported: []string{"docker"},
 		PackageDigest: "sha256:p", ValuesDigest: "sha256:v", ManifestDigest: "sha256:m",
 		Values:    map[string]any{"port": 6379, "big": 1000000, "ratio": 0.5, "list": []any{1, "a"}},
 		ValuesAll: map[string]any{"image": map[string]any{"tag": "7.4"}},

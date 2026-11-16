@@ -13,6 +13,7 @@ CREATE TABLE revisions (
     revision        INTEGER NOT NULL,
     package_name    TEXT NOT NULL,
     package_version TEXT NOT NULL,
+    runtime_supported TEXT NOT NULL,
     package_digest  TEXT NOT NULL,
     values_digest   TEXT NOT NULL,
     manifest_digest TEXT NOT NULL,

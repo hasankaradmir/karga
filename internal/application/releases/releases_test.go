@@ -1,0 +1,316 @@
+package releases
+
+import (
+	"context"
+	"errors"
+	"os/exec"
+	"path/filepath"
+	"slices"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
+	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
+	"github.com/hasankaradmir/karga/internal/application/packages"
+	"github.com/hasankaradmir/karga/internal/domain/release"
+	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga/internal/ports"
+	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
+)
+
+const redisPkg = "../../../examples/redis"
+
+type env struct {
+	t    *testing.T
+	svc  *Service
+	rt   *fakeruntime.Runtime
+	port string
+}
+
+func newEnv(t *testing.T) *env {
+	t.Helper()
+	home := t.TempDir()
+	store, err := sqlite.Open(context.Background(), filepath.Join(home, "karga.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = store.Close() })
+	rt := fakeruntime.New()
+	svc := New(store, func(context.Context) (ports.Runtime, error) { return rt, nil }, home, nil, nil)
+	return &env{t: t, svc: svc, rt: rt, port: strconv.Itoa(runtimetest.FreePort(t))}
+}
+
+func (e *env) opts(sets ...string) packages.Options {
+	return packages.Options{Sets: append([]string{"network.port=" + e.port}, sets...)}
+}
+
+func common() CommonOptions {
+	return CommonOptions{Timeout: time.Second, HistoryMax: DefaultHistoryMax}
+}
+
+func (e *env) install(sets ...string) (*Result, error) {
+	return e.svc.Install(context.Background(), InstallRequest{CommonOptions: common(), Name: "cache", Package: redisPkg, Values: e.opts(sets...)})
+}
+
+func (e *env) upgrade(sets ...string) (*Result, error) {
+	return e.svc.Upgrade(context.Background(), UpgradeRequest{CommonOptions: common(), Name: "cache", Package: redisPkg, Values: e.opts(sets...)})
+}
+
+func (e *env) release() release.Release {
+	e.t.Helper()
+	r, err := e.svc.Store.GetRelease(context.Background(), "cache")
+	if err != nil {
+		e.t.Fatal(err)
+	}
+	return r
+}
+
+func (e *env) image() string { return e.rt.Workloads["cache-redis"].Request.Image }
+
+func must[T any](t *testing.T) func(T, error) T {
+	return func(v T, err error) T {
+		t.Helper()
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v
+	}
+}
+
+func TestInstallIdempotentAndConflicts(t *testing.T) {
+	e := newEnv(t)
+	res := must[*Result](t)(e.install())
+	if res.Revision != 1 || res.Status != release.StatusDeployed {
+		t.Fatalf("install: %+v", res)
+	}
+	if r := e.release(); r.CurrentRevision != 1 || r.Status != release.StatusDeployed || r.PackageVersion != "1.0.0" {
+		t.Fatalf("release: %+v", r)
+	}
+	if res := must[*Result](t)(e.install()); !res.NoOp {
+		t.Fatalf("same install should be a no-op: %+v", res)
+	}
+	if _, err := e.install("image.tag=7.2"); !errors.Is(err, ErrExists) {
+		t.Fatalf("different values: want ErrExists, got %v", err)
+	}
+}
+
+func TestDryRunTouchesNothing(t *testing.T) {
+	e := newEnv(t)
+	res, err := e.svc.Install(context.Background(), InstallRequest{CommonOptions: CommonOptions{DryRun: true}, Name: "cache", Package: redisPkg, Values: e.opts()})
+	if err != nil || !res.DryRun || !res.Plan.HasChanges() {
+		t.Fatalf("dry run: %+v %v", res, err)
+	}
+	if _, err := e.svc.Store.GetRelease(context.Background(), "cache"); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("dry run created a release: %v", err)
+	}
+	if len(e.rt.Calls) != 0 {
+		t.Fatalf("dry run touched the runtime: %v", e.rt.Calls)
+	}
+}
+
+func TestUpgradeFailRollback(t *testing.T) {
+	e := newEnv(t)
+	must[*Result](t)(e.install())
+	res := must[*Result](t)(e.upgrade("image.tag=7.2"))
+	if res.Revision != 2 || res.From != 1 || e.image() != "redis:7.2" {
+		t.Fatalf("upgrade: %+v image %s", res, e.image())
+	}
+
+	// Failed upgrade: revision 3 failed, current stays 2, container stopped but kept.
+	e.rt.Health = ports.HealthUnhealthy
+	if _, err := e.upgrade("image.tag=7.0"); err == nil {
+		t.Fatal("expected failed upgrade")
+	}
+	rel := e.release()
+	if rel.Status != release.StatusFailed || rel.CurrentRevision != 2 {
+		t.Fatalf("after failure: %+v", rel)
+	}
+	rev3 := must[release.Revision](t)(e.svc.Store.GetRevision(context.Background(), "cache", 3))
+	if rev3.Status != release.RevisionFailed || !strings.Contains(rev3.Description, "unhealthy") {
+		t.Fatalf("revision 3: %+v", rev3)
+	}
+	if w := e.rt.Workloads["cache-redis"]; w.State != ports.StateExited {
+		t.Fatalf("failed container should be stopped, got %+v", w)
+	}
+
+	// Rollback without a revision goes back to the last good one (2).
+	e.rt.Health = ""
+	res = must[*Result](t)(e.svc.Rollback(context.Background(), RollbackRequest{CommonOptions: common(), Name: "cache"}))
+	if res.Revision != 4 || e.image() != "redis:7.2" || e.rt.Workloads["cache-redis"].State != ports.StateRunning {
+		t.Fatalf("rollback: %+v image %s", res, e.image())
+	}
+	hist := must[[]release.Revision](t)(e.svc.History(context.Background(), "cache"))
+	var got []string
+	for _, r := range hist {
+		got = append(got, string(r.Status)+":"+r.PackageVersion+":"+r.Description)
+	}
+	if len(hist) != 4 || hist[3].Description != "Rollback to 2" || hist[2].Status != release.RevisionFailed {
+		t.Fatalf("history: %v", got)
+	}
+
+	// Explicit rollback to revision 1.
+	must[*Result](t)(e.svc.Rollback(context.Background(), RollbackRequest{CommonOptions: common(), Name: "cache", Revision: 1}))
+	if e.image() != "redis:7.4" {
+		t.Fatalf("rollback to 1: image %s", e.image())
+	}
+	if _, err := e.svc.Rollback(context.Background(), RollbackRequest{CommonOptions: common(), Name: "cache", Revision: 3}); err == nil {
+		t.Fatal("rollback to a failed revision must be refused")
+	}
+}
+
+func TestUpgradeReuseValues(t *testing.T) {
+	e := newEnv(t)
+	must[*Result](t)(e.install("config.maxmemory=64mb"))
+	must[*Result](t)(e.svc.Upgrade(context.Background(), UpgradeRequest{CommonOptions: common(), Name: "cache", Package: redisPkg,
+		Values: packages.Options{Sets: []string{"image.tag=7.2"}}, ReuseValues: true}))
+	vals := must[map[string]any](t)(e.svc.GetValues(context.Background(), "cache", 0, false))
+	if vals["config"].(map[string]any)["maxmemory"] != "64mb" || vals["image"].(map[string]any)["tag"] != "7.2" {
+		t.Fatalf("reused values: %#v", vals)
+	}
+	all := must[map[string]any](t)(e.svc.GetValues(context.Background(), "cache", 0, true))
+	if all["image"].(map[string]any)["repository"] != "redis" {
+		t.Fatalf("all values: %#v", all)
+	}
+}
+
+func TestUpgradeMissingRelease(t *testing.T) {
+	e := newEnv(t)
+	if _, err := e.upgrade(); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("want ErrNotFound, got %v", err)
+	}
+	res := must[*Result](t)(e.svc.Upgrade(context.Background(), UpgradeRequest{CommonOptions: common(), Name: "cache", Package: redisPkg, Values: e.opts(), Install: true}))
+	if res.Revision != 1 {
+		t.Fatalf("upgrade --install: %+v", res)
+	}
+}
+
+func deadPID(t *testing.T) int {
+	t.Helper()
+	cmd := exec.Command("true")
+	if err := cmd.Run(); err != nil {
+		t.Fatal(err)
+	}
+	return cmd.Process.Pid
+}
+
+func TestInterruptedOperation(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	must[*Result](t)(e.install())
+	begin := func(pid int) {
+		t.Helper()
+		if _, err := e.svc.Store.BeginOperation(ctx, release.Operation{Release: "cache", Type: "upgrade", Revision: 2,
+			PID: pid, Hostname: e.svc.Hostname, StartedAt: time.Now()}, func(release.Operation) error { return nil }); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	begin(e.svc.PID) // this very process: alive
+	if _, err := e.upgrade("image.tag=7.2"); !errors.Is(err, ErrLocked) {
+		t.Fatalf("live lock: want ErrLocked, got %v", err)
+	}
+	force := common()
+	force.Force = true
+	if _, err := e.svc.Upgrade(ctx, UpgradeRequest{CommonOptions: force, Name: "cache", Package: redisPkg, Values: e.opts("image.tag=7.2")}); !errors.Is(err, ErrLocked) {
+		t.Fatalf("--force must not break a live operation: %v", err)
+	}
+
+	begin(deadPID(t))
+	if _, err := e.upgrade("image.tag=7.2"); !errors.Is(err, ErrInterrupted) {
+		t.Fatalf("dead process: want ErrInterrupted, got %v", err)
+	}
+	rep := must[*StatusReport](t)(e.svc.Status(ctx, "cache"))
+	if rep.Interrupted == "" {
+		t.Fatal("status should report the interrupted operation")
+	}
+	if _, err := e.svc.Upgrade(ctx, UpgradeRequest{CommonOptions: force, Name: "cache", Package: redisPkg, Values: e.opts("image.tag=7.2")}); err != nil {
+		t.Fatalf("--force: %v", err)
+	}
+}
+
+func TestPrune(t *testing.T) {
+	e := newEnv(t)
+	must[*Result](t)(e.install())
+	for _, tag := range []string{"7.0", "7.1", "7.2", "7.3"} {
+		must[*Result](t)(e.svc.Upgrade(context.Background(), UpgradeRequest{
+			CommonOptions: CommonOptions{Timeout: time.Second, HistoryMax: 2}, Name: "cache", Package: redisPkg, Values: e.opts("image.tag=" + tag)}))
+	}
+	hist := must[[]release.Revision](t)(e.svc.History(context.Background(), "cache"))
+	var nums []int
+	for _, r := range hist {
+		nums = append(nums, r.Number)
+	}
+	// Revision 1 holds the Config/Volume/Network rows still applied (unchanged since install), so it stays.
+	if !slices.Equal(nums, []int{1, 4, 5}) {
+		t.Fatalf("revisions after prune: %v", nums)
+	}
+}
+
+func TestUninstall(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	must[*Result](t)(e.install())
+	if err := e.svc.Uninstall(ctx, UninstallRequest{Name: "cache", KeepHistory: true}); err != nil {
+		t.Fatal(err)
+	}
+	if r := e.release(); r.Status != release.StatusUninstalled {
+		t.Fatalf("keep-history: %+v", r)
+	}
+	if _, ok := e.rt.Volumes["cache-redis-data"]; !ok || len(e.rt.Workloads) != 0 {
+		t.Fatalf("volume must survive, workloads must go: %v %v", e.rt.Volumes, e.rt.Workloads)
+	}
+	// Reinstall after uninstall continues the revision numbers and reuses the volume.
+	res := must[*Result](t)(e.install())
+	if res.Revision != 2 {
+		t.Fatalf("reinstall: %+v", res)
+	}
+	if err := e.svc.Uninstall(ctx, UninstallRequest{Name: "cache", DeleteVolumes: true}); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := e.svc.Store.GetRelease(ctx, "cache"); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("release should be gone: %v", err)
+	}
+	if len(e.rt.Volumes) != 0 {
+		t.Fatalf("--delete-volumes left: %v", e.rt.Volumes)
+	}
+}
+
+func TestManifestAndStatus(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	_, err := e.svc.Install(ctx, InstallRequest{CommonOptions: common(), Name: "db", Package: "../../../examples/postgres",
+		Values: packages.Options{Sets: []string{"network.port=" + e.port, "database.password=hunter2"}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	rs := must[[]resource.Resource](t)(e.svc.GetManifest(ctx, "db", 0))
+	for _, r := range rs {
+		if s, ok := r.Spec.(*resource.SecretSpec); ok && s.Values["password"] != "<redacted>" {
+			t.Fatalf("manifest secret: %v", s.Values)
+		}
+	}
+	rev := must[release.Revision](t)(e.svc.Store.GetRevision(ctx, "db", 1))
+	if strings.Contains(string(rev.Manifest), "hunter2") {
+		t.Fatal("stored manifest contains the secret")
+	}
+
+	rep := must[*StatusReport](t)(e.svc.Status(ctx, "db"))
+	var workload ResourceStatus
+	for _, r := range rep.Resources {
+		if r.Kind == resource.KindWorkload {
+			workload = r
+		}
+	}
+	if workload.Actual != ports.StateRunning || workload.Health != ports.HealthHealthy || len(rep.Orphans) != 0 {
+		t.Fatalf("status: %+v", rep)
+	}
+	delete(e.rt.Workloads, "db-postgres")
+	rep = must[*StatusReport](t)(e.svc.Status(ctx, "db"))
+	for _, r := range rep.Resources {
+		if r.Kind == resource.KindWorkload && r.Actual != "missing" {
+			t.Fatalf("deleted workload not reported missing: %+v", r)
+		}
+	}
+}
