@@ -1,0 +1,34 @@
+version: "2"
+
+linters:
+  enable:
+    - depguard
+  settings:
+    depguard:
+      rules:
+        # Domain layer must not know runtime, persistence or CLI details (tech design §16).
+        domain:
+          files:
+            - "**/internal/domain/**"
+          deny:
+            - pkg: github.com/hasankaradmir/karga/internal/application
+              desc: domain must not depend on application
+            - pkg: github.com/hasankaradmir/karga/internal/adapters
+              desc: domain must not depend on adapters
+            - pkg: github.com/hasankaradmir/karga/internal/infrastructure
+              desc: domain must not depend on infrastructure
+            - pkg: github.com/hasankaradmir/karga/internal/cli
+              desc: domain must not depend on cli
+            - pkg: github.com/docker
+              desc: domain must not depend on Docker
+            - pkg: modernc.org/sqlite
+              desc: domain must not depend on SQLite
+
+formatters:
+  enable:
+    - gofmt
+    - goimports
+  settings:
+    goimports:
+      local-prefixes:
+        - github.com/hasankaradmir/karga

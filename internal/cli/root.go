@@ -20,9 +20,9 @@ const (
 
 // app is the per-invocation state shared by all subcommands.
 type app struct {
-	stdout io.Writer
-	stderr io.Writer
-	output string
+	stdout    io.Writer
+	stderr    io.Writer
+	output    string
 	home      string
 	debug     bool
 	logFormat string
