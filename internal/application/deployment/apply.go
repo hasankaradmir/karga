@@ -91,7 +91,7 @@ func Execute(ctx context.Context, rt ports.Runtime, req ExecRequest) error {
 	if err == nil {
 		return nil
 	}
-	if disrupted && proxySupported {
+	if disrupted && proxySupported.Load() {
 		// Point the gateway at what runs now; the error that got us here is the one to report.
 		_, _ = SyncGateway(ctx, rt, proxyControl(req), req.Home, nil)
 	}
@@ -137,7 +137,7 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 	if err != nil {
 		return err
 	}
-	if err := Preflight(ctx, rt, info, req.Release, req.Supported, req.Resources); err != nil {
+	if err := preflightLocked(ctx, rt, info, req); err != nil {
 		return err
 	}
 	paths, err := Materialize(req.Home, req.Release, req.Revision, req.Resources, req.Redact)
@@ -275,7 +275,7 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 			}
 		}
 	}
-	if proxySupported {
+	if proxySupported.Load() {
 		targets, err := SyncGateway(ctx, rt, req.Proxies, req.Home, nil)
 		if err == nil {
 			err = envoyErr(ctx, rt, GatewayName, waitGateway(ctx, req.Proxies, req.Home, req.Release, targets))
@@ -306,6 +306,19 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 		}
 	}
 	return nil
+}
+
+// preflightLocked runs Preflight under the gateway lock: another karga process could otherwise
+// bind a gateway port between this one listing the gateway's claims and test-binding the port.
+func preflightLocked(ctx context.Context, rt ports.Runtime, info ports.RuntimeInfo, req ExecRequest) error {
+	if proxySupported.Load() {
+		unlock, err := lockGateway(req.Home)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+	}
+	return Preflight(ctx, rt, info, req.Release, req.Supported, req.Resources)
 }
 
 func workloadOf(c Change) (*resource.WorkloadSpec, bool) {
@@ -684,7 +697,7 @@ func Delete(ctx context.Context, rt ports.Runtime, home, release string, deleteV
 	}
 	if home != "" {
 		errs = append(errs, os.RemoveAll(filepath.Join(home, "releases", release)), os.RemoveAll(ProxyDir(home, release)))
-		if proxySupported {
+		if proxySupported.Load() {
 			_, err := SyncGateway(ctx, rt, EnvoyProxies{}, home, nil)
 			errs = append(errs, err)
 		}
