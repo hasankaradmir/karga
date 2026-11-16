@@ -30,6 +30,8 @@ type UpgradeRequest struct {
 	ReuseValues bool
 	// Install installs the release if it does not exist.
 	Install bool
+	// Strategy overrides the workloads' updateStrategy (recreate or replace); empty uses the spec.
+	Strategy string
 }
 
 // RollbackRequest re-applies an earlier revision as a new revision.
@@ -38,6 +40,8 @@ type RollbackRequest struct {
 	Name string
 	// Revision 0 selects the last deployed revision before the current state.
 	Revision int
+	// Strategy overrides the workloads' updateStrategy; empty uses the spec.
+	Strategy string
 }
 
 // UninstallRequest removes a release's runtime objects.
@@ -144,6 +148,7 @@ func (s *Service) Upgrade(ctx context.Context, req UpgradeRequest) (*Result, err
 		return nil, err
 	}
 	in.CommonOptions, in.Type, in.Description, in.Existing = req.CommonOptions, "upgrade", "Upgrade complete", existing
+	in.Strategy = req.Strategy
 	return s.deploy(ctx, in)
 }
 
@@ -184,7 +189,7 @@ func (s *Service) Rollback(ctx context.Context, req RollbackRequest) (*Result, e
 	return s.deploy(ctx, deployInput{
 		CommonOptions: req.CommonOptions, Name: req.Name, Type: "rollback", Description: fmt.Sprintf("Rollback to %d", target),
 		Package: p, PackageDigest: rev.PackageDigest, Overrides: rev.Values, Values: rev.ValuesAll,
-		Resources: rs, Revision: number, Existing: existing,
+		Resources: rs, Revision: number, Existing: existing, Strategy: req.Strategy,
 	})
 }
 

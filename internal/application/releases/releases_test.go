@@ -314,3 +314,77 @@ func TestManifestAndStatus(t *testing.T) {
 		}
 	}
 }
+
+const webPkg = "../../../tests/integration/testdata/web"
+
+func TestReplaceUpgradeAndNonDisruptiveFailure(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	up := func(sets ...string) (*Result, error) {
+		return e.svc.Upgrade(ctx, UpgradeRequest{CommonOptions: common(), Name: "site", Package: webPkg, Values: packages.Options{Sets: sets}})
+	}
+	if _, err := e.svc.Install(ctx, InstallRequest{CommonOptions: common(), Name: "site", Package: webPkg}); err != nil {
+		t.Fatal(err)
+	}
+	res := must[*Result](t)(up("content=v2"))
+	var w deploymentChange
+	for _, c := range res.Plan.Changes {
+		if c.Kind == resource.KindWorkload {
+			w = deploymentChange{c.Action, c.Strategy}
+		}
+	}
+	if w != (deploymentChange{"update", "replace"}) || !slices.Contains(e.rt.Calls, "RenameWorkload:site-web-next->site-web") {
+		t.Fatalf("replace upgrade: %+v %v", w, e.rt.Calls)
+	}
+
+	// A failed replace changes nothing that runs: the release stays deployed at revision 2.
+	e.rt.Health = ports.HealthUnhealthy
+	_, err := up("content=v3")
+	if err == nil || !strings.Contains(err.Error(), "revision 2 is still serving") {
+		t.Fatalf("failed replace: %v", err)
+	}
+	r := must[release.Release](t)(e.svc.Store.GetRelease(ctx, "site"))
+	if r.Status != release.StatusDeployed || r.CurrentRevision != 2 {
+		t.Fatalf("release after failed replace: %+v", r)
+	}
+	if rev := must[release.Revision](t)(e.svc.Store.GetRevision(ctx, "site", 3)); rev.Status != release.RevisionFailed {
+		t.Fatalf("revision 3: %+v", rev)
+	}
+	if e.rt.Workloads["site-web"].State != ports.StateRunning {
+		t.Fatal("old container must keep running")
+	}
+
+	// --strategy recreate overrides the spec.
+	e.rt.Health = ""
+	res = must[*Result](t)(e.svc.Upgrade(ctx, UpgradeRequest{CommonOptions: common(), Name: "site", Package: webPkg,
+		Values: packages.Options{Sets: []string{"content=v4"}}, Strategy: "recreate"}))
+	for _, c := range res.Plan.Changes {
+		if c.Kind == resource.KindWorkload && c.Strategy != "recreate" {
+			t.Fatalf("override ignored: %+v", c)
+		}
+	}
+}
+
+type deploymentChange struct{ action, strategy string }
+
+func TestReconcileBeforePlan(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	if _, err := e.svc.Install(ctx, InstallRequest{CommonOptions: common(), Name: "site", Package: webPkg}); err != nil {
+		t.Fatal(err)
+	}
+	// Simulate a crash after the old container was removed but before the rename.
+	if err := e.rt.RenameWorkload(ctx, "site-web", "site-web-next"); err != nil {
+		t.Fatal(err)
+	}
+	res, err := e.svc.Upgrade(ctx, UpgradeRequest{CommonOptions: common(), Name: "site", Package: webPkg})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.rt.Workloads["site-web"]; !ok || e.rt.Workloads["site-web-next"] != nil {
+		t.Fatalf("not repaired: %v", e.rt.Workloads)
+	}
+	if !res.Plan.HasChanges() {
+		t.Fatal("repaired workload should be applied again")
+	}
+}

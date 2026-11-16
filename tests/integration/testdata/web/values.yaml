@@ -1,0 +1,7 @@
+# content is served at / (changing it recreates the workload through its Config).
+content: v1
+# healthy=false makes the healthcheck fail.
+healthy: true
+# publish=true adds a hostPort, which makes replace fall back to recreate.
+publish: false
+port: 18080

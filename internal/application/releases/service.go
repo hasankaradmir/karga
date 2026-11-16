@@ -243,12 +243,20 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	err = s.run(ctx, rt, &op, in, plan)
+	if plan, err = s.reconcile(ctx, rt, in, applied, plan); err == nil {
+		res.Plan = plan
+		err = s.run(ctx, rt, &op, in, plan)
+	}
 	s.finish(ctx, op, err)
 	if err != nil {
 		res.Status = release.StatusFailed
 		hint := fmt.Sprintf("revision %d failed", in.Revision)
-		if res.From > 0 {
+		var execErr *deployment.ExecError
+		switch {
+		case errors.As(err, &execErr) && !execErr.Disrupted && res.From > 0:
+			res.Status = in.Existing.Status
+			hint += fmt.Sprintf("; nothing that was running changed and revision %d is still serving", res.From)
+		case res.From > 0:
 			hint += fmt.Sprintf("; revision %d stays current. Inspect with 'karga status %s' (and 'docker logs'), then fix and upgrade or run 'karga rollback %s'", res.From, in.Name, in.Name)
 		}
 		return res, fmt.Errorf("%w\n%s", err, hint)
@@ -258,6 +266,24 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 		s.Log.Warn("prune history", "release", in.Name, "error", perr)
 	}
 	return res, nil
+}
+
+// reconcile repairs leftovers of an interrupted replace and, if anything changed, plans again.
+func (s *Service) reconcile(ctx context.Context, rt ports.Runtime, in deployInput, applied []release.AppliedResource, plan deployment.Plan) (deployment.Plan, error) {
+	repaired, err := deployment.Reconcile(ctx, rt, in.Name, applied)
+	if err != nil || len(repaired) == 0 {
+		return plan, err
+	}
+	for _, a := range repaired {
+		s.Log.Warn("repaired interrupted replace", "release", in.Name, "resource", a.Kind+"/"+a.Name)
+		if err := s.Store.SaveResource(ctx, in.Name, a); err != nil {
+			return plan, err
+		}
+	}
+	if applied, err = s.Store.ListResources(ctx, in.Name); err != nil {
+		return plan, err
+	}
+	return deployment.Diff(in.Name, in.Resources, applied, in.Strategy)
 }
 
 func (s *Service) run(ctx context.Context, rt ports.Runtime, op *release.Operation, in deployInput, plan deployment.Plan) error {
@@ -278,6 +304,7 @@ func (s *Service) run(ctx context.Context, rt ports.Runtime, op *release.Operati
 	if err := release.Transition(rel.Status, target); err != nil {
 		return err
 	}
+	previous := rel.Status
 	rel.Status, rel.UpdatedAt = target, now
 	if err := s.Store.SaveRelease(ctx, rel); err != nil {
 		return err
@@ -310,6 +337,11 @@ func (s *Service) run(ctx context.Context, rt ports.Runtime, op *release.Operati
 	rel.UpdatedAt = s.Now()
 	if execErr != nil {
 		rel.Status = release.StatusFailed
+		// A failed replace that touched nothing leaves the release as it was (D18).
+		var ee *deployment.ExecError
+		if errors.As(execErr, &ee) && !ee.Disrupted && in.Existing != nil {
+			rel.Status = previous
+		}
 		desc := fmt.Sprintf("%s failed: %v", titled(in.Type), execErr)
 		return errors.Join(execErr,
 			s.Store.UpdateRevisionStatus(bg, in.Name, in.Revision, release.RevisionFailed, desc),

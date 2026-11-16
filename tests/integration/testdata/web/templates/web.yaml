@@ -1,0 +1,42 @@
+apiVersion: karga.io/v1alpha1
+kind: Network
+metadata:
+  name: web-net
+---
+apiVersion: karga.io/v1alpha1
+kind: Config
+metadata:
+  name: site
+spec:
+  files:
+    index.html: {{ .Values.content | quote }}
+---
+apiVersion: karga.io/v1alpha1
+kind: Workload
+metadata:
+  name: web
+spec:
+  image: busybox:1.37
+  command: [httpd, -f, -p, "8080", -h, /www]
+  networks: [web-net]
+  mounts:
+    - config: site
+      mountPath: /www
+  {{- if .Values.publish }}
+  ports:
+    - containerPort: 8080
+      hostPort: {{ .Values.port }}
+  {{- end }}
+  healthCheck:
+    type: exec
+    {{- if .Values.healthy }}
+    command: [wget, -q, -O, /dev/null, "http://127.0.0.1:8080/"]
+    {{- else }}
+    command: ["false"]
+    {{- end }}
+    interval: 1s
+    timeout: 1s
+    retries: 2
+  updateStrategy:
+    type: replace
+    drainTimeout: 2s
