@@ -92,7 +92,7 @@ func TestPreflightHostPorts(t *testing.T) {
 	}
 	defer func() { _ = l.Close() }()
 	busy := l.Addr().(*net.TCPAddr).Port
-	if err := preflight(t, fakeruntime.New(), "web", webWithPort(busy)); !errors.Is(err, ports.ErrPortInUse) || !strings.Contains(err.Error(), "another process") {
+	if err := preflight(t, fakeruntime.New(), "web", webWithPort(busy)); !errors.Is(err, ports.ErrPortInUse) || !strings.Contains(err.Error(), "another process on this host") {
 		t.Fatalf("host process: %v", err)
 	}
 }

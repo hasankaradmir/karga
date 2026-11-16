@@ -87,13 +87,13 @@ func checkHostPort(release, workload string, p resource.Port, published []ports.
 	if p.Protocol == "udp" {
 		c, err := net.ListenPacket("udp", addr)
 		if err != nil {
-			return fmt.Errorf("%s is in use by another process: %w", where, ports.ErrPortInUse)
+			return fmt.Errorf("%s is taken by another process on this host: %w", where, ports.ErrPortInUse)
 		}
 		return c.Close()
 	}
 	l, err := net.Listen("tcp", addr)
 	if err != nil {
-		return fmt.Errorf("%s is in use by another process: %w", where, ports.ErrPortInUse)
+		return fmt.Errorf("%s is taken by another process on this host: %w", where, ports.ErrPortInUse)
 	}
 	return l.Close()
 }

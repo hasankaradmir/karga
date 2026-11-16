@@ -42,7 +42,8 @@ func (r *Runtime) EnsureImage(ctx context.Context, ref, policy string) error {
 	}
 	msg := err.Error()
 	if cerrdefs.IsNotFound(err) || strings.Contains(msg, "manifest unknown") || strings.Contains(msg, "pull access denied") {
-		return fmt.Errorf("pull image %s: %v: %w", ref, err, ports.ErrImageNotFound)
+		return fmt.Errorf("image %s was not found in its registry; check the repository and tag (%s): %w",
+			ref, strings.TrimPrefix(msg, "Error response from daemon: "), ports.ErrImageNotFound)
 	}
 	return wrap(err, "pull image "+ref)
 }

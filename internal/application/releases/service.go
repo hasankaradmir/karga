@@ -261,6 +261,8 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 			hint += fmt.Sprintf("; nothing that was running changed and revision %d is still serving", res.From)
 		case res.From > 0:
 			hint += fmt.Sprintf("; revision %d stays current. Inspect with 'karga status %s' (and 'docker logs'), then fix and upgrade or run 'karga rollback %s'", res.From, in.Name, in.Name)
+		default:
+			hint += fmt.Sprintf("; fix the problem and run 'karga install' again, or remove the failed release with 'karga uninstall %s'", in.Name)
 		}
 		return res, fmt.Errorf("%w\n%s", err, hint)
 	}

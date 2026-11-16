@@ -41,12 +41,12 @@ func TestContextHost(t *testing.T) {
 		{"HOME fallback", map[string]string{"HOME": t.TempDir()}, ""},
 	}
 	for _, tt := range tests {
-		got, err := contextHost(func(k string) string { return tt.env[k] })
+		got, _, err := contextHost(func(k string) string { return tt.env[k] })
 		if err != nil || got != tt.want {
 			t.Errorf("%s: got %q, %v; want %q", tt.name, got, err, tt.want)
 		}
 	}
-	if _, err := contextHost(func(k string) string {
+	if _, _, err := contextHost(func(k string) string {
 		return map[string]string{"DOCKER_CONFIG": dir, "DOCKER_CONTEXT": "missing"}[k]
 	}); err == nil {
 		t.Error("unknown context: expected error")

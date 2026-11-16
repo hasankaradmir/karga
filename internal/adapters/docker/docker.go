@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
 	"os"
 	"strings"
 
@@ -24,7 +25,7 @@ var _ ports.Runtime = (*Runtime)(nil)
 // New connects to Docker (DOCKER_HOST or the active docker context) and checks the daemon answers.
 func New(ctx context.Context) (*Runtime, error) {
 	opts := []client.Opt{client.FromEnv}
-	host, err := contextHost(os.Getenv)
+	host, contextName, err := contextHost(os.Getenv)
 	if err != nil {
 		return nil, err
 	}
@@ -37,13 +38,34 @@ func New(ctx context.Context) (*Runtime, error) {
 	}
 	if _, err := c.Ping(ctx, client.PingOptions{}); err != nil {
 		_ = c.Close()
-		return nil, wrap(err, "connect to Docker at "+c.DaemonHost())
+		return nil, unreachable(c.DaemonHost(), contextName, err)
 	}
 	return &Runtime{c: c}, nil
 }
 
 // Close releases the client connection.
 func (r *Runtime) Close() error { return r.c.Close() }
+
+// unreachable explains a failed connection in terms of what the user can change.
+func unreachable(host, contextName string, err error) error {
+	where := host
+	if contextName != "" {
+		where += fmt.Sprintf(" (docker context %q)", contextName)
+	}
+	cause := err
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		cause = opErr.Err
+	}
+	switch {
+	case strings.Contains(err.Error(), "permission denied"):
+		return fmt.Errorf("permission denied on the Docker socket %s; add your user to the docker group or use a rootless daemon: %w", where, ports.ErrPermission)
+	case client.IsErrConnectionFailed(err):
+		return fmt.Errorf("cannot reach Docker at %s (%v); is the daemon running? Use DOCKER_HOST or 'docker context use' to choose another daemon: %w", where, cause, ports.ErrUnavailable)
+	default:
+		return wrap(err, "connect to Docker at "+where)
+	}
+}
 
 // wrap maps Docker errors to the ports sentinel errors and adds what failed.
 func wrap(err error, what string) error {
