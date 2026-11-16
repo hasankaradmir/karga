@@ -96,12 +96,14 @@ func TestRedisReleaseLifecycle(t *testing.T) {
 	if st := workload(t, rt, name+"-redis"); st.State != ports.StateRunning || st.Labels[ports.LabelRevision] != "2" {
 		t.Fatalf("running workload was touched by a failed pull: %+v", st)
 	}
-	if r := currentRelease(t, s, name); r.Status != release.StatusFailed || r.CurrentRevision != 2 {
+	// Nothing that runs was changed, so the release stays deployed at revision 2 (D18).
+	if r := currentRelease(t, s, name); r.Status != release.StatusDeployed || r.CurrentRevision != 2 {
 		t.Fatalf("release after failed upgrade: %+v", r)
 	}
 
-	// Rollback without a revision returns to the last good one.
-	res, err = s.Rollback(ctx, releases.RollbackRequest{CommonOptions: opts(), Name: name})
+	// Rolling back to the current revision is allowed (and changes nothing). Revision 1 would be a
+	// Redis downgrade, which cannot read the newer data format.
+	res, err = s.Rollback(ctx, releases.RollbackRequest{CommonOptions: opts(), Name: name, Revision: 2})
 	if err != nil || res.Revision != 4 {
 		t.Fatalf("rollback: %+v %v", res, err)
 	}
