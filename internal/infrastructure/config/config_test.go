@@ -41,3 +41,17 @@ func TestResolveNothingSet(t *testing.T) {
 		t.Fatal("expected error")
 	}
 }
+
+func TestEnsureHome(t *testing.T) {
+	home := filepath.Join(t.TempDir(), "a", "karga")
+	if err := EnsureHome(Config{Home: home}); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(home)
+	if err != nil || !info.IsDir() || info.Mode().Perm() != 0o700 {
+		t.Fatalf("home: %v %v", info.Mode(), err)
+	}
+	if err := EnsureHome(Config{Home: home}); err != nil {
+		t.Fatalf("second call: %v", err)
+	}
+}

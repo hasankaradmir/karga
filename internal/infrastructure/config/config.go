@@ -3,6 +3,8 @@ package config
 
 import (
 	"errors"
+	"fmt"
+	"os"
 	"path/filepath"
 )
 
@@ -31,4 +33,12 @@ func Resolve(flagHome string, getenv func(string) string) (Config, error) {
 		return Config{}, err
 	}
 	return Config{Home: abs}, nil
+}
+
+// EnsureHome creates the state directory (0700) if it does not exist.
+func EnsureHome(cfg Config) error {
+	if err := os.MkdirAll(cfg.Home, 0o700); err != nil {
+		return fmt.Errorf("create karga home %s: %w", cfg.Home, err)
+	}
+	return nil
 }
