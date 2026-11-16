@@ -79,6 +79,8 @@ type Runtime interface {
 
 	// ListManaged returns every karga-managed object of a release.
 	ListManaged(ctx context.Context, release string) ([]Object, error)
+	// Logs returns the last tail lines a workload wrote to stdout and stderr.
+	Logs(ctx context.Context, name string, tail int) (string, error)
 	// ListLabeled returns every workload, of any release, that carries label key.
 	ListLabeled(ctx context.Context, key string) ([]Object, error)
 	// PublishedPorts returns host ports published by any container.

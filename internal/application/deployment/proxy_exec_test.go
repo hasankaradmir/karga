@@ -207,8 +207,11 @@ func TestReplaceRevertsWhenGatewayNotReady(t *testing.T) {
 	}
 	old := upstream(t, r.rt.Workloads["cache-redis"])
 	px.notReady["gateway"] = true
-	if err := r.upgrade(2); err == nil {
-		t.Fatal("expected failure")
+	r.rt.Output = map[string]string{GatewayName: "[2026-11-17][1][info][main] starting\n" +
+		"[2026-11-17][1][warning][config] Filesystem config update rejected: cannot bind '0.0.0.0:80': Permission denied\n"}
+	err := r.upgrade(2)
+	if err == nil || !strings.Contains(err.Error(), "cannot bind '0.0.0.0:80'") || strings.Contains(err.Error(), "starting") {
+		t.Fatalf("want the gateway's rejection in the error, got %v", err)
 	}
 	if slices.Contains(r.rt.Calls, "StopWorkload:cache-redis") {
 		t.Fatal("old container stopped although the gateway never got ready")

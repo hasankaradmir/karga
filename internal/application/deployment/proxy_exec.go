@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
@@ -212,4 +213,26 @@ func routedTo(ctx context.Context, rt ports.Runtime, home, rel, name, next strin
 		}
 	}
 	return false
+}
+
+// envoyErr adds what an Envoy container logged about rejected configuration to err, so a config
+// Envoy refused (e.g. a port it cannot bind) is reported instead of only a timeout.
+func envoyErr(ctx context.Context, rt ports.Runtime, container string, err error) error {
+	if err == nil {
+		return nil
+	}
+	out, lerr := rt.Logs(ctx, container, 50)
+	if lerr != nil {
+		return err
+	}
+	var why []string
+	for _, line := range strings.Split(out, "\n") {
+		if strings.Contains(line, "rejected") || strings.Contains(line, "][error]") || strings.Contains(line, "][critical]") {
+			why = append(why, strings.TrimSpace(line))
+		}
+	}
+	if len(why) == 0 {
+		return err
+	}
+	return fmt.Errorf("%w; %s logged:\n  %s", err, container, strings.Join(why[max(0, len(why)-3):], "\n  "))
 }

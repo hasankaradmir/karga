@@ -29,6 +29,8 @@ type Runtime struct {
 	Health string
 	// Capabilities overrides the reported capabilities when non-nil.
 	Capabilities []string
+	// Output is what Logs returns for a workload.
+	Output map[string]string
 }
 
 // Workload is a fake container. Aliases maps each attached network to the workload's DNS aliases.
@@ -274,6 +276,16 @@ func (r *Runtime) ListManaged(_ context.Context, release string) ([]ports.Object
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Kind+out[i].Name < out[j].Kind+out[j].Name })
 	return out, nil
+}
+
+// Logs implements ports.Runtime.
+func (r *Runtime) Logs(_ context.Context, name string, _ int) (string, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if _, ok := r.Workloads[name]; !ok {
+		return "", fmt.Errorf("workload %s: %w", name, ports.ErrNotFound)
+	}
+	return r.Output[name], nil
 }
 
 // ListLabeled implements ports.Runtime.

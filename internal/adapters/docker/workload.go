@@ -1,6 +1,7 @@
 package docker
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	cerrdefs "github.com/containerd/errdefs"
+	"github.com/moby/moby/api/pkg/stdcopy"
 	"github.com/moby/moby/api/types/container"
 	"github.com/moby/moby/api/types/mount"
 	"github.com/moby/moby/api/types/network"
@@ -224,6 +226,21 @@ func (r *Runtime) ListManaged(ctx context.Context, release string) ([]ports.Obje
 		out = append(out, ports.Object{Kind: ports.ObjectVolume, Name: v.Name, Labels: v.Labels})
 	}
 	return out, nil
+}
+
+// Logs implements ports.Runtime.
+func (r *Runtime) Logs(ctx context.Context, name string, tail int) (string, error) {
+	rc, err := r.c.ContainerLogs(ctx, name, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: strconv.Itoa(tail)})
+	if err != nil {
+		return "", wrap(err, "logs of "+name)
+	}
+	defer func() { _ = rc.Close() }()
+	var out bytes.Buffer
+	// Containers without a TTY multiplex stdout and stderr.
+	if _, err := stdcopy.StdCopy(&out, &out, rc); err != nil {
+		return "", fmt.Errorf("logs of %s: %w", name, err)
+	}
+	return out.String(), nil
 }
 
 // ListLabeled implements ports.Runtime.

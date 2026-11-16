@@ -138,6 +138,9 @@ func Run(t *testing.T, rt ports.Runtime, cfg Config) {
 			t.Fatalf("labels: %v", st.Labels)
 		}
 		assertListed(t, rt, release, ports.ObjectWorkload, req.Name, true)
+		if _, err := rt.Logs(ctx, req.Name, 10); err != nil {
+			t.Fatalf("logs: %v", err)
+		}
 		labeled, err := rt.ListLabeled(ctx, "io.karga.contract")
 		must(t, err)
 		if !slices.ContainsFunc(labeled, func(o ports.Object) bool { return o.Name == req.Name && o.Labels["io.karga.contract"] == "x" }) {

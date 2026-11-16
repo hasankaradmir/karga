@@ -267,7 +267,7 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 			}
 		}
 		if len(want) > 0 {
-			if err := req.Proxies.WaitReady(ctx, ProxyDir(req.Home, req.Release), want, proxyReadyTimeout); err != nil {
+			if err := envoyErr(ctx, rt, ProxyName(req.Release), req.Proxies.WaitReady(ctx, ProxyDir(req.Home, req.Release), want, proxyReadyTimeout)); err != nil {
 				return err
 			}
 		}
@@ -275,7 +275,7 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 	if proxySupported {
 		targets, err := SyncGateway(ctx, rt, req.Proxies, req.Home, nil)
 		if err == nil {
-			err = waitGateway(ctx, req.Proxies, req.Home, req.Release, targets)
+			err = envoyErr(ctx, rt, GatewayName, waitGateway(ctx, req.Proxies, req.Home, req.Release, targets))
 		}
 		if err != nil {
 			*disrupted = true
@@ -435,7 +435,7 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 			return false, stopNext(err)
 		}
 		revertProxy = func() error { return writeProxy(ctx, rt, req.Proxies, req, set, nil) }
-		if err := req.Proxies.WaitReady(ctx, ProxyDir(req.Home, req.Release), proxyWant(c.Name, s, alias), proxyReadyTimeout); err != nil {
+		if err := envoyErr(ctx, rt, ProxyName(req.Release), req.Proxies.WaitReady(ctx, ProxyDir(req.Home, req.Release), proxyWant(c.Name, s, alias), proxyReadyTimeout)); err != nil {
 			// The proxy may have routed to the new backend for a moment: count it as touched.
 			return true, stopNext(errors.Join(err, revertProxy()))
 		}
@@ -455,7 +455,7 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 		targets, err := SyncGateway(ctx, rt, req.Proxies, req.Home, map[string]string{req.Release + "/" + c.Name: next})
 		if err == nil {
 			want := gatewayWant(targets, func(t gatewayTarget) bool { return t.Container == next })
-			err = req.Proxies.WaitReady(ctx, GatewayDir(req.Home), want, proxyReadyTimeout)
+			err = envoyErr(ctx, rt, GatewayName, req.Proxies.WaitReady(ctx, GatewayDir(req.Home), want, proxyReadyTimeout))
 		}
 		if err != nil {
 			_, gerr := SyncGateway(ctx, rt, req.Proxies, req.Home, nil)
