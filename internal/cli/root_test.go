@@ -40,6 +40,25 @@ func TestVersionJSON(t *testing.T) {
 	}
 }
 
+func TestInvalidLogFormat(t *testing.T) {
+	if _, _, err := run(t, "--log-format", "xml", "version"); err == nil {
+		t.Fatal("expected error for --log-format xml")
+	}
+}
+
+func TestDebugLogsToStderr(t *testing.T) {
+	out, errOut, err := run(t, "--debug", "--home", "/tmp/karga-test", "version", "-o", "json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(errOut, "home=/tmp/karga-test") {
+		t.Fatalf("debug log missing on stderr: %q", errOut)
+	}
+	if strings.Contains(out, "config resolved") {
+		t.Fatalf("log leaked to stdout: %q", out)
+	}
+}
+
 func TestInvalidOutput(t *testing.T) {
 	if _, _, err := run(t, "version", "-o", "yaml"); err == nil {
 		t.Fatal("expected error for -o yaml")
