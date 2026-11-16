@@ -2,6 +2,7 @@
 package cli
 
 import (
+	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -9,8 +10,10 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/hasankaradmir/karga/internal/adapters/docker"
 	"github.com/hasankaradmir/karga/internal/infrastructure/config"
 	"github.com/hasankaradmir/karga/internal/infrastructure/logger"
+	"github.com/hasankaradmir/karga/internal/ports"
 )
 
 const (
@@ -30,11 +33,26 @@ type app struct {
 	cfg      config.Config
 	log      *slog.Logger
 	redactor *logger.Redactor
+
+	// newRuntime opens the container runtime; tests replace it with a fake.
+	newRuntime func(context.Context) (ports.Runtime, func(), error)
 }
 
 // NewRootCmd builds the karga command tree.
 func NewRootCmd(stdout, stderr io.Writer) *cobra.Command {
-	a := &app{stdout: stdout, stderr: stderr, redactor: logger.NewRedactor()}
+	return newRootCmd(stdout, stderr, dockerRuntime)
+}
+
+func dockerRuntime(ctx context.Context) (ports.Runtime, func(), error) {
+	rt, err := docker.New(ctx)
+	if err != nil {
+		return nil, nil, err
+	}
+	return rt, func() { _ = rt.Close() }, nil
+}
+
+func newRootCmd(stdout, stderr io.Writer, newRuntime func(context.Context) (ports.Runtime, func(), error)) *cobra.Command {
+	a := &app{stdout: stdout, stderr: stderr, redactor: logger.NewRedactor(), newRuntime: newRuntime}
 
 	root := &cobra.Command{
 		Use:           "karga",
@@ -67,6 +85,8 @@ func NewRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	root.PersistentFlags().BoolVar(&a.debug, "debug", false, "enable debug logging")
 	root.PersistentFlags().StringVar(&a.logFormat, "log-format", "text", "log format on stderr: text|json")
 
-	root.AddCommand(newVersionCmd(a), newTemplateCmd(a), newLintCmd(a), newShowCmd(a))
+	root.AddCommand(newVersionCmd(a), newTemplateCmd(a), newLintCmd(a), newShowCmd(a),
+		newInstallCmd(a), newUpgradeCmd(a), newRollbackCmd(a), newUninstallCmd(a),
+		newHistoryCmd(a), newListCmd(a), newStatusCmd(a), newGetCmd(a))
 	return root
 }

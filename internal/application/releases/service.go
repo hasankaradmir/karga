@@ -245,7 +245,11 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 	s.finish(ctx, op, err)
 	if err != nil {
 		res.Status = release.StatusFailed
-		return res, err
+		hint := fmt.Sprintf("revision %d failed", in.Revision)
+		if res.From > 0 {
+			hint += fmt.Sprintf("; revision %d stays current. Inspect with 'karga status %s' (and 'docker logs'), then fix and upgrade or run 'karga rollback %s'", res.From, in.Name, in.Name)
+		}
+		return res, fmt.Errorf("%w\n%s", err, hint)
 	}
 	res.Status = release.StatusDeployed
 	if perr := s.prune(context.WithoutCancel(ctx), in.Name, in.HistoryMax); perr != nil {
