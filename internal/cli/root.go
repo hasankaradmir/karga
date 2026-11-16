@@ -4,8 +4,11 @@ package cli
 import (
 	"fmt"
 	"io"
+	"os"
 
 	"github.com/spf13/cobra"
+
+	"github.com/hasankaradmir/karga/internal/infrastructure/config"
 )
 
 const (
@@ -18,6 +21,8 @@ type app struct {
 	stdout io.Writer
 	stderr io.Writer
 	output string
+	home   string
+	cfg    config.Config
 }
 
 // NewRootCmd builds the karga command tree.
@@ -33,6 +38,11 @@ func NewRootCmd(stdout, stderr io.Writer) *cobra.Command {
 			if a.output != outputTable && a.output != outputJSON {
 				return fmt.Errorf("invalid --output %q: must be %q or %q", a.output, outputTable, outputJSON)
 			}
+			cfg, err := config.Resolve(a.home, os.Getenv)
+			if err != nil {
+				return err
+			}
+			a.cfg = cfg
 			return nil
 		},
 	}
@@ -40,6 +50,7 @@ func NewRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	root.SetErr(stderr)
 
 	root.PersistentFlags().StringVarP(&a.output, "output", "o", outputTable, "output format: table|json")
+	root.PersistentFlags().StringVar(&a.home, "home", "", "karga state directory (default $KARGA_HOME, $XDG_DATA_HOME/karga or ~/.local/share/karga)")
 
 	root.AddCommand(newVersionCmd(a))
 	return root
