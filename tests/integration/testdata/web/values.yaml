@@ -15,3 +15,7 @@ strategy: replace
 listenPort: 8080
 # second=true adds workload api, serving the same content on listenPort+1.
 second: false
+# echoPort>0 adds a tcp echo server on containerPort 9000, published on that host port.
+echoPort: 0
+# drain is the replace drain timeout.
+drain: 2s

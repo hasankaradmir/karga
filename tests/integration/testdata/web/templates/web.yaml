@@ -17,12 +17,16 @@ metadata:
   name: web
 spec:
   image: busybox:1.37
-  command: [sh, -c, "sleep {{ .Values.startDelay }}; exec httpd -f -p {{ .Values.listenPort }} -h /www"]
+  command: [sh, -c, "sleep {{ .Values.startDelay }}; {{ if .Values.echoPort }}nc -ll -p 9000 -e cat & {{ end }}exec httpd -f -p {{ .Values.listenPort }} -h /www"]
   networks: [web-net]
   mounts:
     - config: site
       mountPath: /www
   ports:
+    {{- if .Values.echoPort }}
+    - containerPort: 9000
+      hostPort: {{ .Values.echoPort }}
+    {{- end }}
     - containerPort: {{ .Values.listenPort }}
       {{- if .Values.publish }}
       hostPort: {{ .Values.port }}
@@ -45,7 +49,7 @@ spec:
     startPeriod: 10s
   updateStrategy:
     type: {{ .Values.strategy }}
-    drainTimeout: 2s
+    drainTimeout: {{ .Values.drain }}
 {{- if .Values.second }}
 ---
 apiVersion: karga.io/v1alpha1
@@ -70,5 +74,5 @@ spec:
     startPeriod: 10s
   updateStrategy:
     type: {{ .Values.strategy }}
-    drainTimeout: 2s
+    drainTimeout: {{ .Values.drain }}
 {{- end }}

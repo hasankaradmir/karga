@@ -3,10 +3,15 @@
 package integration
 
 import (
+	"bufio"
 	"context"
+	"errors"
 	"io"
 	"maps"
+	"net"
 	"net/http"
+	"os"
+	"os/exec"
 	"runtime"
 	"slices"
 	"strconv"
@@ -20,6 +25,7 @@ import (
 	"github.com/hasankaradmir/karga/internal/application/packages"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/domain/release"
+	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
 	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )
 
@@ -294,4 +300,169 @@ func TestProxyLowPort(t *testing.T) {
 	if out := logs(t, p); !strings.Contains(out, "v1") {
 		t.Fatalf("proxy did not serve containerPort 80:\n%s", out)
 	}
+}
+
+// TestGatewayKeepsLongConnections: a connection open before a replace keeps working on the old
+// container, and the replace finishes as soon as it closes instead of waiting the drain timeout.
+func TestGatewayKeepsLongConnections(t *testing.T) {
+	requireLinux(t)
+	ctx := context.Background()
+	name := releaseName("it-gw-long")
+	s, _ := service(t, name)
+	echo := runtimetest.FreePort(t)
+	common := opts()
+	common.Timeout = 30 * time.Second
+	sets := func(extra ...string) packages.Options {
+		return packages.Options{Sets: append([]string{"echoPort=" + strconv.Itoa(echo), "drain=60s"}, extra...)}
+	}
+	if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: common, Name: name, Package: webPkg, Values: sets()}); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:"+strconv.Itoa(echo), 2*time.Second)
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := bufio.NewReader(conn)
+	roundTrip := func(msg string) {
+		t.Helper()
+		_ = conn.SetDeadline(time.Now().Add(5 * time.Second))
+		if _, err := conn.Write([]byte(msg + "\n")); err != nil {
+			t.Fatalf("write %s: %v", msg, err)
+		}
+		got, err := r.ReadString('\n')
+		if err != nil || strings.TrimSpace(got) != msg {
+			t.Fatalf("echo %s: %q %v", msg, got, err)
+		}
+	}
+	roundTrip("before")
+	upstream := func() string {
+		eps, err := envoy.Endpoints(deployment.GatewayDir(s.Home))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return eps[name+"_web_p9000"]
+	}
+	initial := upstream()
+	if initial == "" {
+		t.Fatal("echo port not on the gateway")
+	}
+
+	done := make(chan error, 1)
+	go func() {
+		_, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: common, Name: name, Package: webPkg, Values: sets("content=v2")})
+		done <- err
+	}()
+	// Wait until the gateway sends new connections to the new container, then let it settle and
+	// use the old connection again.
+	deadline := time.Now().Add(30 * time.Second)
+	for upstream() == initial {
+		if time.Now().After(deadline) {
+			t.Fatal("the gateway never switched to the new container")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	time.Sleep(3 * time.Second)
+	select {
+	case err := <-done:
+		t.Fatalf("replace finished while a connection was still open (err %v)", err)
+	default:
+	}
+	roundTrip("during")
+	closed := time.Now()
+	_ = conn.Close()
+	select {
+	case err := <-done:
+		if err != nil {
+			t.Fatal(err)
+		}
+		if waited := time.Since(closed); waited > 20*time.Second {
+			t.Fatalf("replace waited %s after the last connection closed", waited)
+		}
+	case <-time.After(45 * time.Second):
+		t.Fatal("replace did not finish after the connection closed")
+	}
+}
+
+// TestGatewayConcurrentInstalls: two karga processes (two services, one KARGA_HOME) install releases
+// sharing a host port at the same time; the gateway ends up serving both.
+func TestGatewayConcurrentInstalls(t *testing.T) {
+	requireLinux(t)
+	ctx := context.Background()
+	home := t.TempDir()
+	a, b := releaseName("it-gw-ca"), releaseName("it-gw-cb")
+	sa, _ := serviceIn(t, home, a)
+	sb, _ := serviceIn(t, home, b)
+	port := runtimetest.FreePort(t)
+	var wg sync.WaitGroup
+	errs := make([]error, 2)
+	for i, x := range []struct {
+		s    *releases.Service
+		name string
+	}{{sa, a}, {sb, b}} {
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			_, errs[i] = x.s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: x.name, Package: webPkg,
+				Values: packages.Options{Sets: []string{"route=" + x.name + ".local", "content=" + x.name, "port=" + strconv.Itoa(port)}}})
+		}()
+	}
+	wg.Wait()
+	if err := errors.Join(errs...); err != nil {
+		t.Fatal(err)
+	}
+	for _, rel := range []string{a, b} {
+		if code, body := hostGet(t, port, rel+".local"); code != http.StatusOK || body != rel {
+			t.Errorf("%s: %d %q", rel, code, body)
+		}
+	}
+}
+
+// TestGatewaySurvivesDockerRestart restarts the Docker daemon (like a reboot). Opt-in: it needs
+// passwordless sudo and disturbs every container on the host.
+func TestGatewaySurvivesDockerRestart(t *testing.T) {
+	requireLinux(t)
+	if os.Getenv("KARGA_TEST_DAEMON_RESTART") != "1" {
+		t.Skip("set KARGA_TEST_DAEMON_RESTART=1 to restart the Docker daemon")
+	}
+	ctx := context.Background()
+	name := releaseName("it-gw-boot")
+	s, _ := service(t, name)
+	port := runtimetest.FreePort(t)
+	if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: webPkg,
+		Values: packages.Options{Sets: []string{"second=true", "route=boot.local", "port=" + strconv.Itoa(port)}}}); err != nil {
+		t.Fatal(err)
+	}
+	if out, err := exec.Command("sudo", "-n", "systemctl", "restart", "docker").CombinedOutput(); err != nil {
+		t.Fatalf("restart docker: %v\n%s", err, out)
+	}
+	deadline := time.Now().Add(90 * time.Second)
+	for {
+		code, body, err := tryGet(port, "boot.local")
+		if err == nil && code == http.StatusOK && body == "v1" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("no traffic after the daemon restart: %d %q %v", code, body, err)
+		}
+		time.Sleep(time.Second)
+	}
+	// The release proxy is back too: api answers on the network.
+	rt := newRuntime(t)
+	p := startURLPinger(t, rt, name, "boot-pinger", "http://api:8081/")
+	time.Sleep(2 * time.Second)
+	if out := logs(t, p); !strings.Contains(out, "v1") {
+		t.Fatalf("release proxy not serving after the restart:\n%s", out)
+	}
+}
+
+func tryGet(port int, host string) (int, string, error) {
+	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+"/", nil)
+	req.Host = host
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+	if err != nil {
+		return 0, "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, strings.TrimSpace(string(b)), nil
 }

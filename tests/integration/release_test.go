@@ -22,8 +22,13 @@ import (
 // release created is removed when the test ends, volumes included.
 func service(t *testing.T, name string) (*releases.Service, ports.Runtime) {
 	t.Helper()
+	return serviceIn(t, t.TempDir(), name)
+}
+
+// serviceIn is service with a given KARGA_HOME, so several services can share one.
+func serviceIn(t *testing.T, home, name string) (*releases.Service, ports.Runtime) {
+	t.Helper()
 	rt := newRuntime(t)
-	home := t.TempDir()
 	store, err := sqlite.Open(context.Background(), filepath.Join(home, "karga.db"))
 	if err != nil {
 		t.Fatal(err)
