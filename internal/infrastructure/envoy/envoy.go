@@ -87,18 +87,6 @@ type Config struct {
 	Clusters []Cluster
 }
 
-// resources wraps typed Envoy resources the way path_config_source expects them.
-func resources(items []map[string]any) ([]byte, error) {
-	if items == nil {
-		items = []map[string]any{}
-	}
-	return json.MarshalIndent(map[string]any{"resources": items}, "", "  ")
-}
-
-func socketAddress(host string, port int) map[string]any {
-	return map[string]any{"socket_address": map[string]any{"address": host, "port_value": port}}
-}
-
 // Bootstrap is the static part: an admin API on a unix socket and file-based LDS/CDS. socketMode is
 // the admin socket's permission; the proxy directory (0700) is what keeps other users out.
 func Bootstrap(node string, socketMode int) ([]byte, error) {
@@ -121,130 +109,8 @@ func Bootstrap(node string, socketMode int) ([]byte, error) {
 	}, "", "  ")
 }
 
-func listener(name, address string, port int, filter map[string]any) map[string]any {
-	return map[string]any{
-		"@type":         "type.googleapis.com/envoy.config.listener.v3.Listener",
-		"name":          name,
-		"address":       socketAddress(address, port),
-		"filter_chains": []any{map[string]any{"filters": []any{filter}}},
-	}
-}
-
 func tcpName(address string, port int) string  { return fmt.Sprintf("tcp_%s_%d", address, port) }
 func httpName(address string, port int) string { return fmt.Sprintf("http_%s_%d", address, port) }
-
-// Listeners renders lds.json. Output is sorted so equal configs give equal files.
-func (c Config) Listeners() ([]byte, error) {
-	var items []map[string]any
-	tcp := slices.Clone(c.TCP)
-	slices.SortFunc(tcp, func(a, b TCPListener) int {
-		return strings.Compare(tcpName(a.Address, a.Port), tcpName(b.Address, b.Port))
-	})
-	for _, l := range tcp {
-		name := tcpName(l.Address, l.Port)
-		items = append(items, listener(name, l.Address, l.Port, map[string]any{
-			"name": "envoy.filters.network.tcp_proxy",
-			"typed_config": map[string]any{
-				"@type":                "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
-				"stat_prefix":          name,
-				"cluster":              l.Cluster,
-				"max_connect_attempts": 3,
-			},
-		}))
-	}
-	httpls := slices.Clone(c.HTTP)
-	slices.SortFunc(httpls, func(a, b HTTPListener) int {
-		return strings.Compare(httpName(a.Address, a.Port), httpName(b.Address, b.Port))
-	})
-	for _, l := range httpls {
-		name := httpName(l.Address, l.Port)
-		items = append(items, listener(name, l.Address, l.Port, map[string]any{
-			"name": "envoy.filters.network.http_connection_manager",
-			"typed_config": map[string]any{
-				"@type":       "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-				"stat_prefix": name,
-				// The gateway sees the real client address and passes it on in x-forwarded-for.
-				"use_remote_address": true,
-				"http_filters": []any{map[string]any{
-					"name":         "envoy.filters.http.router",
-					"typed_config": map[string]any{"@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"},
-				}},
-				"route_config": map[string]any{"name": name, "virtual_hosts": virtualHosts(l.Routes)},
-			},
-		}))
-	}
-	return resources(items)
-}
-
-// virtualHosts groups routes by host; within a host longer path prefixes match first.
-func virtualHosts(routes []HTTPRoute) []any {
-	byHost := map[string][]HTTPRoute{}
-	for _, r := range routes {
-		byHost[r.Host] = append(byHost[r.Host], r)
-	}
-	hosts := slices.Sorted(maps.Keys(byHost))
-	out := []any{}
-	for _, h := range hosts {
-		rs := byHost[h]
-		slices.SortFunc(rs, func(a, b HTTPRoute) int {
-			if len(a.Path) != len(b.Path) {
-				return len(b.Path) - len(a.Path)
-			}
-			return strings.Compare(a.Path, b.Path)
-		})
-		var matches []any
-		for _, r := range rs {
-			matches = append(matches, map[string]any{
-				"match": map[string]any{"prefix": r.Path},
-				// Only connect failures are retried: the request has not reached a backend yet.
-				"route": map[string]any{"cluster": r.Cluster, "retry_policy": map[string]any{"retry_on": "connect-failure", "num_retries": 2}},
-			})
-		}
-		out = append(out, map[string]any{"name": h, "domains": []string{h, h + ":*"}, "routes": matches})
-	}
-	return out
-}
-
-// ClustersJSON renders cds.json.
-func (c Config) ClustersJSON() ([]byte, error) {
-	var items []map[string]any
-	cs := slices.Clone(c.Clusters)
-	slices.SortFunc(cs, func(a, b Cluster) int { return strings.Compare(a.Name, b.Name) })
-	for _, cl := range cs {
-		item := map[string]any{
-			"@type":           "type.googleapis.com/envoy.config.cluster.v3.Cluster",
-			"name":            cl.Name,
-			"connect_timeout": "1s",
-			"load_assignment": map[string]any{
-				"cluster_name": cl.Name,
-				"endpoints": []any{map[string]any{"lb_endpoints": []any{map[string]any{
-					"endpoint": map[string]any{"address": socketAddress(cl.Host, cl.Port)},
-				}}}},
-			},
-			// A new cluster only takes traffic once its endpoint passed this check (warming).
-			"health_checks": []any{map[string]any{
-				"timeout": "1s", "interval": "0.5s", "unhealthy_threshold": 1, "healthy_threshold": 1,
-				"tcp_health_check": map[string]any{},
-			}},
-		}
-		if cl.DNS {
-			// The DnsCluster extension replaces the deprecated type/dns_refresh_rate fields.
-			item["cluster_type"] = map[string]any{
-				"name": "envoy.cluster.dns",
-				"typed_config": map[string]any{
-					"@type":                            "type.googleapis.com/envoy.extensions.clusters.dns.v3.DnsCluster",
-					"dns_refresh_rate":                 "1s",
-					"dns_lookup_family":                "V4_ONLY",
-					"all_addresses_in_single_endpoint": false,
-				},
-			}
-		} else {
-			item["type"] = "STATIC"
-		}
-		items = append(items, item)
-	}
-	return resources(items)
-}
 
 // writeAtomic replaces dir/name with a rename, which is the change Envoy's directory watch picks
 // up. An unchanged file is left alone so Envoy does not reload for nothing.
@@ -280,15 +146,42 @@ func Write(dir, node string, socketMode int, cfg Config) error {
 	if err != nil {
 		return err
 	}
-	for _, f := range []struct {
-		name string
-		data []byte
-	}{{bootstrapFile, boot}, {clustersFile, cds}, {listenersFile, lds}} {
-		if err := writeAtomic(dir, f.name, f.data); err != nil {
-			return err
+	if err := writeAtomic(dir, bootstrapFile, boot); err != nil {
+		return err
+	}
+	if err := writeAtomic(dir, clustersFile, cds); err != nil {
+		return err
+	}
+	if old, err := os.ReadFile(filepath.Join(dir, listenersFile)); err == nil && bytes.Equal(old, lds) {
+		return nil
+	}
+	// A running Envoy rejects a listener whose route names a cluster that is still warming, and
+	// does not retry until the file changes again: wait until it knows every cluster.
+	waitClusters(dir, cfg.Clusters, clusterWait)
+	return writeAtomic(dir, listenersFile, lds)
+}
+
+// clusterWait bounds how long Write waits for a running Envoy to take new clusters.
+var clusterWait = 15 * time.Second
+
+func waitClusters(dir string, clusters []Cluster, timeout time.Duration) {
+	if _, err := os.Stat(filepath.Join(dir, adminSocket)); err != nil {
+		return // not running yet: at startup Envoy loads clusters before listeners
+	}
+	ctx, cancel := context.WithTimeout(context.Background(), timeout)
+	defer cancel()
+	a := NewAdmin(dir)
+	for {
+		hosts, err := a.hosts(ctx)
+		if err == nil && !slices.ContainsFunc(clusters, func(c Cluster) bool { _, ok := hosts[c.Name]; return !ok }) {
+			return
+		}
+		select {
+		case <-ctx.Done():
+			return // write anyway; WaitReady reports what Envoy then logs
+		case <-time.After(100 * time.Millisecond):
 		}
 	}
-	return nil
 }
 
 // Endpoints returns each cluster's endpoint as written in dir ("host:port"), empty without config.

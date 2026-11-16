@@ -2,16 +2,9 @@
   "resources": [
     {
       "@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
+      "name": "db_pg_p5432",
+      "type": "STATIC",
       "connect_timeout": "1s",
-      "health_checks": [
-        {
-          "healthy_threshold": 1,
-          "interval": "0.5s",
-          "tcp_health_check": {},
-          "timeout": "1s",
-          "unhealthy_threshold": 1
-        }
-      ],
       "load_assignment": {
         "cluster_name": "db_pg_p5432",
         "endpoints": [
@@ -31,30 +24,28 @@
           }
         ]
       },
-      "name": "db_pg_p5432",
-      "type": "STATIC"
+      "health_checks": [
+        {
+          "timeout": "1s",
+          "interval": "0.500s",
+          "unhealthy_threshold": 1,
+          "healthy_threshold": 1,
+          "tcp_health_check": {}
+        }
+      ]
     },
     {
       "@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
+      "name": "web-p8080",
       "cluster_type": {
         "name": "envoy.cluster.dns",
         "typed_config": {
           "@type": "type.googleapis.com/envoy.extensions.clusters.dns.v3.DnsCluster",
-          "all_addresses_in_single_endpoint": false,
-          "dns_lookup_family": "V4_ONLY",
-          "dns_refresh_rate": "1s"
+          "dns_refresh_rate": "1s",
+          "dns_lookup_family": "V4_ONLY"
         }
       },
       "connect_timeout": "1s",
-      "health_checks": [
-        {
-          "healthy_threshold": 1,
-          "interval": "0.5s",
-          "tcp_health_check": {},
-          "timeout": "1s",
-          "unhealthy_threshold": 1
-        }
-      ],
       "load_assignment": {
         "cluster_name": "web-p8080",
         "endpoints": [
@@ -74,7 +65,15 @@
           }
         ]
       },
-      "name": "web-p8080"
+      "health_checks": [
+        {
+          "timeout": "1s",
+          "interval": "0.500s",
+          "unhealthy_threshold": 1,
+          "healthy_threshold": 1,
+          "tcp_health_check": {}
+        }
+      ]
     }
   ]
 }

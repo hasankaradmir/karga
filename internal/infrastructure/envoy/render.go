@@ -1,0 +1,218 @@
+package envoy
+
+import (
+	"bytes"
+	"encoding/json"
+	"fmt"
+	"maps"
+	"slices"
+	"strings"
+	"time"
+
+	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
+	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
+	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
+	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
+	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	dnscommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/common/dns/v3"
+	dnsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dns/v3"
+	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
+	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
+	tcpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
+	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	"google.golang.org/protobuf/encoding/protojson"
+	"google.golang.org/protobuf/proto"
+	"google.golang.org/protobuf/types/known/anypb"
+	"google.golang.org/protobuf/types/known/durationpb"
+	"google.golang.org/protobuf/types/known/wrapperspb"
+)
+
+// Listeners and clusters are built as Envoy's own protobuf types and validated with the
+// constraints Envoy itself enforces, so a mistake fails here with a clear message instead of
+// Envoy silently rejecting the file.
+
+// validated is a generated message with protoc-gen-validate rules.
+type validated interface {
+	proto.Message
+	ValidateAll() error
+}
+
+// pack validates m and wraps it for a typed_config field.
+func pack(m validated) (*anypb.Any, error) {
+	if err := m.ValidateAll(); err != nil {
+		return nil, fmt.Errorf("envoy config: %w", err)
+	}
+	return anypb.New(m)
+}
+
+func socketAddress(host string, port int) *corev3.Address {
+	return &corev3.Address{Address: &corev3.Address_SocketAddress{SocketAddress: &corev3.SocketAddress{
+		Address: host, PortSpecifier: &corev3.SocketAddress_PortValue{PortValue: uint32(port)},
+	}}}
+}
+
+func filterListener(name, address string, port int, filter string, cfg validated) (*listenerv3.Listener, error) {
+	tc, err := pack(cfg)
+	if err != nil {
+		return nil, err
+	}
+	return &listenerv3.Listener{
+		Name:    name,
+		Address: socketAddress(address, port),
+		FilterChains: []*listenerv3.FilterChain{{Filters: []*listenerv3.Filter{{
+			Name: filter, ConfigType: &listenerv3.Filter_TypedConfig{TypedConfig: tc},
+		}}}},
+	}, nil
+}
+
+// Listeners renders lds.json. Output is sorted so equal configs give equal files.
+func (c Config) Listeners() ([]byte, error) {
+	var items []validated
+	tcp := slices.Clone(c.TCP)
+	slices.SortFunc(tcp, func(a, b TCPListener) int {
+		return strings.Compare(tcpName(a.Address, a.Port), tcpName(b.Address, b.Port))
+	})
+	for _, l := range tcp {
+		name := tcpName(l.Address, l.Port)
+		lis, err := filterListener(name, l.Address, l.Port, "envoy.filters.network.tcp_proxy", &tcpv3.TcpProxy{
+			StatPrefix:         name,
+			ClusterSpecifier:   &tcpv3.TcpProxy_Cluster{Cluster: l.Cluster},
+			MaxConnectAttempts: wrapperspb.UInt32(3),
+		})
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, lis)
+	}
+	httpls := slices.Clone(c.HTTP)
+	slices.SortFunc(httpls, func(a, b HTTPListener) int {
+		return strings.Compare(httpName(a.Address, a.Port), httpName(b.Address, b.Port))
+	})
+	router, err := pack(&routerv3.Router{})
+	if err != nil {
+		return nil, err
+	}
+	for _, l := range httpls {
+		name := httpName(l.Address, l.Port)
+		lis, err := filterListener(name, l.Address, l.Port, "envoy.filters.network.http_connection_manager", &hcmv3.HttpConnectionManager{
+			StatPrefix: name,
+			// The gateway sees the real client address and passes it on in x-forwarded-for.
+			UseRemoteAddress: wrapperspb.Bool(true),
+			HttpFilters: []*hcmv3.HttpFilter{{
+				Name: "envoy.filters.http.router", ConfigType: &hcmv3.HttpFilter_TypedConfig{TypedConfig: router},
+			}},
+			RouteSpecifier: &hcmv3.HttpConnectionManager_RouteConfig{RouteConfig: &routev3.RouteConfiguration{
+				Name: name, VirtualHosts: virtualHosts(l.Routes),
+			}},
+		})
+		if err != nil {
+			return nil, err
+		}
+		items = append(items, lis)
+	}
+	return resources(items)
+}
+
+// virtualHosts groups routes by host; within a host longer path prefixes match first.
+func virtualHosts(routes []HTTPRoute) []*routev3.VirtualHost {
+	byHost := map[string][]HTTPRoute{}
+	for _, r := range routes {
+		byHost[r.Host] = append(byHost[r.Host], r)
+	}
+	var out []*routev3.VirtualHost
+	for _, h := range slices.Sorted(maps.Keys(byHost)) {
+		rs := byHost[h]
+		slices.SortFunc(rs, func(a, b HTTPRoute) int {
+			if len(a.Path) != len(b.Path) {
+				return len(b.Path) - len(a.Path)
+			}
+			return strings.Compare(a.Path, b.Path)
+		})
+		vh := &routev3.VirtualHost{Name: h, Domains: []string{h, h + ":*"}}
+		for _, r := range rs {
+			vh.Routes = append(vh.Routes, &routev3.Route{
+				Match: &routev3.RouteMatch{PathSpecifier: &routev3.RouteMatch_Prefix{Prefix: r.Path}},
+				Action: &routev3.Route_Route{Route: &routev3.RouteAction{
+					ClusterSpecifier: &routev3.RouteAction_Cluster{Cluster: r.Cluster},
+					// Only connect failures are retried: the request has not reached a backend yet.
+					RetryPolicy: &routev3.RetryPolicy{RetryOn: "connect-failure", NumRetries: wrapperspb.UInt32(2)},
+				}},
+			})
+		}
+		out = append(out, vh)
+	}
+	return out
+}
+
+// ClustersJSON renders cds.json.
+func (c Config) ClustersJSON() ([]byte, error) {
+	cs := slices.Clone(c.Clusters)
+	slices.SortFunc(cs, func(a, b Cluster) int { return strings.Compare(a.Name, b.Name) })
+	var items []validated
+	for _, cl := range cs {
+		item := &clusterv3.Cluster{
+			Name:           cl.Name,
+			ConnectTimeout: durationpb.New(time.Second),
+			LoadAssignment: &endpointv3.ClusterLoadAssignment{
+				ClusterName: cl.Name,
+				Endpoints: []*endpointv3.LocalityLbEndpoints{{LbEndpoints: []*endpointv3.LbEndpoint{{
+					HostIdentifier: &endpointv3.LbEndpoint_Endpoint{Endpoint: &endpointv3.Endpoint{Address: socketAddress(cl.Host, cl.Port)}},
+				}}}},
+			},
+			// A new cluster only takes traffic once its endpoint passed this check (warming).
+			HealthChecks: []*corev3.HealthCheck{{
+				Timeout:            durationpb.New(time.Second),
+				Interval:           durationpb.New(500 * time.Millisecond),
+				UnhealthyThreshold: wrapperspb.UInt32(1),
+				HealthyThreshold:   wrapperspb.UInt32(1),
+				HealthChecker:      &corev3.HealthCheck_TcpHealthCheck_{TcpHealthCheck: &corev3.HealthCheck_TcpHealthCheck{}},
+			}},
+		}
+		if cl.DNS {
+			// The DnsCluster extension replaces the deprecated type/dns_refresh_rate fields.
+			dns, err := pack(&dnsv3.DnsCluster{
+				DnsRefreshRate:  durationpb.New(time.Second),
+				DnsLookupFamily: dnscommonv3.DnsLookupFamily_V4_ONLY,
+			})
+			if err != nil {
+				return nil, err
+			}
+			item.ClusterDiscoveryType = &clusterv3.Cluster_ClusterType{ClusterType: &clusterv3.Cluster_CustomClusterType{
+				Name: "envoy.cluster.dns", TypedConfig: dns,
+			}}
+		} else {
+			item.ClusterDiscoveryType = &clusterv3.Cluster_Type{Type: clusterv3.Cluster_STATIC}
+		}
+		items = append(items, item)
+	}
+	return resources(items)
+}
+
+// resources validates items and writes them as a discovery response, the file format of
+// path_config_source. protojson output is normalized (it varies whitespace on purpose) so equal
+// configs give equal files.
+func resources(items []validated) ([]byte, error) {
+	resp := &discoveryv3.DiscoveryResponse{}
+	for _, it := range items {
+		if err := it.ValidateAll(); err != nil {
+			return nil, fmt.Errorf("envoy config: %w", err)
+		}
+		a, err := anypb.New(it)
+		if err != nil {
+			return nil, err
+		}
+		resp.Resources = append(resp.Resources, a)
+	}
+	raw, err := protojson.MarshalOptions{UseProtoNames: true}.Marshal(resp)
+	if err != nil {
+		return nil, err
+	}
+	if len(resp.Resources) == 0 {
+		raw = []byte(`{"resources":[]}`)
+	}
+	var out bytes.Buffer
+	if err := json.Indent(&out, raw, "", "  "); err != nil {
+		return nil, err
+	}
+	return out.Bytes(), nil
+}

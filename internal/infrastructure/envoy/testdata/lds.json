@@ -2,6 +2,7 @@
   "resources": [
     {
       "@type": "type.googleapis.com/envoy.config.listener.v3.Listener",
+      "name": "tcp_127.0.0.1_5432",
       "address": {
         "socket_address": {
           "address": "127.0.0.1",
@@ -15,18 +16,18 @@
               "name": "envoy.filters.network.tcp_proxy",
               "typed_config": {
                 "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+                "stat_prefix": "tcp_127.0.0.1_5432",
                 "cluster": "db_pg_p5432",
-                "max_connect_attempts": 3,
-                "stat_prefix": "tcp_127.0.0.1_5432"
+                "max_connect_attempts": 3
               }
             }
           ]
         }
-      ],
-      "name": "tcp_127.0.0.1_5432"
+      ]
     },
     {
       "@type": "type.googleapis.com/envoy.config.listener.v3.Listener",
+      "name": "http_0.0.0.0_80",
       "address": {
         "socket_address": {
           "address": "0.0.0.0",
@@ -40,23 +41,16 @@
               "name": "envoy.filters.network.http_connection_manager",
               "typed_config": {
                 "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
-                "http_filters": [
-                  {
-                    "name": "envoy.filters.http.router",
-                    "typed_config": {
-                      "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
-                    }
-                  }
-                ],
+                "stat_prefix": "http_0.0.0.0_80",
                 "route_config": {
                   "name": "http_0.0.0.0_80",
                   "virtual_hosts": [
                     {
+                      "name": "app.local",
                       "domains": [
                         "app.local",
                         "app.local:*"
                       ],
-                      "name": "app.local",
                       "routes": [
                         {
                           "match": {
@@ -65,8 +59,8 @@
                           "route": {
                             "cluster": "app_api_p8080",
                             "retry_policy": {
-                              "num_retries": 2,
-                              "retry_on": "connect-failure"
+                              "retry_on": "connect-failure",
+                              "num_retries": 2
                             }
                           }
                         },
@@ -77,19 +71,19 @@
                           "route": {
                             "cluster": "app_web_p3000",
                             "retry_policy": {
-                              "num_retries": 2,
-                              "retry_on": "connect-failure"
+                              "retry_on": "connect-failure",
+                              "num_retries": 2
                             }
                           }
                         }
                       ]
                     },
                     {
+                      "name": "b.local",
                       "domains": [
                         "b.local",
                         "b.local:*"
                       ],
-                      "name": "b.local",
                       "routes": [
                         {
                           "match": {
@@ -98,8 +92,8 @@
                           "route": {
                             "cluster": "b_web_p3000",
                             "retry_policy": {
-                              "num_retries": 2,
-                              "retry_on": "connect-failure"
+                              "retry_on": "connect-failure",
+                              "num_retries": 2
                             }
                           }
                         }
@@ -107,14 +101,20 @@
                     }
                   ]
                 },
-                "stat_prefix": "http_0.0.0.0_80",
+                "http_filters": [
+                  {
+                    "name": "envoy.filters.http.router",
+                    "typed_config": {
+                      "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                    }
+                  }
+                ],
                 "use_remote_address": true
               }
             }
           ]
         }
-      ],
-      "name": "http_0.0.0.0_80"
+      ]
     }
   ]
 }

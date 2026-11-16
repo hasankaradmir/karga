@@ -2,11 +2,13 @@ package envoy
 
 import (
 	"context"
+	"errors"
 	"flag"
 	"net"
 	"net/http"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -169,5 +171,48 @@ func TestDefaultImagePinned(t *testing.T) {
 	t.Setenv("KARGA_PROXY_IMAGE", "envoy:test")
 	if Image() != "envoy:test" {
 		t.Fatalf("override ignored: %s", Image())
+	}
+}
+
+func TestInvalidConfigRefusedBeforeWriting(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "proxy")
+	bad := Config{Clusters: []Cluster{{Name: "", Host: "127.0.0.1", Port: 8080}}}
+	err := Write(dir, "web", 0o600, bad)
+	if err == nil || !strings.Contains(err.Error(), "envoy config") {
+		t.Fatalf("want a validation error, got %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(dir, clustersFile)); !errors.Is(err, os.ErrNotExist) {
+		t.Fatalf("invalid config was written: %v", err)
+	}
+}
+
+func TestWriteWaitsForClustersBeforeListeners(t *testing.T) {
+	known := `{"cluster_statuses":[]}`
+	dir := fakeAdmin(t, func() string { return known }, func() string { return "" })
+	old := clusterWait
+	clusterWait = 300 * time.Millisecond
+	t.Cleanup(func() { clusterWait = old })
+
+	start := time.Now()
+	if err := Write(dir, "gw", 0o600, sample); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) < 300*time.Millisecond {
+		t.Fatal("listeners written before Envoy knew the clusters")
+	}
+	if _, err := os.Stat(filepath.Join(dir, listenersFile)); err != nil {
+		t.Fatalf("listeners must be written after the wait anyway: %v", err)
+	}
+
+	known = `{"cluster_statuses":[{"name":"db_pg_p5432"},{"name":"web-p8080"},{"name":"new"}]}`
+	next := sample
+	next.Clusters = append(slices.Clone(sample.Clusters), Cluster{Name: "new", Host: "127.0.0.1", Port: 1})
+	next.TCP = append(slices.Clone(sample.TCP), TCPListener{Address: "127.0.0.1", Port: 1, Cluster: "new"})
+	start = time.Now()
+	if err := Write(dir, "gw", 0o600, next); err != nil {
+		t.Fatal(err)
+	}
+	if time.Since(start) > 200*time.Millisecond {
+		t.Fatal("waited although Envoy knew every cluster")
 	}
 }
