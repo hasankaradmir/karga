@@ -74,6 +74,7 @@ func (r *Runtime) CreateWorkload(ctx context.Context, req ports.WorkloadRequest)
 		PortBindings:  network.PortMap{},
 		RestartPolicy: container.RestartPolicy{Name: mode},
 		Resources:     container.Resources{Memory: req.MemoryBytes, NanoCPUs: req.MilliCPU * 1_000_000},
+		Sysctls:       req.Sysctls,
 		// Explicit even though these are Docker defaults (tech design §17.5).
 		Privileged: false,
 	}

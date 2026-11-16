@@ -114,7 +114,9 @@ type WorkloadRequest struct {
 	Args    []string
 	Env     map[string]string
 	// User overrides the image user ("uid[:gid]"). Empty keeps the image default.
-	User          string
+	User string
+	// Sysctls are namespaced kernel parameters for the container (e.g. net.ipv4.ip_unprivileged_port_start).
+	Sysctls       map[string]string
 	Ports         []PortBinding
 	Mounts        []Mount
 	Networks      []string

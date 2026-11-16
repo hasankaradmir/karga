@@ -112,6 +112,7 @@ func Run(t *testing.T, rt ports.Runtime, cfg Config) {
 			},
 			MemoryBytes:   64 << 20,
 			MilliCPU:      500,
+			Sysctls:       map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"},
 			RestartPolicy: "never",
 		}
 		must(t, rt.CreateWorkload(ctx, req))
