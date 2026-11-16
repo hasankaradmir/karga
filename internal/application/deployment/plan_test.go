@@ -151,3 +151,13 @@ Changes:
 		t.Fatalf("got:\n%s\nwant:\n%s", buf.String(), want)
 	}
 }
+
+func TestStrategyNotInDigest(t *testing.T) {
+	applied := appliedFrom(t, manifest(6379))
+	v2 := manifest(6379)
+	v2[0].Spec.(*resource.WorkloadSpec).UpdateStrategy = &resource.UpdateStrategy{Type: resource.StrategyReplace}
+	plan, err := Diff("cache", v2, applied)
+	if err != nil || plan.HasChanges() {
+		t.Fatalf("changing only the strategy must not change the workload: %s %v", actions(plan), err)
+	}
+}

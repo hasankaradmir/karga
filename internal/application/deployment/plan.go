@@ -78,6 +78,16 @@ func Redacted(r resource.Resource) resource.Resource {
 	return r
 }
 
+// withoutStrategy drops updateStrategy: it decides how a change is applied, not what runs.
+func withoutStrategy(r resource.Resource) resource.Resource {
+	if w, ok := r.Spec.(*resource.WorkloadSpec); ok && w.UpdateStrategy != nil {
+		c := *w
+		c.UpdateStrategy = nil
+		r.Spec = &c
+	}
+	return r
+}
+
 // Specs returns the canonical redacted JSON and digest of every resource. A workload's digest also
 // covers the Config and Secret resources it mounts, so changing their content recreates it.
 func Specs(rs []resource.Resource) (map[Key]release.AppliedResource, error) {
@@ -88,7 +98,7 @@ func Specs(rs []resource.Resource) (map[Key]release.AppliedResource, error) {
 			if isWorkload != pass {
 				continue
 			}
-			js, err := json.Marshal(Redacted(r))
+			js, err := json.Marshal(withoutStrategy(Redacted(r)))
 			if err != nil {
 				return nil, err
 			}

@@ -285,7 +285,7 @@ func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[str
 	for _, m := range s.Mounts {
 		kind, target := m.Target()
 		if kind == resource.KindVolume {
-			wr.Mounts = append(wr.Mounts, ports.Mount{Type: ports.MountVolume, Source: RuntimeName(release, target), Target: m.MountPath})
+			wr.Mounts = append(wr.Mounts, ports.Mount{Type: ports.MountVolume, Source: RuntimeName(release, target), Target: m.MountPath, ReadOnly: m.ReadOnly})
 			continue
 		}
 		dir, ok := paths[Key{kind, target}]
