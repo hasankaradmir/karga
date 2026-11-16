@@ -56,7 +56,7 @@ func newRootCmd(stdout, stderr io.Writer, newRuntime func(context.Context) (port
 
 	root := &cobra.Command{
 		Use:           "karga",
-		Short:         "Helm-like package manager for single-node container workloads",
+		Short:         "Package manager for container workloads on a single host",
 		SilenceUsage:  true,
 		SilenceErrors: true,
 		PersistentPreRunE: func(*cobra.Command, []string) error {

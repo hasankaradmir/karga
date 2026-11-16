@@ -1,6 +1,6 @@
 # karga
 
-Helm-like package management for containers on a **single host**, without Kubernetes.
+Package management for containers on a **single host**, without Kubernetes.
 
 karga renders a versioned package (templates + values + schema) into its own small resource model
 (Workload, Volume, Network, Config, Secret), applies it to Docker, and keeps every install, upgrade
@@ -127,15 +127,18 @@ spec:
   networks: [web-net]               # the workload is reachable as "web" on these networks
   ports:
     - containerPort: 80
-      hostPort: 8080                # optional
+      hostPort: 8080                # optional, tcp: held by the gateway on Linux
       hostIP: 127.0.0.1             # default; set 0.0.0.0 to expose on every interface
+    - containerPort: 3000
+      routes:                       # HTTP through the gateway (Linux); excludes hostPort
+        - {host: app.local, path: /, hostPort: 80, hostIP: 127.0.0.1}   # path, hostPort, hostIP are defaults
   mounts:
     - {volume: data, mountPath: /data, readOnly: false}
     - {config: site, mountPath: /etc/nginx/conf.d}      # always read-only
     - {secret: creds, mountPath: /run/secrets/creds}    # always read-only
   healthCheck: {type: exec, command: [curl, -f, http://127.0.0.1/], interval: 10s, timeout: 3s, retries: 3, startPeriod: 30s}
   resources: {memory: 512Mi, cpu: 1}
-  updateStrategy: {type: recreate, drainTimeout: 10s, proxy: false}   # recreate | replace; proxy: Linux only
+  updateStrategy: {type: recreate, drainTimeout: 10s}   # recreate | replace
 ```
 
 **Volume**: `driver` (default `local`) and `retention: retain | delete` (default `retain`). A retained
@@ -150,26 +153,44 @@ Before any change karga pulls every image it needs, so a bad tag fails without t
 `--dry-run` shows the plan: what is created, updated, deleted or unchanged, and which fields change.
 
 - **recreate** (default): stop the old container, then start the new one. There is a short outage.
-- **replace**: start the new container next to the old one without its network alias. Once it is
-  healthy it joins the networks under the alias. The old container then gets `drainTimeout` to stop
-  and is removed. There is no outage window, but a request that resolved the old container's address
-  just before it stopped can still fail, so clients should retry. If the new container never becomes
-  healthy, the old one keeps running and the release stays deployed. Replace only applies when the
-  workload publishes no `hostPort`, mounts volumes read-only and has a healthcheck. Otherwise the plan
-  falls back to recreate and says why.
+- **replace**: start the new container next to the old one, switch traffic to it once it is healthy,
+  then let the old one drain for up to `drainTimeout` and remove it. If the new container never
+  becomes healthy, the old one keeps running and the release stays deployed. Replace only applies
+  when the workload mounts volumes read-only and has a healthcheck; otherwise the plan falls back to
+  recreate and says why.
 
-- **replace with `proxy: true`** (Linux only): karga runs an Envoy container in front of the workload,
-  named `<release>-karga-proxy-<name>`. The proxy holds the host ports and the workload's network
-  name, and the workload itself publishes nothing. A replace starts the new container. When it is
-  healthy the proxy routes new connections to it, and connections still open on the old container
-  can finish for up to `drainTimeout` before it is removed. No request is lost, from the host or from
-  other workloads.
-  - The proxy is TCP only and the backend does not see the client's IP address.
-  - Changing the ports, the networks or the proxy image recreates the proxy, which is a short outage.
-    The plan says so.
-  - Turning the proxy on or off recreates the workload once.
-  - The image is `envoyproxy/envoy:v1.36-latest` (about 240MB); `KARGA_PROXY_IMAGE` overrides it.
-  - Off Linux, or without a network, or with UDP ports, the plan falls back to recreate and says why.
+### Traffic through karga's Envoys (Linux)
+
+On Linux with a local Docker daemon, karga runs two kinds of Envoy (`envoyproxy/envoy:distroless-v1.36-latest`,
+about 150MB, one worker thread, about 15MB RAM each; `KARGA_PROXY_IMAGE` overrides the image):
+
+- **Gateway** (`karga-gateway`, one per host, host network): holds every tcp `hostPort` and every
+  HTTP `route` of every release. Workloads publish nothing else than a loopback upstream port
+  (`127.0.0.1:<random>`). HTTP routes select a workload by `Host` header and path prefix, so several
+  releases can share port 80; the backend receives the client address in `x-forwarded-for`. karga
+  creates the gateway when a release needs it and removes it with the last one.
+  `karga gateway status` lists its listeners, routes and upstreams.
+- **Release proxy** (`<release>-karga-proxy`, one per release): answers on the network for the
+  release's `replace` workloads, so their network clients switch over too. Recreate workloads, such
+  as databases, are reached directly.
+
+A replace switches both: no request is lost, from the host or from other workloads. Notes:
+
+- Replace workloads of one release cannot share a `containerPort`; the later one (by name) is
+  replaced by DNS (a request may fail during the switch) and the plan says why.
+- Adding or removing a replace workload reconnects the release proxy to its networks, which briefly
+  interrupts proxied connections on them; changing the proxy image recreates it. The plan says so.
+- The gateway is TCP and HTTP only: UDP host ports are published by Docker directly. There is no TLS
+  termination yet.
+- The gateway runs as root with only `NET_BIND_SERVICE` and `DAC_OVERRIDE` (to bind low ports in the
+  host namespace) and `no-new-privileges`. It is a single point for host traffic; it restarts
+  automatically.
+- Local users can reach the loopback upstream ports directly, bypassing the gateway.
+
+Elsewhere (macOS, a remote Docker host) ports are published by Docker, `routes` are refused, a
+workload with a `hostPort` falls back to recreate, and replace switches network clients by DNS: there
+is no outage window, but a request that resolved the old container's address just before it stopped
+can still fail, so clients should retry.
 
 If a recreate fails, the failed container is stopped (but kept for `docker logs`), the revision is
 marked failed and the previous revision stays current. Run `karga rollback <release>` to go back.
@@ -180,9 +201,10 @@ migrations. Changing a Network or Volume spec in an upgrade is refused.
 
 - Access to the Docker socket is root-equivalent on the host. Run karga as a user you trust with it.
 - Ports are published on `127.0.0.1` unless `hostIP` says otherwise.
-- Containers are never privileged and never join the host PID, network or IPC namespaces. The proxy
-  runs as the karga user; its configuration and admin socket are in a `0700` directory under
-  `$KARGA_HOME/proxies/`.
+- Containers are never privileged and never join the host PID, network or IPC namespaces, except the
+  gateway, which uses the host network (see above). Release proxies run as the karga user. Proxy and
+  gateway configuration and admin sockets are in `0700` directories under `$KARGA_HOME/proxies/` and
+  `$KARGA_HOME/gateway/`.
 - Config and Secret files live under `$KARGA_HOME/releases/<release>/<revision>/`. That directory is
   `0700`; the files inside are `0644` so any user in the container can read them. The state database
   is `0600`.
