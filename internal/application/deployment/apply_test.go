@@ -440,3 +440,35 @@ func TestReconcile(t *testing.T) {
 		t.Fatalf("only -next: %v %v %v", repaired, err, rt.Workloads)
 	}
 }
+
+func TestFailedReplaceWaitsForEarlierRecreates(t *testing.T) {
+	r := newRequest(t, freePort(t))
+	port := r.req.Resources[0].Spec.(*resource.WorkloadSpec).Ports[0].HostPort
+	r.req.Resources = withWorkload(manifest(port), "web", 8080)
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	// redis (recreate) comes first in the plan, then web (replace), whose new container fails.
+	r.rt.Calls = nil
+	r.req.Revision = 2
+	r.req.Resources = withWorkload(manifest(port), "web", 8080)
+	r.req.Resources[0].Spec.(*resource.WorkloadSpec).Image = "redis:7.2"
+	r.req.Resources[len(r.req.Resources)-1].Spec.(*resource.WorkloadSpec).Image = "app:2"
+	r.rt.Fail["StartWorkload:cache-web-next"] = errors.New("boom")
+	r.rt.Health = ports.HealthUnhealthy
+	err := r.run()
+	if err == nil {
+		t.Fatal("expected failure")
+	}
+	// Stopped once by its recreate, and once more because it never became ready.
+	last := slices.Index(r.rt.Calls, "StartWorkload:cache-web-next")
+	if last < 0 || !slices.Contains(r.rt.Calls[last:], "StopWorkload:cache-redis") {
+		t.Fatalf("recreated redis not handled after the failed replace:\n%s", strings.Join(r.rt.Calls, "\n"))
+	}
+	if w := r.rt.Workloads["cache-redis"]; w.State != ports.StateExited {
+		t.Fatalf("unready recreated workload must be stopped: %+v", w.State)
+	}
+	if w := r.rt.Workloads["cache-web"]; w.State != ports.StateRunning {
+		t.Fatalf("previous web must keep running: %v", w.State)
+	}
+}

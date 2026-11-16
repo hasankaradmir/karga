@@ -214,11 +214,14 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 				touched, rerr = replaceWorkload(ctx, rt, req, c, owned, s, lbl, paths, behind)
 				*disrupted = *disrupted || touched
 				if rerr != nil && !touched {
-					// shortcut: workloads recreated earlier in this plan are not waited for or stopped here; they are
-					// already disrupted, so the release is failed and the next plan recreates them. Wait for them if
-					// mixed plans become common.
 					_ = req.OnStep(c, release.Step{Kind: c.Kind, Name: c.Name, Action: c.Action, Status: StepKept, Error: rerr.Error()})
-					return fmt.Errorf("%s %q: %w (the previous container is still running)", c.Kind, c.Name, rerr)
+					err := fmt.Errorf("%s %q: %w (the previous container is still running)", c.Kind, c.Name, rerr)
+					// Workloads recreated earlier in this plan are waited for like on success: ones that do not
+					// become ready are stopped and reported failed, so the next plan recreates them.
+					if len(changed) > 0 {
+						err = errors.Join(err, waitChanged(ctx, rt, req.Release, changed, req.Timeout, report))
+					}
+					return err
 				}
 				err = rerr
 				break
