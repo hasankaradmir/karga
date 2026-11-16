@@ -1,0 +1,185 @@
+//go:build integration
+
+// Package integration deploys the example packages on a real Docker Engine (tech design §19.3).
+package integration
+
+import (
+	"context"
+	"crypto/rand"
+	"encoding/hex"
+	"errors"
+	"slices"
+	"strconv"
+	"testing"
+	"time"
+
+	"github.com/hasankaradmir/karga/internal/adapters/docker"
+	"github.com/hasankaradmir/karga/internal/application/deployment"
+	"github.com/hasankaradmir/karga/internal/application/packages"
+	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga/internal/ports"
+	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
+)
+
+func newRuntime(t *testing.T) *docker.Runtime {
+	t.Helper()
+	rt, err := docker.New(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rt.Close() })
+	return rt
+}
+
+func releaseName(prefix string) string {
+	b := make([]byte, 3)
+	_, _ = rand.Read(b)
+	return prefix + "-" + hex.EncodeToString(b)
+}
+
+func render(t *testing.T, example, release string, sets ...string) []resource.Resource {
+	t.Helper()
+	p, err := packages.Load("../../examples/" + example)
+	if err != nil {
+		t.Fatal(err)
+	}
+	m, err := packages.Render(p, packages.Options{ReleaseName: release, Sets: sets})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var rs []resource.Resource
+	for _, d := range m.Documents {
+		rs = append(rs, d.Resource)
+	}
+	return rs
+}
+
+// deploy applies an example and always removes everything it created, volumes included.
+func deploy(t *testing.T, rt ports.Runtime, example, release string, sets ...string) (deployment.Request, error) {
+	t.Helper()
+	req := deployment.Request{
+		Home: t.TempDir(), Release: release, Revision: 1,
+		Supported: []string{"docker"}, Resources: render(t, example, release, sets...), Timeout: 3 * time.Minute,
+	}
+	t.Cleanup(func() {
+		if err := deployment.Delete(context.Background(), rt, req.Home, release, true); err != nil {
+			t.Errorf("cleanup %s: %v", release, err)
+		}
+	})
+	return req, deployment.Apply(context.Background(), rt, req)
+}
+
+func managed(t *testing.T, rt ports.Runtime, release string) []ports.Object {
+	t.Helper()
+	objs, err := rt.ListManaged(context.Background(), release)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return objs
+}
+
+func hasObject(objs []ports.Object, kind, name string) bool {
+	return slices.ContainsFunc(objs, func(o ports.Object) bool { return o.Kind == kind && o.Name == name })
+}
+
+func TestRedis(t *testing.T) {
+	rt := newRuntime(t)
+	ctx := context.Background()
+	release := releaseName("it-redis")
+	port := runtimetest.FreePort(t)
+	req, err := deploy(t, rt, "redis", release, "network.port="+strconv.Itoa(port))
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	st, err := rt.GetWorkload(ctx, release+"-redis")
+	if err != nil || st.State != ports.StateRunning || st.Health != ports.HealthHealthy {
+		t.Fatalf("redis status: %+v, %v", st, err)
+	}
+	pub, err := rt.PublishedPorts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pub {
+		if p.Release == release && p.HostIP != "127.0.0.1" {
+			t.Fatalf("port published on %s, want 127.0.0.1 only: %+v", p.HostIP, pub)
+		}
+	}
+
+	// A second release on the same host port fails in pre-flight, before creating anything.
+	clash := releaseName("it-clash")
+	if _, err := deploy(t, rt, "redis", clash, "network.port="+strconv.Itoa(port)); !errors.Is(err, ports.ErrPortInUse) {
+		t.Fatalf("port clash: want ErrPortInUse, got %v", err)
+	}
+	if objs := managed(t, rt, clash); len(objs) != 0 {
+		t.Fatalf("clashing release created objects: %+v", objs)
+	}
+
+	// Delete keeps the data volume by default (retention: retain).
+	if err := deployment.Delete(ctx, rt, req.Home, release, false); err != nil {
+		t.Fatal(err)
+	}
+	objs := managed(t, rt, release)
+	if !hasObject(objs, ports.ObjectVolume, release+"-redis-data") || hasObject(objs, ports.ObjectWorkload, release+"-redis") {
+		t.Fatalf("after delete: %+v", objs)
+	}
+}
+
+func TestPostgres(t *testing.T) {
+	rt := newRuntime(t)
+	release := releaseName("it-pg")
+	port := runtimetest.FreePort(t)
+	// Postgres reads POSTGRES_PASSWORD_FILE as the postgres user (uid 999): healthy proves the
+	// bind-mounted secret is readable by a non-root container user.
+	if _, err := deploy(t, rt, "postgres", release, "network.port="+strconv.Itoa(port), "database.password=s3cret"); err != nil {
+		t.Fatal(err)
+	}
+	st, err := rt.GetWorkload(context.Background(), release+"-postgres")
+	if err != nil || st.Health != ports.HealthHealthy {
+		t.Fatalf("postgres status: %+v, %v", st, err)
+	}
+}
+
+func TestSecretReadableByNonRoot(t *testing.T) {
+	rt := newRuntime(t)
+	ctx := context.Background()
+	release := releaseName("it-secret")
+	home := t.TempDir()
+	secret := resource.Resource{Kind: resource.KindSecret, Metadata: resource.Metadata{Name: "creds"},
+		Spec: &resource.SecretSpec{Values: map[string]string{"password": "s3cret"}}}
+	paths, err := deployment.Materialize(home, release, 1, []resource.Resource{secret}, func(string) {})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.EnsureImage(ctx, "busybox:1.37", "if-not-present"); err != nil {
+		t.Fatal(err)
+	}
+	name := release + "-reader"
+	t.Cleanup(func() { _ = rt.DeleteWorkload(ctx, name) })
+	if err := rt.CreateWorkload(ctx, ports.WorkloadRequest{
+		Name: name, Image: "busybox:1.37", User: "999:999", RestartPolicy: "never",
+		Labels:  map[string]string{ports.LabelManaged: "true", ports.LabelRelease: release},
+		Command: []string{"sh", "-c", "test \"$(cat /run/secrets/creds/password)\" = s3cret"},
+		Mounts:  []ports.Mount{{Type: ports.MountBind, Source: paths[deployment.Key{Kind: resource.KindSecret, Name: "creds"}], Target: "/run/secrets/creds", ReadOnly: true}},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.StartWorkload(ctx, name); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for time.Now().Before(deadline) {
+		st, err := rt.GetWorkload(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.State == ports.StateExited {
+			if st.ExitCode != 0 {
+				t.Fatalf("uid 999 could not read the secret (exit %d)", st.ExitCode)
+			}
+			return
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	t.Fatal("reader did not finish")
+}
