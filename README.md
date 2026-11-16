@@ -68,6 +68,8 @@ logs). State lives in `$KARGA_HOME` (default `$XDG_DATA_HOME/karga`, i.e. `~/.lo
 | `uninstall <release>` | Remove workloads and networks. `--delete-volumes`, `--keep-history` |
 | `history`, `list`, `status <release>` | Revisions, releases, and desired vs actual state |
 | `get values\|manifest <release>` | Stored values (`--all` merges defaults) or rendered resources |
+| `gateway status` | Listeners, routes and upstreams of the host gateway (Linux) |
+| `state backup <file>` | Consistent copy of the state database, safe while karga runs |
 
 Mutating commands take `--dry-run`, `--timeout` (default `5m`), `--history-max` (default 10
 revisions kept) and `--force`. Values come from the package defaults, then each `-f/--values` file in
@@ -161,8 +163,10 @@ Before any change karga pulls every image it needs, so a bad tag fails without t
 
 ### Traffic through karga's Envoys (Linux)
 
-On Linux with a local Docker daemon, karga runs two kinds of Envoy (`envoyproxy/envoy:distroless-v1.36-latest`,
-about 150MB, one worker thread, about 15MB RAM each; `KARGA_PROXY_IMAGE` overrides the image):
+On Linux with a local Docker daemon, karga runs two kinds of Envoy (Envoy 1.36.13 distroless, pinned by
+digest, about 150MB, one worker thread, about 15MB RAM each). Envoy updates ship with karga releases;
+a new image recreates the gateway and the release proxies on the next apply, a short interruption.
+`KARGA_PROXY_IMAGE` overrides the image.
 
 - **Gateway** (`karga-gateway`, one per host, host network): holds every tcp `hostPort` and every
   HTTP `route` of every release. Workloads publish nothing else than a loopback upstream port
@@ -186,6 +190,12 @@ A replace switches both: no request is lost, from the host or from other workloa
   host namespace) and `no-new-privileges`. It is a single point for host traffic; it restarts
   automatically.
 - Local users can reach the loopback upstream ports directly, bypassing the gateway.
+- A connection open during a replace stays on the old container until it closes or `drainTimeout`
+  passes. Configuration is validated before it is written; if Envoy still rejects it (for example a
+  port it cannot bind), the error shows Envoy's reason.
+- After a reboot or Docker restart the gateway, proxies and workloads come back on their own. If
+  another process took a workload's loopback upstream port meanwhile, that workload does not start
+  until the next upgrade.
 
 Elsewhere (macOS, a remote Docker host) ports are published by Docker, `routes` are refused, a
 workload with a `hostPort` falls back to recreate, and replace switches network clients by DNS: there
@@ -196,6 +206,14 @@ If a recreate fails, the failed container is stopped (but kept for `docker logs`
 marked failed and the previous revision stays current. Run `karga rollback <release>` to go back.
 Rollback re-applies the stored desired state; it cannot undo data changes such as database
 migrations. Changing a Network or Volume spec in an upgrade is refused.
+
+## State
+
+Everything karga knows is in `$KARGA_HOME/karga.db` (SQLite, `0600`); proxy and gateway
+configuration are rebuilt from it and from Docker. `karga state backup <file>` writes a consistent
+copy at any time. To restore, stop using karga and copy the file over `karga.db`. Before upgrading
+the database schema karga keeps a copy as `karga.db.bak-v<schema>`, and it refuses a database written
+by a newer karga.
 
 ## Security notes
 
@@ -221,5 +239,9 @@ make lint               # golangci-lint
 make test-integration   # needs Docker: adapter contract and deployments
 make test-e2e           # needs Docker: builds the binary and runs the lifecycle end to end
 ```
+
+On Linux the integration tests also cover the gateway and release proxy.
+`KARGA_TEST_DAEMON_RESTART=1 make test-integration` additionally restarts the Docker daemon (needs
+passwordless sudo).
 
 The design is in `docs/` (tech design and execution plan, kept outside version control).
