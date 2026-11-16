@@ -21,6 +21,8 @@ linters:
               desc: domain must not depend on cli
             - pkg: github.com/docker
               desc: domain must not depend on Docker
+            - pkg: github.com/moby
+              desc: domain must not depend on Docker
             - pkg: modernc.org/sqlite
               desc: domain must not depend on SQLite
 
