@@ -4,11 +4,13 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 
 	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
+	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
 	"github.com/hasankaradmir/karga/internal/ports"
 	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )
@@ -149,5 +151,25 @@ func TestStrategyFlag(t *testing.T) {
 	}
 	if _, err := e.run("upgrade", "w", web, "--strategy", "rolling"); err == nil || !strings.Contains(err.Error(), "invalid --strategy") {
 		t.Fatalf("invalid strategy: %v", err)
+	}
+}
+
+func TestStateBackup(t *testing.T) {
+	e := newCLIEnv(t)
+	e.mustRun("install", "w", "../../tests/integration/testdata/web")
+	dest := filepath.Join(t.TempDir(), "state.db")
+	if out := e.mustRun("state", "backup", dest); !strings.Contains(out, "state written to") {
+		t.Fatalf("backup: %s", out)
+	}
+	if _, err := e.run("state", "backup", dest); err == nil {
+		t.Fatal("backup over an existing file must fail")
+	}
+	store, err := sqlite.Open(context.Background(), dest)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = store.Close() }()
+	if _, err := store.GetRelease(context.Background(), "w"); err != nil {
+		t.Fatalf("backup misses release w: %v", err)
 	}
 }

@@ -4,10 +4,13 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"reflect"
+	"strings"
 	"testing"
+	"testing/fstest"
 	"time"
 
 	"github.com/hasankaradmir/karga/internal/domain/release"
@@ -135,5 +138,80 @@ func must(t *testing.T, err error) {
 	t.Helper()
 	if err != nil {
 		t.Fatal(err)
+	}
+}
+
+func TestBackupAndSchemaGuards(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	path := filepath.Join(dir, "karga.db")
+	s, err := Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now().UTC()
+	if err := s.SaveRelease(ctx, release.Release{Name: "web", PackageName: "p", PackageVersion: "1", Status: release.StatusDeployed, CreatedAt: now, UpdatedAt: now}); err != nil {
+		t.Fatal(err)
+	}
+	bak := filepath.Join(dir, "copy.db")
+	if err := s.Backup(ctx, bak); err != nil {
+		t.Fatal(err)
+	}
+	if err := s.Backup(ctx, bak); err == nil {
+		t.Fatal("backup over an existing file must fail")
+	}
+	if info, err := os.Stat(bak); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("backup mode: %v %v", info, err)
+	}
+	c, err := Open(ctx, bak)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := c.GetRelease(ctx, "web"); err != nil {
+		t.Fatalf("backup misses the release: %v", err)
+	}
+	_ = c.Close()
+
+	// A database of a newer karga is refused.
+	if _, err := s.db.ExecContext(ctx, "PRAGMA user_version = 99"); err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	if _, err := Open(ctx, path); err == nil || !strings.Contains(err.Error(), "newer karga") {
+		t.Fatalf("want newer-schema error, got %v", err)
+	}
+
+	// An older schema is copied before migrating.
+	if err := os.Remove(path); err != nil {
+		t.Fatal(err)
+	}
+	_ = os.Remove(path + "-wal")
+	_ = os.Remove(path + "-shm")
+	s, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = s.Close()
+	first, err := fs.ReadFile(embedded, "migrations/001_init.sql")
+	if err != nil {
+		t.Fatal(err)
+	}
+	old := migrations
+	migrations = fstest.MapFS{
+		"migrations/001_init.sql":  {Data: first},
+		"migrations/002_extra.sql": {Data: []byte("CREATE TABLE extra (x TEXT);")},
+	}
+	t.Cleanup(func() { migrations = old })
+	s, err = Open(ctx, path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = s.Close() }()
+	var v int
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil || v != 2 {
+		t.Fatalf("schema after migrate: %d %v", v, err)
+	}
+	if info, err := os.Stat(path + ".bak-v1"); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("no backup before migrating: %v %v", info, err)
 	}
 }

@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"sort"
 	"strings"
@@ -22,7 +23,10 @@ import (
 )
 
 //go:embed migrations/*.sql
-var migrations embed.FS
+var embedded embed.FS
+
+// migrations holds migrations/NNN_*.sql, applied in name order (tests substitute it).
+var migrations fs.FS = embedded
 
 // Store is a SQLite-backed ports.StateStore.
 type Store struct {
@@ -45,18 +49,37 @@ func Open(ctx context.Context, path string) (*Store, error) {
 		return nil, err
 	}
 	s := &Store{db: db}
-	if err := s.migrate(ctx); err != nil {
+	if err := s.migrate(ctx, path); err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("migrate %s: %w", path, err)
 	}
 	return s, nil
 }
 
+// Backup writes a consistent copy of the database to dest (0600), which must not exist. It is safe
+// while karga runs.
+func (s *Store) Backup(ctx context.Context, dest string) error {
+	// VACUUM INTO needs the target empty or absent; creating it first sets its mode.
+	f, err := os.OpenFile(dest, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return fmt.Errorf("backup: %w", err)
+	}
+	_ = f.Close()
+	if _, err := s.db.ExecContext(ctx, "VACUUM INTO ?", dest); err != nil {
+		_ = os.Remove(dest)
+		return fmt.Errorf("backup to %s: %w", dest, err)
+	}
+	return nil
+}
+
 // Close closes the database.
 func (s *Store) Close() error { return s.db.Close() }
 
-func (s *Store) migrate(ctx context.Context) error {
-	entries, err := migrations.ReadDir("migrations")
+// migrate applies pending migrations. A database of a newer karga is refused rather than used with
+// a schema this binary does not know; before migrating an existing database a copy of it is kept
+// as <path>.bak-v<schema>.
+func (s *Store) migrate(ctx context.Context, path string) error {
+	entries, err := fs.ReadDir(migrations, "migrations")
 	if err != nil {
 		return err
 	}
@@ -70,8 +93,19 @@ func (s *Store) migrate(ctx context.Context) error {
 	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&version); err != nil {
 		return err
 	}
+	if version > len(names) {
+		return fmt.Errorf("database written by a newer karga (schema %d, this karga knows %d); upgrade karga", version, len(names))
+	}
+	if version > 0 && version < len(names) {
+		bak := fmt.Sprintf("%s.bak-v%d", path, version)
+		if _, err := os.Stat(bak); errors.Is(err, os.ErrNotExist) {
+			if err := s.Backup(ctx, bak); err != nil {
+				return fmt.Errorf("back up before migrating: %w", err)
+			}
+		}
+	}
 	for i := version; i < len(names); i++ {
-		body, err := migrations.ReadFile("migrations/" + names[i])
+		body, err := fs.ReadFile(migrations, "migrations/"+names[i])
 		if err != nil {
 			return err
 		}

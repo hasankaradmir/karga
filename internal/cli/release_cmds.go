@@ -419,3 +419,34 @@ func newGatewayCmd(a *app) *cobra.Command {
 	})
 	return cmd
 }
+
+func newStateCmd(a *app) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "state",
+		Short: "Manage karga's state database",
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "backup <file>",
+		Short: "Write a consistent copy of the state database (safe while karga runs)",
+		Long: "Write a consistent copy of the state database to <file> (mode 0600, must not exist).\n" +
+			"To restore, stop using karga and copy the file over $KARGA_HOME/karga.db; proxy and gateway\n" +
+			"configuration is rebuilt from the state on the next upgrade.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := config.EnsureHome(a.cfg); err != nil {
+				return err
+			}
+			store, err := sqlite.Open(cmd.Context(), filepath.Join(a.cfg.Home, "karga.db"))
+			if err != nil {
+				return err
+			}
+			defer func() { _ = store.Close() }()
+			if err := store.Backup(cmd.Context(), args[0]); err != nil {
+				return err
+			}
+			_, err = fmt.Fprintf(a.stdout, "state written to %s\n", args[0])
+			return err
+		},
+	})
+	return cmd
+}
