@@ -5,9 +5,9 @@ import (
 	"fmt"
 
 	"github.com/spf13/cobra"
-	"go.yaml.in/yaml/v3"
 
 	"github.com/hasankaradmir/karga/internal/application/packages"
+	"github.com/hasankaradmir/karga/internal/infrastructure/renderer"
 )
 
 // valueOpts holds the value override flags shared by template, lint, install and upgrade.
@@ -122,7 +122,7 @@ func newShowCmd(a *app) *cobra.Command {
 				if a.output == outputJSON {
 					return writeJSON(a.stdout, p.Metadata)
 				}
-				out, err := yaml.Marshal(p.Metadata)
+				out, err := renderer.ToYAML(p.Metadata)
 				if err != nil {
 					return err
 				}
