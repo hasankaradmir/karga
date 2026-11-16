@@ -17,20 +17,20 @@ metadata:
   name: web
 spec:
   image: busybox:1.37
-  command: [sh, -c, "sleep {{ .Values.startDelay }}; exec httpd -f -p 8080 -h /www"]
+  command: [sh, -c, "sleep {{ .Values.startDelay }}; exec httpd -f -p {{ .Values.listenPort }} -h /www"]
   networks: [web-net]
   mounts:
     - config: site
       mountPath: /www
   {{- if .Values.publish }}
   ports:
-    - containerPort: 8080
+    - containerPort: {{ .Values.listenPort }}
       hostPort: {{ .Values.port }}
   {{- end }}
   healthCheck:
     type: exec
     {{- if .Values.healthy }}
-    command: [wget, -q, -O, /dev/null, "http://127.0.0.1:8080/"]
+    command: [wget, -q, -O, /dev/null, "http://127.0.0.1:{{ .Values.listenPort }}/"]
     {{- else }}
     command: ["false"]
     {{- end }}
@@ -41,3 +41,4 @@ spec:
   updateStrategy:
     type: replace
     drainTimeout: 2s
+    proxy: {{ .Values.proxy }}

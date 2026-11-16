@@ -135,7 +135,7 @@ spec:
     - {secret: creds, mountPath: /run/secrets/creds}    # always read-only
   healthCheck: {type: exec, command: [curl, -f, http://127.0.0.1/], interval: 10s, timeout: 3s, retries: 3, startPeriod: 30s}
   resources: {memory: 512Mi, cpu: 1}
-  updateStrategy: {type: recreate, drainTimeout: 10s}   # recreate | replace
+  updateStrategy: {type: recreate, drainTimeout: 10s, proxy: false}   # recreate | replace; proxy: Linux only
 ```
 
 **Volume**: `driver` (default `local`) and `retention: retain | delete` (default `retain`). A retained
@@ -158,6 +158,19 @@ Before any change karga pulls every image it needs, so a bad tag fails without t
   workload publishes no `hostPort`, mounts volumes read-only and has a healthcheck. Otherwise the plan
   falls back to recreate and says why.
 
+- **replace with `proxy: true`** (Linux only): karga runs an Envoy container in front of the workload,
+  named `<release>-karga-proxy-<name>`. The proxy holds the host ports and the workload's network
+  name, and the workload itself publishes nothing. A replace starts the new container. When it is
+  healthy the proxy routes new connections to it, and connections still open on the old container
+  can finish for up to `drainTimeout` before it is removed. No request is lost, from the host or from
+  other workloads.
+  - The proxy is TCP only and the backend does not see the client's IP address.
+  - Changing the ports, the networks or the proxy image recreates the proxy, which is a short outage.
+    The plan says so.
+  - Turning the proxy on or off recreates the workload once.
+  - The image is `envoyproxy/envoy:v1.36-latest` (about 240MB); `KARGA_PROXY_IMAGE` overrides it.
+  - Off Linux, or without a network, or with UDP ports, the plan falls back to recreate and says why.
+
 If a recreate fails, the failed container is stopped (but kept for `docker logs`), the revision is
 marked failed and the previous revision stays current. Run `karga rollback <release>` to go back.
 Rollback re-applies the stored desired state; it cannot undo data changes such as database
@@ -167,7 +180,9 @@ migrations. Changing a Network or Volume spec in an upgrade is refused.
 
 - Access to the Docker socket is root-equivalent on the host. Run karga as a user you trust with it.
 - Ports are published on `127.0.0.1` unless `hostIP` says otherwise.
-- Containers are never privileged and never join the host PID, network or IPC namespaces.
+- Containers are never privileged and never join the host PID, network or IPC namespaces. The proxy
+  runs as the karga user; its configuration and admin socket are in a `0700` directory under
+  `$KARGA_HOME/proxies/`.
 - Config and Secret files live under `$KARGA_HOME/releases/<release>/<revision>/`. That directory is
   `0700`; the files inside are `0644` so any user in the container can read them. The state database
   is `0600`.
