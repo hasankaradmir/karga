@@ -325,7 +325,8 @@ func (s *Service) run(ctx context.Context, rt ports.Runtime, op *release.Operati
 func titled(t string) string { return strings.ToUpper(t[:1]) + t[1:] }
 
 // record persists one executor step: progress on the operation and the applied state of the resource.
-// A failed workload is stored with an empty digest so the next plan recreates it.
+// A failed workload is stored with an empty digest so the next plan recreates it; a kept-previous
+// step (failed replace) leaves the applied state alone.
 func (s *Service) record(ctx context.Context, op *release.Operation, in deployInput, c deployment.Change, st release.Step) error {
 	ctx = context.WithoutCancel(ctx)
 	op.Steps = append(op.Steps, st)
@@ -336,6 +337,8 @@ func (s *Service) record(ctx context.Context, op *release.Operation, in deployIn
 	applied := release.AppliedResource{Kind: c.Kind, Name: c.Name, Revision: in.Revision,
 		RuntimeName: deployment.RuntimeName(in.Name, c.Name), Spec: c.Spec, Digest: c.Digest}
 	switch {
+	case st.Status == deployment.StepKept:
+		// The change failed before touching anything; the previous state is still what runs.
 	case st.Status == deployment.StepDone && c.Action == deployment.ActionDelete:
 		return s.Store.DeleteResource(ctx, in.Name, c.Kind, c.Name)
 	case st.Status == deployment.StepDone:

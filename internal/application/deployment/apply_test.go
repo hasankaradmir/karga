@@ -56,6 +56,7 @@ func (tr *tracker) onStep(rev int) func(Change, release.Step) error {
 		tr.steps = append(tr.steps, st)
 		k := Key{c.Kind, c.Name}
 		switch {
+		case st.Status == StepKept:
 		case c.Action == ActionDelete && st.Status == StepDone:
 			delete(tr.applied, k)
 		case st.Status == StepDone:
@@ -295,5 +296,143 @@ func TestDelete(t *testing.T) {
 		if !slices.Contains(rt.Calls, "StopWorkload:cache-redis") {
 			t.Fatal("workload not stopped gracefully before delete")
 		}
+	}
+}
+
+// replaceable makes the test manifest's workload eligible for replace.
+func replaceable(rs []resource.Resource) []resource.Resource {
+	w := rs[0].Spec.(*resource.WorkloadSpec)
+	w.UpdateStrategy = &resource.UpdateStrategy{Type: resource.StrategyReplace, DrainTimeout: "3s"}
+	w.Ports = []resource.Port{{ContainerPort: 6379, Protocol: "tcp"}}
+	w.Mounts[0].ReadOnly = true
+	return rs
+}
+
+func callIndex(calls []string, prefix string) int {
+	return slices.IndexFunc(calls, func(c string) bool { return strings.HasPrefix(c, prefix) })
+}
+
+func TestExecuteReplace(t *testing.T) {
+	r := newRequest(t, 0)
+	r.req.Resources = replaceable(manifest(0))
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	r.rt.Calls = nil
+	r.req.Revision = 2
+	r.req.Resources = replaceable(manifest(0))
+	r.req.Resources[0].Spec.(*resource.WorkloadSpec).Image = "redis:7.2"
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	calls := r.rt.Calls
+	order := []string{
+		"CreateWorkload:cache-redis-next", "StartWorkload:cache-redis-next",
+		"DisconnectNetwork:cache-redis-next@cache-net", "ConnectNetwork:cache-redis-next@cache-net=redis",
+		"StopWorkload:cache-redis", "DeleteWorkload:cache-redis", "RenameWorkload:cache-redis-next->cache-redis",
+	}
+	for i := 1; i < len(order); i++ {
+		if a, b := callIndex(calls, order[i-1]), callIndex(calls, order[i]); a < 0 || b < 0 || a > b {
+			t.Fatalf("%s must come before %s: %v", order[i-1], order[i], calls)
+		}
+	}
+	w, ok := r.rt.Workloads["cache-redis"]
+	if !ok || w.Request.Image != "redis:7.2" || w.State != ports.StateRunning || !slices.Equal(w.Aliases["cache-net"], []string{"redis"}) {
+		t.Fatalf("after replace: %+v", w)
+	}
+	if _, left := r.rt.Workloads["cache-redis-next"]; left {
+		t.Fatal("-next container left behind")
+	}
+	if r.tr.applied[Key{resource.KindWorkload, "redis"}].Revision != 2 {
+		t.Fatalf("applied state not updated: %+v", r.tr.applied)
+	}
+}
+
+func TestExecuteReplaceFailureKeepsOldRunning(t *testing.T) {
+	r := newRequest(t, 0)
+	r.req.Resources = replaceable(manifest(0))
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	before := r.tr.applied[Key{resource.KindWorkload, "redis"}]
+	r.rt.Calls = nil
+	r.rt.Health = ports.HealthUnhealthy
+	r.req.Revision, r.req.Timeout = 2, 50*time.Millisecond
+	r.req.Resources = replaceable(manifest(0))
+	r.req.Resources[0].Spec.(*resource.WorkloadSpec).Image = "redis:7.2"
+
+	err := r.run()
+	var execErr *ExecError
+	if !errors.As(err, &execErr) || execErr.Disrupted || !strings.Contains(err.Error(), "still running") {
+		t.Fatalf("want non-disruptive ExecError, got %v", err)
+	}
+	if slices.Contains(r.rt.Calls, "StopWorkload:cache-redis") || slices.ContainsFunc(r.rt.Calls, func(c string) bool { return strings.HasPrefix(c, "ConnectNetwork") }) {
+		t.Fatalf("old container was touched: %v", r.rt.Calls)
+	}
+	if old := r.rt.Workloads["cache-redis"]; old.State != ports.StateRunning || old.Request.Image != "redis:7.4" {
+		t.Fatalf("old container: %+v", old)
+	}
+	if next := r.rt.Workloads["cache-redis-next"]; next == nil || next.State != ports.StateExited {
+		t.Fatalf("failed -next should be stopped and kept: %+v", next)
+	}
+	if got := r.tr.applied[Key{resource.KindWorkload, "redis"}]; got.Digest != before.Digest {
+		t.Fatal("applied state must keep the previous workload")
+	}
+	if last := r.tr.steps[len(r.tr.steps)-1]; last.Status != StepKept {
+		t.Fatalf("last step: %+v", last)
+	}
+
+	// The next attempt cleans up the leftover -next and succeeds.
+	r.rt.Health = ""
+	r.req.Revision, r.req.Timeout = 3, time.Second
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	if r.rt.Workloads["cache-redis"].Request.Image != "redis:7.2" {
+		t.Fatalf("retry: %+v", r.rt.Workloads["cache-redis"])
+	}
+}
+
+func TestExecuteRecreateFailureIsDisruptive(t *testing.T) {
+	r := newRequest(t, freePort(t))
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	r.rt.Health = ports.HealthUnhealthy
+	r.req.Revision, r.req.Timeout = 2, 50*time.Millisecond
+	r.req.Resources[0].Spec.(*resource.WorkloadSpec).Image = "redis:7.2"
+	var execErr *ExecError
+	if err := r.run(); !errors.As(err, &execErr) || !execErr.Disrupted {
+		t.Fatalf("want disruptive ExecError, got %v", err)
+	}
+}
+
+func TestReconcile(t *testing.T) {
+	ctx := context.Background()
+	rt := fakeruntime.New("img")
+	lbl := map[string]string{ports.LabelManaged: "true", ports.LabelRelease: "web"}
+	create := func(name string) {
+		if err := rt.CreateWorkload(ctx, ports.WorkloadRequest{Name: name, Image: "img", Labels: lbl}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	applied := []release.AppliedResource{{Kind: resource.KindWorkload, Name: "app", RuntimeName: "web-app", Digest: "sha256:x"}}
+
+	// Both present: the unfinished new container is removed.
+	create("web-app")
+	create("web-app-next")
+	repaired, err := Reconcile(ctx, rt, "web", applied)
+	if err != nil || len(repaired) != 0 || rt.Workloads["web-app-next"] != nil || rt.Workloads["web-app"] == nil {
+		t.Fatalf("both present: %v %v %v", repaired, err, rt.Workloads)
+	}
+
+	// Old already removed: -next takes the canonical name and is marked for re-apply.
+	if err := rt.DeleteWorkload(ctx, "web-app"); err != nil {
+		t.Fatal(err)
+	}
+	create("web-app-next")
+	repaired, err = Reconcile(ctx, rt, "web", applied)
+	if err != nil || len(repaired) != 1 || repaired[0].Digest != "" || rt.Workloads["web-app"] == nil {
+		t.Fatalf("only -next: %v %v %v", repaired, err, rt.Workloads)
 	}
 }
