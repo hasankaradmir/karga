@@ -1,0 +1,54 @@
+{
+  "resources": [
+    {
+      "@type": "type.googleapis.com/envoy.config.listener.v3.Listener",
+      "address": {
+        "socket_address": {
+          "address": "0.0.0.0",
+          "port_value": 8080
+        }
+      },
+      "filter_chains": [
+        {
+          "filters": [
+            {
+              "name": "envoy.filters.network.tcp_proxy",
+              "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+                "cluster": "p8080",
+                "max_connect_attempts": 3,
+                "stat_prefix": "p8080"
+              }
+            }
+          ]
+        }
+      ],
+      "name": "p8080"
+    },
+    {
+      "@type": "type.googleapis.com/envoy.config.listener.v3.Listener",
+      "address": {
+        "socket_address": {
+          "address": "0.0.0.0",
+          "port_value": 9000
+        }
+      },
+      "filter_chains": [
+        {
+          "filters": [
+            {
+              "name": "envoy.filters.network.tcp_proxy",
+              "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.filters.network.tcp_proxy.v3.TcpProxy",
+                "cluster": "p9000",
+                "max_connect_attempts": 3,
+                "stat_prefix": "p9000"
+              }
+            }
+          ]
+        }
+      ],
+      "name": "p9000"
+    }
+  ]
+}
