@@ -129,3 +129,25 @@ func TestReleaseCLIErrors(t *testing.T) {
 		t.Fatalf("failed upgrade hint: %v", err)
 	}
 }
+
+func TestStrategyFlag(t *testing.T) {
+	e := newCLIEnv(t)
+	web := "../../tests/integration/testdata/web"
+	e.mustRun("install", "w", web)
+	out := e.mustRun("upgrade", "w", web, "--set", "content=v2", "--dry-run")
+	if !strings.Contains(out, "WORKLOAD web (replace)") {
+		t.Fatalf("dry run:\n%s", out)
+	}
+	if out := e.mustRun("upgrade", "w", web, "--set", "content=v2", "--dry-run", "--strategy", "recreate"); !strings.Contains(out, "WORKLOAD web (recreate)") {
+		t.Fatalf("override:\n%s", out)
+	}
+	if out := e.mustRun("upgrade", "w", web, "--set", "content=v2", "--set", "publish=true", "--dry-run"); !strings.Contains(out, "(recreate: publishes hostPort 18080)") {
+		t.Fatalf("fallback:\n%s", out)
+	}
+	if out := e.mustRun("upgrade", "w", web, "--set", "content=v2"); !strings.Contains(out, "update workload web (replace)") {
+		t.Fatalf("upgrade:\n%s", out)
+	}
+	if _, err := e.run("upgrade", "w", web, "--strategy", "rolling"); err == nil || !strings.Contains(err.Error(), "invalid --strategy") {
+		t.Fatalf("invalid strategy: %v", err)
+	}
+}

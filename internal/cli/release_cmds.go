@@ -14,6 +14,7 @@ import (
 	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
 	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/application/releases"
+	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/infrastructure/config"
 	"github.com/hasankaradmir/karga/internal/infrastructure/renderer"
 	"github.com/hasankaradmir/karga/internal/ports"
@@ -84,9 +85,14 @@ func (a *app) printResult(verb string, res *releases.Result) error {
 	}
 	var changed []string
 	for _, c := range res.Plan.Changes {
-		if c.Action != deployment.ActionUnchanged {
-			changed = append(changed, fmt.Sprintf("  %s %s %s", c.Action, strings.ToLower(c.Kind), c.Name))
+		if c.Action == deployment.ActionUnchanged {
+			continue
 		}
+		line := fmt.Sprintf("  %s %s %s", c.Action, strings.ToLower(c.Kind), c.Name)
+		if c.Strategy != "" {
+			line += " (" + c.Label() + ")"
+		}
+		changed = append(changed, line)
 	}
 	_, err := fmt.Fprintf(a.stdout, "Release %q %s (revision %d).\n%s\n", res.Release, verb, res.Revision, strings.Join(changed, "\n"))
 	return err
@@ -116,19 +122,34 @@ func newInstallCmd(a *app) *cobra.Command {
 	return cmd
 }
 
+func addStrategyFlag(cmd *cobra.Command, strategy *string) {
+	cmd.Flags().StringVar(strategy, "strategy", "", "override every workload's updateStrategy: recreate|replace")
+}
+
+func validStrategy(s string) error {
+	if s != "" && s != resource.StrategyRecreate && s != resource.StrategyReplace {
+		return fmt.Errorf("invalid --strategy %q: must be recreate or replace", s)
+	}
+	return nil
+}
+
 func newUpgradeCmd(a *app) *cobra.Command {
 	var vals valueOpts
 	var common commonFlags
 	var reuse, install bool
+	var strategy string
 	cmd := &cobra.Command{
 		Use:   "upgrade <release> <package>",
 		Short: "Upgrade a release to a new package version or new values",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validStrategy(strategy); err != nil {
+				return err
+			}
 			return a.withService(cmd.Context(), func(s *releases.Service) error {
 				res, err := s.Upgrade(cmd.Context(), releases.UpgradeRequest{
 					CommonOptions: common.options(), Name: args[0], Package: args[1], Values: vals.options(args[0]),
-					ReuseValues: reuse, Install: install,
+					ReuseValues: reuse, Install: install, Strategy: strategy,
 				})
 				if err != nil {
 					return err
@@ -141,16 +162,21 @@ func newUpgradeCmd(a *app) *cobra.Command {
 	addCommonFlags(cmd, &common, true)
 	cmd.Flags().BoolVar(&reuse, "reuse-values", false, "start from the current revision's values")
 	cmd.Flags().BoolVarP(&install, "install", "i", false, "install the release if it does not exist")
+	addStrategyFlag(cmd, &strategy)
 	return cmd
 }
 
 func newRollbackCmd(a *app) *cobra.Command {
 	var common commonFlags
+	var strategy string
 	cmd := &cobra.Command{
 		Use:   "rollback <release> [revision]",
 		Short: "Re-apply an earlier revision as a new revision",
 		Args:  cobra.RangeArgs(1, 2),
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := validStrategy(strategy); err != nil {
+				return err
+			}
 			rev := 0
 			if len(args) == 2 {
 				n, err := strconv.Atoi(args[1])
@@ -160,7 +186,7 @@ func newRollbackCmd(a *app) *cobra.Command {
 				rev = n
 			}
 			return a.withService(cmd.Context(), func(s *releases.Service) error {
-				res, err := s.Rollback(cmd.Context(), releases.RollbackRequest{CommonOptions: common.options(), Name: args[0], Revision: rev})
+				res, err := s.Rollback(cmd.Context(), releases.RollbackRequest{CommonOptions: common.options(), Name: args[0], Revision: rev, Strategy: strategy})
 				if err != nil {
 					return err
 				}
@@ -169,6 +195,7 @@ func newRollbackCmd(a *app) *cobra.Command {
 		},
 	}
 	addCommonFlags(cmd, &common, true)
+	addStrategyFlag(cmd, &strategy)
 	return cmd
 }
 
