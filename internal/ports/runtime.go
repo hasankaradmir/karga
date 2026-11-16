@@ -4,6 +4,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"slices"
 	"time"
 )
 
@@ -29,6 +30,16 @@ func CapNetworkDriver(d string) string { return "network.driver/" + d }
 
 // CapVolumeDriver returns the capability string for a volume driver.
 func CapVolumeDriver(d string) string { return "volume.driver/" + d }
+
+// Labels karga puts on every runtime object. ListManaged selects on LabelManaged and LabelRelease.
+const (
+	LabelManaged   = "io.karga.managed"
+	LabelRelease   = "io.karga.release"
+	LabelKind      = "io.karga.kind"
+	LabelName      = "io.karga.name"
+	LabelRevision  = "io.karga.revision"
+	LabelRetention = "io.karga.retention"
+)
 
 // Kinds returned by ListManaged.
 const (
@@ -71,14 +82,7 @@ type RuntimeInfo struct {
 }
 
 // Has reports whether the runtime has capability c.
-func (i RuntimeInfo) Has(c string) bool {
-	for _, x := range i.Capabilities {
-		if x == c {
-			return true
-		}
-	}
-	return false
-}
+func (i RuntimeInfo) Has(c string) bool { return slices.Contains(i.Capabilities, c) }
 
 // NetworkRequest creates a network.
 type NetworkRequest struct {
