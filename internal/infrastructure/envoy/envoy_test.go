@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -157,5 +158,16 @@ func TestAdmin(t *testing.T) {
 	total = "5"
 	if drained, _ := a.WaitDrained(ctx, []string{"p8080"}, 300*time.Millisecond); drained {
 		t.Fatal("should not be drained")
+	}
+}
+
+func TestDefaultImagePinned(t *testing.T) {
+	t.Setenv("KARGA_PROXY_IMAGE", "")
+	if !strings.Contains(Image(), "@sha256:") {
+		t.Fatalf("default image is not pinned by digest: %s", Image())
+	}
+	t.Setenv("KARGA_PROXY_IMAGE", "envoy:test")
+	if Image() != "envoy:test" {
+		t.Fatalf("override ignored: %s", Image())
 	}
 }

@@ -24,9 +24,10 @@ import (
 // MountPath is where the proxy directory is mounted inside the Envoy container.
 const MountPath = "/etc/karga-proxy"
 
-// DefaultImage is the Envoy image validated in the spikes (1.36, distroless: 149MB instead of 241MB).
-// KARGA_PROXY_IMAGE overrides it.
-const DefaultImage = "envoyproxy/envoy:distroless-v1.36-latest"
+// DefaultImage is the Envoy image validated in the spikes (1.36.13, distroless: 149MB instead of
+// 241MB), pinned by digest so every host runs the same bits. Envoy updates ship with karga
+// releases; KARGA_PROXY_IMAGE overrides it.
+const DefaultImage = "envoyproxy/envoy:distroless-v1.36.13@sha256:bf82460da76ebdbcec9671ea3d4751d442edcc0632488e9087a1df9dfe0c324e"
 
 // Image returns the proxy image to use.
 func Image() string {
