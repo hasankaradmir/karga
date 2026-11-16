@@ -133,7 +133,7 @@ spec:
     - {volume: data, mountPath: /data, readOnly: false}
     - {config: site, mountPath: /etc/nginx/conf.d}      # always read-only
     - {secret: creds, mountPath: /run/secrets/creds}    # always read-only
-  healthCheck: {type: exec, command: [curl, -f, http://127.0.0.1/], interval: 10s, timeout: 3s, retries: 3}
+  healthCheck: {type: exec, command: [curl, -f, http://127.0.0.1/], interval: 10s, timeout: 3s, retries: 3, startPeriod: 30s}
   resources: {memory: 512Mi, cpu: 1}
   updateStrategy: {type: recreate, drainTimeout: 10s}   # recreate | replace
 ```
@@ -152,9 +152,11 @@ Before any change karga pulls every image it needs, so a bad tag fails without t
 - **recreate** (default): stop the old container, then start the new one. There is a short outage.
 - **replace**: start the new container next to the old one without its network alias. Once it is
   healthy it joins the networks under the alias. The old container then gets `drainTimeout` to stop
-  and is removed. If the new container never becomes healthy, the old one keeps running and the
-  release stays deployed. Replace only applies when the workload publishes no `hostPort`, mounts
-  volumes read-only and has a healthcheck. Otherwise the plan falls back to recreate and says why.
+  and is removed. There is no outage window, but a request that resolved the old container's address
+  just before it stopped can still fail, so clients should retry. If the new container never becomes
+  healthy, the old one keeps running and the release stays deployed. Replace only applies when the
+  workload publishes no `hostPort`, mounts volumes read-only and has a healthcheck. Otherwise the plan
+  falls back to recreate and says why.
 
 If a recreate fails, the failed container is stopped (but kept for `docker logs`), the revision is
 marked failed and the previous revision stays current. Run `karga rollback <release>` to go back.

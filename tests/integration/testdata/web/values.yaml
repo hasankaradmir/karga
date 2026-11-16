@@ -5,3 +5,5 @@ healthy: true
 # publish=true adds a hostPort, which makes replace fall back to recreate.
 publish: false
 port: 18080
+# startDelay seconds before the server listens, like a real application starting up.
+startDelay: 0
