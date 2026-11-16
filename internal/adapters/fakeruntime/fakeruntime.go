@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"maps"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -30,10 +31,11 @@ type Runtime struct {
 	Capabilities []string
 }
 
-// Workload is a fake container.
+// Workload is a fake container. Aliases maps each attached network to the workload's DNS aliases.
 type Workload struct {
 	Request ports.WorkloadRequest
 	State   string
+	Aliases map[string][]string
 }
 
 // New returns an empty runtime. Images listed in pulled are present locally.
@@ -166,7 +168,11 @@ func (r *Runtime) CreateWorkload(_ context.Context, req ports.WorkloadRequest) e
 			return fmt.Errorf("network %s: %w", n, ports.ErrNotFound)
 		}
 	}
-	r.Workloads[req.Name] = &Workload{Request: req, State: ports.StateCreated}
+	w := &Workload{Request: req, State: ports.StateCreated, Aliases: map[string][]string{}}
+	for _, n := range req.Networks {
+		w.Aliases[n] = slices.Clone(req.Aliases)
+	}
+	r.Workloads[req.Name] = w
 	return nil
 }
 
@@ -289,4 +295,60 @@ func (r *Runtime) PublishedPorts(context.Context) ([]ports.PublishedPort, error)
 		}
 	}
 	return out, nil
+}
+
+// RenameWorkload implements ports.Runtime.
+func (r *Runtime) RenameWorkload(_ context.Context, from, to string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.call("RenameWorkload", from+"->"+to); err != nil {
+		return err
+	}
+	w, ok := r.Workloads[from]
+	if !ok {
+		return fmt.Errorf("workload %s: %w", from, ports.ErrNotFound)
+	}
+	if _, taken := r.Workloads[to]; taken {
+		return fmt.Errorf("workload %s: %w", to, ports.ErrConflict)
+	}
+	delete(r.Workloads, from)
+	w.Request.Name = to
+	r.Workloads[to] = w
+	return nil
+}
+
+// ConnectNetwork implements ports.Runtime.
+func (r *Runtime) ConnectNetwork(_ context.Context, workload, network string, aliases []string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.call("ConnectNetwork", workload+"@"+network+"="+strings.Join(aliases, ",")); err != nil {
+		return err
+	}
+	w, ok := r.Workloads[workload]
+	if !ok {
+		return fmt.Errorf("workload %s: %w", workload, ports.ErrNotFound)
+	}
+	if _, ok := r.Networks[network]; !ok {
+		return fmt.Errorf("network %s: %w", network, ports.ErrNotFound)
+	}
+	if _, attached := w.Aliases[network]; attached {
+		return fmt.Errorf("workload %s already on network %s: %w", workload, network, ports.ErrConflict)
+	}
+	w.Aliases[network] = slices.Clone(aliases)
+	return nil
+}
+
+// DisconnectNetwork implements ports.Runtime.
+func (r *Runtime) DisconnectNetwork(_ context.Context, workload, network string) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.call("DisconnectNetwork", workload+"@"+network); err != nil {
+		return err
+	}
+	w, ok := r.Workloads[workload]
+	if !ok {
+		return fmt.Errorf("workload %s: %w", workload, ports.ErrNotFound)
+	}
+	delete(w.Aliases, network)
+	return nil
 }

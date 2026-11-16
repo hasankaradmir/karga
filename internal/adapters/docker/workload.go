@@ -243,3 +243,26 @@ func (r *Runtime) PublishedPorts(ctx context.Context) ([]ports.PublishedPort, er
 	}
 	return out, nil
 }
+
+// RenameWorkload implements ports.Runtime.
+func (r *Runtime) RenameWorkload(ctx context.Context, from, to string) error {
+	_, err := r.c.ContainerRename(ctx, from, client.ContainerRenameOptions{NewName: to})
+	return wrap(err, fmt.Sprintf("rename workload %s to %s", from, to))
+}
+
+// ConnectNetwork implements ports.Runtime.
+func (r *Runtime) ConnectNetwork(ctx context.Context, workload, net string, aliases []string) error {
+	_, err := r.c.NetworkConnect(ctx, net, client.NetworkConnectOptions{
+		Container: workload, EndpointConfig: &network.EndpointSettings{Aliases: aliases},
+	})
+	return wrap(err, fmt.Sprintf("connect workload %s to network %s", workload, net))
+}
+
+// DisconnectNetwork implements ports.Runtime.
+func (r *Runtime) DisconnectNetwork(ctx context.Context, workload, net string) error {
+	_, err := r.c.NetworkDisconnect(ctx, net, client.NetworkDisconnectOptions{Container: workload})
+	if err != nil && strings.Contains(err.Error(), "is not connected") {
+		return nil
+	}
+	return wrap(err, fmt.Sprintf("disconnect workload %s from network %s", workload, net))
+}

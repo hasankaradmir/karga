@@ -67,6 +67,12 @@ type Runtime interface {
 	// DeleteWorkload removes the container (stopping it if needed). Named volumes are kept.
 	DeleteWorkload(ctx context.Context, name string) error
 	GetWorkload(ctx context.Context, name string) (WorkloadStatus, error)
+	// RenameWorkload renames a container; it keeps running and keeps its network aliases.
+	RenameWorkload(ctx context.Context, from, to string) error
+	// ConnectNetwork attaches a workload to a network with the given DNS aliases.
+	ConnectNetwork(ctx context.Context, workload, network string, aliases []string) error
+	// DisconnectNetwork detaches a workload; it succeeds if the workload is not attached.
+	DisconnectNetwork(ctx context.Context, workload, network string) error
 
 	// ListManaged returns every karga-managed object of a release.
 	ListManaged(ctx context.Context, release string) ([]Object, error)
