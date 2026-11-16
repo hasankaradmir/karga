@@ -94,10 +94,9 @@ type NetworkRequest struct {
 
 // VolumeRequest creates a named volume.
 type VolumeRequest struct {
-	Name    string
-	Labels  map[string]string
-	Driver  string
-	Options []string
+	Name   string
+	Labels map[string]string
+	Driver string
 }
 
 // WorkloadRequest creates a container.
