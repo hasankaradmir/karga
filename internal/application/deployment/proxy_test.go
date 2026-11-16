@@ -11,9 +11,9 @@ import (
 // withProxySupport pretends to run on Linux (or not) for the duration of a test.
 func withProxySupport(t *testing.T, on bool) {
 	t.Helper()
-	old := proxySupported
-	proxySupported = on
-	t.Cleanup(func() { proxySupported = old })
+	old := proxySupported.Load()
+	proxySupported.Store(on)
+	t.Cleanup(func() { proxySupported.Store(old) })
 }
 
 // replaceManifest is manifest() with a replaceable workload that publishes its port.

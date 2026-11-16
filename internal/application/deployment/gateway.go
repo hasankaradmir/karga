@@ -44,7 +44,7 @@ type GatewayPort struct {
 
 // gatewayPorts returns the ports of w the gateway serves (none off Linux).
 func gatewayPorts(w *resource.WorkloadSpec) []resource.Port {
-	if !proxySupported {
+	if !proxySupported.Load() {
 		return nil
 	}
 	var out []resource.Port

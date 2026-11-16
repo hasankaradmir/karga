@@ -9,6 +9,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
@@ -23,13 +24,13 @@ const KindProxy = "Proxy"
 // ProxyResource is the name of the release proxy in the plan and the applied state.
 const ProxyResource = "proxy"
 
-// proxySupported is set by UseProxies: karga's proxies rely on bind-mounted unix sockets, inotify
+// proxySupported.Load() is set by UseProxies: karga's proxies rely on bind-mounted unix sockets, inotify
 // and (the gateway) the host network namespace, so only a local Docker daemon on Linux has them.
-var proxySupported = false
+var proxySupported atomic.Bool
 
 // UseProxies turns the gateway and release proxies on when the runtime supports them. The
 // release service calls it once it knows the runtime, before planning.
-func UseProxies(info ports.RuntimeInfo) { proxySupported = info.Has(ports.CapHostGateway) }
+func UseProxies(info ports.RuntimeInfo) { proxySupported.Store(info.Has(ports.CapHostGateway)) }
 
 // ProxyName is the container name of a release's proxy.
 func ProxyName(release string) string {
@@ -62,7 +63,7 @@ func proxyCluster(workload string, port int) string { return fmt.Sprintf("%s-p%d
 // proxied for one workload only. reasons says why a replace workload is not proxied.
 func proxied(rs []resource.Resource) (set map[string]*resource.WorkloadSpec, reasons map[string]string) {
 	set, reasons = map[string]*resource.WorkloadSpec{}, map[string]string{}
-	if !proxySupported {
+	if !proxySupported.Load() {
 		return set, reasons
 	}
 	var names []string

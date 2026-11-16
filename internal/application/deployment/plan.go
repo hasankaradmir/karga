@@ -157,7 +157,7 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 
 	var plan Plan
 	var errs []string
-	if !proxySupported {
+	if !proxySupported.Load() {
 		for _, r := range ordered {
 			if w, ok := r.Spec.(*resource.WorkloadSpec); ok && slices.ContainsFunc(w.Ports, func(p resource.Port) bool { return len(p.Routes) > 0 }) {
 				errs = append(errs, fmt.Sprintf("workload %q: routes need the gateway (Linux with a local Docker)", r.Metadata.Name))
@@ -262,7 +262,7 @@ func strategyFor(w *resource.WorkloadSpec, override string) (string, string) {
 // eligible checks whether w can be replaced, ignoring what was requested.
 func eligible(w *resource.WorkloadSpec) (string, string) {
 	for _, p := range w.Ports {
-		if p.HostPort != 0 && (!proxySupported || p.Protocol == "udp") {
+		if p.HostPort != 0 && (!proxySupported.Load() || p.Protocol == "udp") {
 			return resource.StrategyRecreate, fmt.Sprintf("publishes hostPort %d/%s without the gateway (Linux, tcp)", p.HostPort, p.Protocol)
 		}
 	}

@@ -65,7 +65,7 @@ func Preflight(ctx context.Context, rt ports.Runtime, info ports.RuntimeInfo, re
 			}
 		}
 	}
-	if proxySupported {
+	if proxySupported.Load() {
 		errs = append(errs, checkGateway(ctx, rt, release, rs)...)
 	}
 	return errors.Join(errs...)
