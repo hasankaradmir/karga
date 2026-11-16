@@ -387,3 +387,35 @@ func newGetCmd(a *app) *cobra.Command {
 	cmd.AddCommand(values, manifest)
 	return cmd
 }
+
+func newGatewayCmd(a *app) *cobra.Command {
+	cmd := &cobra.Command{
+		Use:   "gateway",
+		Short: "Inspect the host gateway (Linux)",
+	}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "status",
+		Short: "List the listeners and routes the gateway serves",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return a.withService(cmd.Context(), func(s *releases.Service) error {
+				routes, err := s.Gateway(cmd.Context())
+				if err != nil {
+					return err
+				}
+				if a.output == outputJSON {
+					if routes == nil {
+						return writeJSON(a.stdout, []any{})
+					}
+					return writeJSON(a.stdout, routes)
+				}
+				var rows [][]string
+				for _, r := range routes {
+					rows = append(rows, []string{r.Listener, r.Route, r.Release, r.Workload, r.Upstream})
+				}
+				return a.table("LISTENER\tROUTE\tRELEASE\tWORKLOAD\tUPSTREAM", rows)
+			})
+		},
+	})
+	return cmd
+}

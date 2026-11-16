@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	goruntime "runtime"
 	"strings"
 
 	cerrdefs "github.com/containerd/errdefs"
@@ -117,6 +118,9 @@ func (r *Runtime) Info(ctx context.Context) (ports.RuntimeInfo, error) {
 		info.Capabilities = append(info.Capabilities, ports.CapResourcesCPU)
 	}
 	info.Capabilities = append(info.Capabilities, ports.CapHealthcheckExec)
+	if goruntime.GOOS == "linux" && strings.HasPrefix(r.c.DaemonHost(), "unix://") {
+		info.Capabilities = append(info.Capabilities, ports.CapHostGateway)
+	}
 	return info, nil
 }
 

@@ -105,7 +105,7 @@ func TestDryRunTouchesNothing(t *testing.T) {
 	if _, err := e.svc.Store.GetRelease(context.Background(), "cache"); !errors.Is(err, ports.ErrNotFound) {
 		t.Fatalf("dry run created a release: %v", err)
 	}
-	if len(e.rt.Calls) != 0 {
+	if len(e.rt.Calls) != 1 || e.rt.Calls[0] != "Info:" { // reading runtime info is all it may do
 		t.Fatalf("dry run touched the runtime: %v", e.rt.Calls)
 	}
 }

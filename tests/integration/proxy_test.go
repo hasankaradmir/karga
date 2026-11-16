@@ -8,6 +8,7 @@ import (
 	"maps"
 	"net/http"
 	"runtime"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -29,7 +30,8 @@ func requireLinux(t *testing.T) {
 	}
 }
 
-// hostPinger requests http://127.0.0.1:port/ every 50ms from the host until stopped.
+// hostPinger requests http://127.0.0.1:port/ (with an optional Host header) every 50ms from the
+// host until stopped.
 type hostPinger struct {
 	ok, failed atomic.Int64
 	mu         sync.Mutex
@@ -38,7 +40,9 @@ type hostPinger struct {
 	done       sync.WaitGroup
 }
 
-func startHostPinger(port int) *hostPinger {
+func startHostPinger(port int) *hostPinger { return startHostPingerFor(port, "") }
+
+func startHostPingerFor(port int, host string) *hostPinger {
 	p := &hostPinger{bodies: map[string]int{}, stop: make(chan struct{})}
 	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
 	url := "http://127.0.0.1:" + strconv.Itoa(port) + "/"
@@ -51,7 +55,11 @@ func startHostPinger(port int) *hostPinger {
 				return
 			case <-time.After(50 * time.Millisecond):
 			}
-			resp, err := client.Get(url)
+			req, _ := http.NewRequest(http.MethodGet, url, nil)
+			if host != "" {
+				req.Host = host
+			}
+			resp, err := client.Do(req)
 			if err != nil {
 				p.failed.Add(1)
 				continue
@@ -82,16 +90,32 @@ func (p *hostPinger) seen() map[string]int {
 
 func (p *hostPinger) reset() { p.ok.Store(0); p.failed.Store(0) }
 
-func TestProxyReplaceWithoutLoss(t *testing.T) {
+// hostGet does one request to http://127.0.0.1:port/ with a Host header and returns status and body.
+func hostGet(t *testing.T, port int, host string) (int, string) {
+	t.Helper()
+	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+"/", nil)
+	req.Host = host
+	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+	if err != nil {
+		t.Fatalf("GET %s on %d: %v", host, port, err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	b, _ := io.ReadAll(resp.Body)
+	return resp.StatusCode, strings.TrimSpace(string(b))
+}
+
+func failures(out string) int { return strings.Count(out, "FAIL") }
+
+func TestGatewayReplaceWithoutLoss(t *testing.T) {
 	requireLinux(t)
 	ctx := context.Background()
-	name := releaseName("it-proxy")
+	name := releaseName("it-gw")
 	s, rt := service(t, name)
 	port := runtimetest.FreePort(t)
 	common := opts()
 	common.Timeout = 30 * time.Second
 	sets := func(extra ...string) packages.Options {
-		return packages.Options{Sets: append([]string{startDelay, "publish=true", "proxy=true", "port=" + strconv.Itoa(port)}, extra...)}
+		return packages.Options{Sets: append([]string{startDelay, "publish=true", "second=true", "port=" + strconv.Itoa(port)}, extra...)}
 	}
 
 	res, err := s.Install(ctx, releases.InstallRequest{CommonOptions: common, Name: name, Package: webPkg, Values: sets()})
@@ -103,41 +127,51 @@ func TestProxyReplaceWithoutLoss(t *testing.T) {
 		proxyCreated = proxyCreated || (c.Kind == deployment.KindProxy && c.Action == "create")
 	}
 	if !proxyCreated {
-		t.Fatalf("no proxy in the plan: %+v", res.Plan.Changes)
+		t.Fatalf("no release proxy in the plan: %+v", res.Plan.Changes)
 	}
 	pub, err := rt.PublishedPorts(ctx)
 	if err != nil {
 		t.Fatal(err)
 	}
 	for _, p := range pub {
-		if p.Release == name && p.Workload != deployment.ProxyName(name, "web") {
-			t.Fatalf("only the proxy may publish the host port: %+v", pub)
+		if p.Release == name && p.HostIP != "127.0.0.1" {
+			t.Fatalf("workloads may only publish loopback upstreams: %+v", p)
 		}
+		if p.Port == port {
+			t.Fatalf("the host port must be held by the gateway, not a container: %+v", p)
+		}
+	}
+	routes, err := s.Gateway(ctx)
+	if err != nil || !slices.ContainsFunc(routes, func(r deployment.GatewayRoute) bool {
+		return r.Release == name && r.Listener == "127.0.0.1:"+strconv.Itoa(port) && r.Route == "tcp"
+	}) {
+		t.Fatalf("gateway routes: %+v %v", routes, err)
 	}
 
 	host := startHostPinger(port)
 	defer host.halt()
-	net := startPinger(t, rt, name)
+	web := startPinger(t, rt, name)
+	api := startURLPinger(t, rt, name, "api-pinger", "http://api:8081/")
 	time.Sleep(time.Second)
 
 	if _, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: common, Name: name, Package: webPkg, Values: sets("content=v2")}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Second)
-	// A broken version never takes traffic.
-	if _, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: common, Name: name, Package: webPkg, Values: sets("content=v3", "healthy=false")}); err == nil {
+	// A broken version of web (api unchanged) never takes traffic and changes nothing that runs.
+	if _, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: common, Name: name, Package: webPkg, Values: sets("content=v2", "healthy=false")}); err == nil {
 		t.Fatal("unhealthy replace should fail")
 	}
 	time.Sleep(time.Second)
 
-	netOut := logs(t, net)
+	webOut, apiOut := logs(t, web), logs(t, api)
 	bodies := host.seen()
-	t.Logf("host: %d ok, %d failed, bodies %v; network: %d failed of %d", host.ok.Load(), host.failed.Load(), bodies,
-		strings.Count(netOut, "FAIL"), strings.Count(netOut, "\n")/2)
-	if host.failed.Load() != 0 || strings.Count(netOut, "FAIL") != 0 {
-		t.Fatalf("requests failed behind the proxy:\n%s", netOut)
+	t.Logf("host: %d ok, %d failed, bodies %v; network web: %d failed of %d, api: %d failed of %d", host.ok.Load(), host.failed.Load(), bodies,
+		failures(webOut), strings.Count(webOut, "\n")/2, failures(apiOut), strings.Count(apiOut, "\n")/2)
+	if host.failed.Load() != 0 || failures(webOut) != 0 || failures(apiOut) != 0 {
+		t.Fatalf("requests failed behind the gateway and proxy:\nweb:\n%s\napi:\n%s", webOut, apiOut)
 	}
-	if bodies["v2"] == 0 || bodies["v3"] != 0 {
+	if bodies["v2"] == 0 || len(bodies) != 2 || !strings.Contains(apiOut, "v2") {
 		t.Fatalf("unexpected content: %v", bodies)
 	}
 	if r := currentRelease(t, s, name); r.Status != release.StatusDeployed || r.CurrentRevision != 2 {
@@ -154,12 +188,12 @@ func TestProxyReplaceWithoutLoss(t *testing.T) {
 			backend = r.Backend
 		}
 	}
-	if backend != deployment.BackendAlias("web", 2) {
-		t.Fatalf("proxy backend: %q", backend)
+	if backend != deployment.BackendAlias("api", 2)+", "+deployment.BackendAlias("web", 2) {
+		t.Fatalf("proxy backends: %q", backend)
 	}
 
-	// Restarting the proxy or the backend (which may change its IP) keeps routing.
-	for _, c := range []string{deployment.ProxyName(name, "web"), name + "-web"} {
+	// Restarting the gateway, the proxy or the backend (which may change its IP) keeps routing.
+	for _, c := range []string{deployment.GatewayName, deployment.ProxyName(name), name + "-web"} {
 		if err := rt.StopWorkload(ctx, c, 2*time.Second); err != nil {
 			t.Fatal(err)
 		}
@@ -177,73 +211,87 @@ func TestProxyReplaceWithoutLoss(t *testing.T) {
 	}
 }
 
-func TestProxyEnableDisable(t *testing.T) {
+// TestGatewayHTTPRoutes shares one host port between two releases by Host header.
+func TestGatewayHTTPRoutes(t *testing.T) {
 	requireLinux(t)
 	ctx := context.Background()
-	name := releaseName("it-proxy-toggle")
-	s, rt := service(t, name)
+	a, b := releaseName("it-gw-a"), releaseName("it-gw-b")
+	s, rt := service(t, a)
+	t.Cleanup(func() { _ = deployment.Delete(context.Background(), rt, s.Home, b, true) })
 	port := runtimetest.FreePort(t)
-	common := opts()
-	common.Timeout = 30 * time.Second
-	upgrade := func(proxy bool) *releases.Result {
-		t.Helper()
-		res, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: common, Name: name, Package: webPkg, Install: true,
-			Values: packages.Options{Sets: []string{"publish=true", "port=" + strconv.Itoa(port), "proxy=" + strconv.FormatBool(proxy)}}})
-		if err != nil {
+	install := func(rel, host, content string) error {
+		_, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: rel, Package: webPkg,
+			Values: packages.Options{Sets: []string{"route=" + host, "content=" + content, "port=" + strconv.Itoa(port)}}})
+		return err
+	}
+	if err := install(a, "a.local", "from-a"); err != nil {
+		t.Fatal(err)
+	}
+	if err := install(b, "b.local", "from-b"); err != nil {
+		t.Fatal(err)
+	}
+	for host, want := range map[string]string{"a.local": "from-a", "b.local:" + strconv.Itoa(port): "from-b"} {
+		if code, body := hostGet(t, port, host); code != http.StatusOK || body != want {
+			t.Errorf("Host %s: %d %q, want %q", host, code, body, want)
+		}
+	}
+	if code, _ := hostGet(t, port, "other.local"); code != http.StatusNotFound {
+		t.Errorf("unknown host: %d", code)
+	}
+	// The same host and path in a third release is refused before anything is created.
+	c := releaseName("it-gw-c")
+	if err := install(c, "a.local", "from-c"); err == nil || !strings.Contains(err.Error(), "already routed") {
+		t.Fatalf("duplicate route: %v", err)
+	}
+	// Removing the last release removes the gateway.
+	for _, rel := range []string{a, b} {
+		if err := s.Uninstall(ctx, releases.UninstallRequest{Name: rel}); err != nil {
 			t.Fatal(err)
 		}
-		return res
 	}
-	publisher := func() string {
-		t.Helper()
-		pub, err := rt.PublishedPorts(ctx)
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, p := range pub {
-			if p.Port == port {
-				return p.Workload
-			}
-		}
-		return ""
-	}
-
-	upgrade(false)
-	if got := publisher(); got != name+"-web" {
-		t.Fatalf("without proxy the workload publishes: %q", got)
-	}
-	res := upgrade(true)
-	for _, c := range res.Plan.Changes {
-		if c.Kind == "Workload" && c.Label() != "recreate: moving behind the proxy" {
-			t.Fatalf("enable: %+v", c)
-		}
-	}
-	if got := publisher(); got != deployment.ProxyName(name, "web") {
-		t.Fatalf("with proxy the proxy publishes: %q", got)
-	}
-	upgrade(false)
-	if got := publisher(); got != name+"-web" {
-		t.Fatalf("after disabling the workload publishes again: %q", got)
-	}
-	if _, err := rt.GetWorkload(ctx, deployment.ProxyName(name, "web")); err == nil {
-		t.Fatal("proxy still exists")
+	if _, err := rt.GetWorkload(ctx, deployment.GatewayName); err == nil {
+		t.Fatal("gateway still exists after the last release went")
 	}
 }
 
+// TestGatewayRecreateWorkload: a recreate workload (no proxy) still gets its host port from the gateway.
+func TestGatewayRecreateWorkload(t *testing.T) {
+	requireLinux(t)
+	ctx := context.Background()
+	name := releaseName("it-gw-rc")
+	s, rt := service(t, name)
+	port := runtimetest.FreePort(t)
+	res, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: webPkg,
+		Values: packages.Options{Sets: []string{"strategy=recreate", "publish=true", "listenPort=80", "port=" + strconv.Itoa(port)}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range res.Plan.Changes {
+		if c.Kind == deployment.KindProxy {
+			t.Fatalf("recreate workloads need no proxy: %+v", c)
+		}
+	}
+	if code, body := hostGet(t, port, "x"); code != http.StatusOK || body != "v1" {
+		t.Fatalf("through the gateway: %d %q", code, body)
+	}
+	if _, err := rt.GetWorkload(ctx, deployment.ProxyName(name)); err == nil {
+		t.Fatal("unexpected proxy container")
+	}
+}
+
+// TestProxyLowPort: the non-root release proxy listens on containerPort 80.
 func TestProxyLowPort(t *testing.T) {
 	requireLinux(t)
 	ctx := context.Background()
 	name := releaseName("it-proxy-80")
-	s, _ := service(t, name)
-	port := runtimetest.FreePort(t)
+	s, rt := service(t, name)
 	if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: webPkg,
-		Values: packages.Options{Sets: []string{"publish=true", "proxy=true", "listenPort=80", "port=" + strconv.Itoa(port)}}}); err != nil {
+		Values: packages.Options{Sets: []string{"listenPort=80"}}}); err != nil {
 		t.Fatal(err)
 	}
-	p := startHostPinger(port)
-	time.Sleep(time.Second)
-	p.halt()
-	if p.ok.Load() == 0 {
-		t.Fatalf("non-root proxy did not serve containerPort 80 (failed %d)", p.failed.Load())
+	p := startURLPinger(t, rt, name, "pinger80", "http://web:80/")
+	time.Sleep(2 * time.Second)
+	if out := logs(t, p); !strings.Contains(out, "v1") {
+		t.Fatalf("proxy did not serve containerPort 80:\n%s", out)
 	}
 }

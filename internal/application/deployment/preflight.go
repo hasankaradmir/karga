@@ -13,8 +13,8 @@ import (
 )
 
 // Preflight finds problems before anything is created: runtime support, missing capabilities and
-// host ports taken by other releases, containers or host processes. Ports already held by the same
-// release are allowed (an upgrade will replace those containers).
+// host ports or gateway routes taken by other releases, containers or host processes. Ports already
+// held by the same release are allowed (an upgrade will replace those containers).
 func Preflight(ctx context.Context, rt ports.Runtime, info ports.RuntimeInfo, release string, supported []string, rs []resource.Resource) error {
 	var errs []error
 	if !slices.Contains(supported, info.Name) {
@@ -57,13 +57,16 @@ func Preflight(ctx context.Context, rt ports.Runtime, info ports.RuntimeInfo, re
 			continue
 		}
 		for _, p := range w.Ports {
-			if p.HostPort == 0 {
-				continue
+			if p.HostPort == 0 || slices.ContainsFunc(gatewayPorts(w), func(g resource.Port) bool { return g.ContainerPort == p.ContainerPort }) {
+				continue // the gateway holds it, checked below
 			}
 			if err := checkHostPort(release, r.Metadata.Name, p, published); err != nil {
 				errs = append(errs, err)
 			}
 		}
+	}
+	if proxySupported {
+		errs = append(errs, checkGateway(ctx, rt, release, rs)...)
 	}
 	return errors.Join(errs...)
 }

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"testing"
@@ -196,8 +197,14 @@ func TestRedisLifecycle(t *testing.T) {
 	if got := redis(t, port, "SET e2e kept"); !strings.HasPrefix(got, "+OK") {
 		t.Fatalf("SET: %q", got)
 	}
-	if out, _ := exec.Command("docker", "port", rel+"-redis").Output(); !strings.Contains(string(out), "127.0.0.1:"+strconv.Itoa(port)) || strings.Contains(string(out), "0.0.0.0") {
+	// Docker publishes the port itself, or (Linux gateway) only a loopback upstream: never on 0.0.0.0.
+	if out, _ := exec.Command("docker", "port", rel+"-redis").Output(); !strings.Contains(string(out), "127.0.0.1:") || strings.Contains(string(out), "0.0.0.0") {
 		t.Fatalf("published ports: %s", out)
+	}
+	if runtime.GOOS == "linux" {
+		if out := e.run("gateway", "status"); !strings.Contains(out, "127.0.0.1:"+strconv.Itoa(port)) {
+			t.Fatalf("gateway status:\n%s", out)
+		}
 	}
 
 	// 4. Dry run shows the plan and changes nothing.

@@ -2,15 +2,6 @@
   "resources": [
     {
       "@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
-      "cluster_type": {
-        "name": "envoy.cluster.dns",
-        "typed_config": {
-          "@type": "type.googleapis.com/envoy.extensions.clusters.dns.v3.DnsCluster",
-          "all_addresses_in_single_endpoint": false,
-          "dns_lookup_family": "V4_ONLY",
-          "dns_refresh_rate": "1s"
-        }
-      },
       "connect_timeout": "1s",
       "health_checks": [
         {
@@ -22,7 +13,7 @@
         }
       ],
       "load_assignment": {
-        "cluster_name": "p8080",
+        "cluster_name": "db_pg_p5432",
         "endpoints": [
           {
             "lb_endpoints": [
@@ -30,8 +21,8 @@
                 "endpoint": {
                   "address": {
                     "socket_address": {
-                      "address": "karga-web-r2",
-                      "port_value": 8080
+                      "address": "127.0.0.1",
+                      "port_value": 41001
                     }
                   }
                 }
@@ -40,7 +31,8 @@
           }
         ]
       },
-      "name": "p8080"
+      "name": "db_pg_p5432",
+      "type": "STATIC"
     },
     {
       "@type": "type.googleapis.com/envoy.config.cluster.v3.Cluster",
@@ -64,7 +56,7 @@
         }
       ],
       "load_assignment": {
-        "cluster_name": "p9000",
+        "cluster_name": "web-p8080",
         "endpoints": [
           {
             "lb_endpoints": [
@@ -73,7 +65,7 @@
                   "address": {
                     "socket_address": {
                       "address": "karga-web-r2",
-                      "port_value": 9000
+                      "port_value": 8080
                     }
                   }
                 }
@@ -82,7 +74,7 @@
           }
         ]
       },
-      "name": "p9000"
+      "name": "web-p8080"
     }
   ]
 }

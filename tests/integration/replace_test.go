@@ -28,13 +28,19 @@ const maxRaceFailures = 2
 // prints the body, or FAIL when a request fails.
 func startPinger(t *testing.T, rt ports.Runtime, rel string) string {
 	t.Helper()
+	return startURLPinger(t, rt, rel, "pinger", "http://web:8080/")
+}
+
+// startURLPinger requests url every 100ms from the release network, printing FAIL for errors.
+func startURLPinger(t *testing.T, rt ports.Runtime, rel, suffix, url string) string {
+	t.Helper()
 	ctx := context.Background()
-	name := rel + "-pinger"
+	name := rel + "-" + suffix
 	if err := rt.CreateWorkload(ctx, ports.WorkloadRequest{
 		Name: name, Image: "busybox:1.37", RestartPolicy: "never",
 		Labels:   map[string]string{ports.LabelManaged: "true", ports.LabelRelease: rel},
 		Networks: []string{rel + "-web-net"},
-		Command:  []string{"sh", "-c", `while :; do wget -q -T 2 -O - http://web:8080/ || echo FAIL; echo; sleep 0.1; done`},
+		Command:  []string{"sh", "-c", `while :; do wget -q -T 2 -O - ` + url + ` || echo FAIL; echo; sleep 0.1; done`},
 	}); err != nil {
 		t.Fatal(err)
 	}
@@ -123,13 +129,13 @@ func TestRecreateHasDowntime(t *testing.T) {
 	common := opts()
 	common.Timeout = 30 * time.Second
 	if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: common, Name: name, Package: webPkg,
-		Values: packages.Options{Sets: []string{startDelay}}}); err != nil {
+		Values: packages.Options{Sets: []string{startDelay, "strategy=recreate"}}}); err != nil {
 		t.Fatal(err)
 	}
 	pinger := startPinger(t, rt, name)
 	time.Sleep(time.Second)
 	if _, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: common, Name: name, Package: webPkg,
-		Values: packages.Options{Sets: []string{startDelay, "content=v2"}}, Strategy: "recreate"}); err != nil {
+		Values: packages.Options{Sets: []string{startDelay, "strategy=recreate", "content=v2"}}}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Second)

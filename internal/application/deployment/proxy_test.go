@@ -16,85 +16,33 @@ func withProxySupport(t *testing.T, on bool) {
 	t.Cleanup(func() { proxySupported = old })
 }
 
-// proxiedManifest is manifest() with a replace+proxy workload that publishes its port.
-func proxiedManifest(port int) []resource.Resource {
+// replaceManifest is manifest() with a replaceable workload that publishes its port.
+func replaceManifest(port int) []resource.Resource {
 	rs := manifest(port)
 	w := rs[0].Spec.(*resource.WorkloadSpec)
-	w.UpdateStrategy = &resource.UpdateStrategy{Type: resource.StrategyReplace, Proxy: true, DrainTimeout: "2s"}
+	w.UpdateStrategy = &resource.UpdateStrategy{Type: resource.StrategyReplace, DrainTimeout: "2s"}
 	w.Mounts[0].ReadOnly = true
 	return rs
 }
 
-func changeOf(t *testing.T, p Plan, kind string) Change {
+// withWorkload adds a replaceable workload on network net listening on port.
+func withWorkload(rs []resource.Resource, name string, port int) []resource.Resource {
+	return append(rs, resource.Resource{Kind: resource.KindWorkload, Metadata: resource.Metadata{Name: name}, Spec: &resource.WorkloadSpec{
+		Image: "app:1", PullPolicy: "if-not-present", RestartPolicy: "always", Networks: []string{"net"},
+		Ports:          []resource.Port{{ContainerPort: port, Protocol: "tcp"}},
+		HealthCheck:    &resource.HealthCheck{Type: "exec", Command: []string{"true"}},
+		UpdateStrategy: &resource.UpdateStrategy{Type: resource.StrategyReplace},
+	}})
+}
+
+func changeOf(t *testing.T, p Plan, kind, name string) Change {
 	t.Helper()
 	for _, c := range p.Changes {
-		if c.Kind == kind {
+		if c.Kind == kind && (name == "" || c.Name == name) {
 			return c
 		}
 	}
 	return Change{}
-}
-
-func TestProxyPlan(t *testing.T) {
-	withProxySupport(t, true)
-
-	// Fresh install: the proxy is created.
-	p, err := Diff("cache", proxiedManifest(6379), nil, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	px := changeOf(t, p, KindProxy)
-	if px.Action != ActionCreate || px.RuntimeName != "cache-karga-proxy-redis" || px.Proxy.Ports[0].HostPort != 6379 {
-		t.Fatalf("proxy create: %+v", px)
-	}
-
-	// Moving an existing workload behind the proxy recreates it; only the proxy flag differs.
-	notProxied := proxiedManifest(6379)
-	notProxied[0].Spec.(*resource.WorkloadSpec).UpdateStrategy.Proxy = false
-	plain := appliedFrom(t, notProxied)
-	p, err = Diff("cache", proxiedManifest(6379), plain, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if w := changeOf(t, p, resource.KindWorkload); w.Action != ActionUpdate || w.Label() != "recreate: moving behind the proxy" || w.Fields[0].Path != "(proxy placement)" {
-		t.Fatalf("enable: %+v", w)
-	}
-
-	// Already behind the proxy: an image change is a replace and the proxy is untouched.
-	applied := appliedWithProxy(t, proxiedManifest(6379))
-	v2 := proxiedManifest(6379)
-	v2[0].Spec.(*resource.WorkloadSpec).Image = "redis:7.2"
-	p, err = Diff("cache", v2, applied, "recreate")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if w := changeOf(t, p, resource.KindWorkload); w.Label() != "replace" {
-		t.Fatalf("proxied update must replace even with --strategy recreate: %+v", w)
-	}
-	if px := changeOf(t, p, KindProxy); px.Action != ActionUnchanged {
-		t.Fatalf("proxy should be unchanged: %+v", px)
-	}
-
-	// A new host port recreates the proxy.
-	p, err = Diff("cache", proxiedManifest(6380), applied, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if px := changeOf(t, p, KindProxy); px.Action != ActionUpdate || px.Label() != "recreate: proxy config changed" {
-		t.Fatalf("port change: %+v", px)
-	}
-
-	// Turning the proxy off deletes it and recreates the workload with its host port.
-	p, err = Diff("cache", manifest(6379), applied, "")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if px := changeOf(t, p, KindProxy); px.Action != ActionDelete {
-		t.Fatalf("disable proxy: %+v", px)
-	}
-	if w := changeOf(t, p, resource.KindWorkload); w.Label() != "recreate: moving out from behind the proxy" {
-		t.Fatalf("disable workload: %+v", w)
-	}
 }
 
 // appliedWithProxy is the applied state after installing rs, proxy rows included.
@@ -111,35 +59,130 @@ func appliedWithProxy(t *testing.T, rs []resource.Resource) []release.AppliedRes
 	return out
 }
 
+func TestProxyPlan(t *testing.T) {
+	withProxySupport(t, true)
+
+	// Fresh install: one release proxy answering for the replace workload.
+	p, err := Diff("cache", replaceManifest(6379), nil, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	px := changeOf(t, p, KindProxy, "")
+	if px.Action != ActionCreate || px.Name != ProxyResource || px.RuntimeName != "cache-karga-proxy" ||
+		strings.Join(px.Proxy.Networks["net"], ",") != "redis" {
+		t.Fatalf("proxy create: %+v %+v", px, px.Proxy)
+	}
+
+	// A workload installed without the proxy (e.g. by karga on macOS) moves behind it with a recreate.
+	withProxySupport(t, false)
+	plain := appliedFrom(t, replaceManifest(6379))
+	withProxySupport(t, true)
+	p, err = Diff("cache", replaceManifest(6379), plain, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := changeOf(t, p, resource.KindWorkload, "redis"); w.Label() != "recreate: moving behind the proxy" || w.Fields[0].Path != "(proxy placement)" {
+		t.Fatalf("enable: %+v", w)
+	}
+
+	// Behind the proxy an image change is a replace, even with --strategy recreate; the proxy stays.
+	applied := appliedWithProxy(t, replaceManifest(6379))
+	v2 := replaceManifest(6379)
+	v2[0].Spec.(*resource.WorkloadSpec).Image = "redis:7.2"
+	p, err = Diff("cache", v2, applied, "recreate")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := changeOf(t, p, resource.KindWorkload, "redis"); w.Label() != "replace" {
+		t.Fatalf("proxied update must replace: %+v", w)
+	}
+	if px := changeOf(t, p, KindProxy, ""); px.Action != ActionUnchanged {
+		t.Fatalf("proxy should be unchanged: %+v", px)
+	}
+
+	// A second workload on the network reconnects the proxy with its alias.
+	p, err = Diff("cache", withWorkload(replaceManifest(6379), "web", 8080), applied, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if px := changeOf(t, p, KindProxy, ""); px.Action != ActionUpdate || px.Label() != "reconnect: net: brief interruption" {
+		t.Fatalf("add workload: %+v", px)
+	}
+
+	// The same container port cannot be proxied twice: the later workload switches by DNS.
+	both := appliedWithProxy(t, withWorkload(replaceManifest(6379), "web", 6379))
+	v3 := withWorkload(replaceManifest(6379), "web", 6379)
+	v3[len(v3)-1].Spec.(*resource.WorkloadSpec).Image = "app:2"
+	p, err = Diff("cache", v3, both, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if w := changeOf(t, p, resource.KindWorkload, "web"); w.Label() != "replace: not behind the proxy, containerPort 6379 already proxied for redis" {
+		t.Fatalf("port clash: %+v", w)
+	}
+
+	// Back to recreate: the proxy goes and the workload takes its name back.
+	p, err = Diff("cache", manifest(6379), applied, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if px := changeOf(t, p, KindProxy, ""); px.Action != ActionDelete {
+		t.Fatalf("disable proxy: %+v", px)
+	}
+	if w := changeOf(t, p, resource.KindWorkload, "redis"); w.Label() != "recreate: moving out from behind the proxy" {
+		t.Fatalf("disable workload: %+v", w)
+	}
+
+	// A per-workload proxy of an earlier version is removed; its workload counts as proxied.
+	old := append(appliedFrom(t, replaceManifest(6379)), release.AppliedResource{Kind: KindProxy, Name: "redis", RuntimeName: "cache-karga-proxy-redis", Digest: "sha256:old"})
+	p, err = Diff("cache", replaceManifest(6379), old, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if c := changeOf(t, p, KindProxy, "redis"); c.Action != ActionDelete || c.RuntimeName != "cache-karga-proxy-redis" {
+		t.Fatalf("old proxy: %+v", c)
+	}
+}
+
 func TestProxyFallbackReasons(t *testing.T) {
 	label := func(mutate func(*resource.WorkloadSpec)) string {
 		t.Helper()
-		applied := appliedFrom(t, proxiedManifest(6379))
-		v2 := proxiedManifest(6379)
+		v2 := replaceManifest(6379)
 		w := v2[0].Spec.(*resource.WorkloadSpec)
-		w.Image = "redis:7.2"
 		mutate(w)
+		applied := appliedFrom(t, v2)
+		w.Image = "redis:7.2"
 		p, err := Diff("cache", v2, applied, "")
 		if err != nil {
 			t.Fatal(err)
 		}
-		if changeOf(t, p, KindProxy).Kind != "" {
+		if changeOf(t, p, KindProxy, "").Kind != "" {
 			t.Fatal("no proxy expected when it cannot be used")
 		}
-		return changeOf(t, p, resource.KindWorkload).Label()
+		return changeOf(t, p, resource.KindWorkload, "redis").Label()
 	}
 	withProxySupport(t, false)
-	if got := label(func(*resource.WorkloadSpec) {}); got != "recreate: proxy requires Linux" {
+	if got := label(func(*resource.WorkloadSpec) {}); got != "recreate: publishes hostPort 6379/tcp without the gateway (Linux, tcp)" {
 		t.Errorf("macOS: %q", got)
 	}
 	withProxySupport(t, true)
 	for want, mutate := range map[string]func(*resource.WorkloadSpec){
-		"recreate: proxy needs the workload on a network": func(w *resource.WorkloadSpec) { w.Networks = nil },
-		"recreate: udp port 6379 is not proxied":          func(w *resource.WorkloadSpec) { w.Ports[0].Protocol = "udp" },
+		"replace: not behind the proxy, not on a network": func(w *resource.WorkloadSpec) { w.Networks = nil },
+		"recreate: publishes hostPort 6379/udp":           func(w *resource.WorkloadSpec) { w.Ports[0].Protocol = "udp" },
+		"replace: not behind the proxy, udp port 6379":    func(w *resource.WorkloadSpec) { w.Ports[0].Protocol, w.Ports[0].HostPort = "udp", 0 },
 		"recreate: mounts volume data read-write":         func(w *resource.WorkloadSpec) { w.Mounts[0].ReadOnly = false },
 	} {
 		if got := label(mutate); !strings.HasPrefix(got, want) {
 			t.Errorf("got %q, want %q", got, want)
 		}
+	}
+}
+
+func TestRoutesNeedTheGateway(t *testing.T) {
+	withProxySupport(t, false)
+	rs := manifest(0)
+	rs[0].Spec.(*resource.WorkloadSpec).Ports[0].Routes = []resource.Route{{Host: "a.local", Path: "/", HostPort: 80, HostIP: "127.0.0.1"}}
+	if _, err := Diff("cache", rs, nil, ""); err == nil || !strings.Contains(err.Error(), "routes need the gateway") {
+		t.Fatalf("want routes error, got %v", err)
 	}
 }

@@ -221,10 +221,30 @@ func (s *Service) nextRevision(ctx context.Context, name string) (int, error) {
 var inProgress = []release.Status{release.StatusPending, release.StatusDeploying, release.StatusUpgrading, release.StatusUninstalling}
 
 // deploy plans the desired revision against the applied state and executes it.
+// runtime connects to the container runtime and tells the deployment package whether it can run
+// karga's proxies there.
+func (s *Service) runtime(ctx context.Context) (ports.Runtime, error) {
+	rt, err := s.Runtime(ctx)
+	if err != nil {
+		return nil, err
+	}
+	info, err := rt.Info(ctx)
+	if err != nil {
+		return nil, err
+	}
+	deployment.UseProxies(info)
+	return rt, nil
+}
+
 func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 	applied, err := s.Store.ListResources(ctx, in.Name)
 	if err != nil {
 		return nil, err
+	}
+	// A dry run plans without a runtime if there is none (as if proxies were unavailable).
+	rt, rtErr := s.runtime(ctx)
+	if rtErr != nil && !in.DryRun {
+		return nil, rtErr
 	}
 	plan, err := deployment.Diff(in.Name, in.Resources, applied, in.Strategy)
 	if err != nil {
@@ -238,10 +258,6 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 		return res, nil
 	}
 
-	rt, err := s.Runtime(ctx)
-	if err != nil {
-		return nil, err
-	}
 	op, err := s.begin(ctx, in.Name, in.Type, in.Revision, in.Force)
 	if err != nil {
 		return nil, err

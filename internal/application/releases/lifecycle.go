@@ -239,7 +239,7 @@ func (s *Service) Uninstall(ctx context.Context, req UninstallRequest) error {
 	if existing.Status == release.StatusUninstalled {
 		return fmt.Errorf("release %s is already uninstalled", req.Name)
 	}
-	rt, err := s.Runtime(ctx)
+	rt, err := s.runtime(ctx)
 	if err != nil {
 		return err
 	}

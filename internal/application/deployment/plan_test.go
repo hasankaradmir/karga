@@ -197,7 +197,7 @@ func TestStrategyResolution(t *testing.T) {
 		{"eligible replace", eligible, "", "replace"},
 		{"override to recreate", eligible, "recreate", "recreate"},
 		{"override to replace", func(w *resource.WorkloadSpec) { eligible(w); w.UpdateStrategy = nil }, "replace", "replace"},
-		{"host port", func(w *resource.WorkloadSpec) { eligible(w); w.Ports[0].HostPort = 6379 }, "", "recreate: publishes hostPort 6379; set updateStrategy.proxy: true"},
+		{"host port", func(w *resource.WorkloadSpec) { eligible(w); w.Ports[0].HostPort = 6379 }, "", "recreate: publishes hostPort 6379/tcp without the gateway (Linux, tcp)"},
 		{"rw volume", func(w *resource.WorkloadSpec) { eligible(w); w.Mounts[0].ReadOnly = false }, "", "recreate: mounts volume data read-write"},
 		{"no healthcheck", func(w *resource.WorkloadSpec) { eligible(w); w.HealthCheck = nil }, "", "recreate: no healthCheck to verify readiness"},
 	}

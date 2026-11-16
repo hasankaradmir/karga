@@ -23,6 +23,9 @@ const (
 	CapResourcesMemory = "resources.memory"
 	CapResourcesCPU    = "resources.cpu"
 	CapHealthcheckExec = "healthcheck.exec"
+	// CapHostGateway: karga can run its Envoy gateway and release proxies (ADR-010): a Linux host
+	// whose Docker daemon is local, so bind mounts, unix sockets and the host network are shared.
+	CapHostGateway = "karga.host-gateway"
 )
 
 // CapNetworkDriver and CapVolumeDriver build driver capability strings.
@@ -125,14 +128,14 @@ type WorkloadRequest struct {
 	CapAdd, CapDrop []string
 	// NoNewPrivileges blocks privilege gains through setuid binaries.
 	NoNewPrivileges bool
-	Ports         []PortBinding
-	Mounts        []Mount
-	Networks      []string
-	Aliases       []string
-	HealthCheck   *HealthCheck
-	MemoryBytes   int64
-	MilliCPU      int64
-	RestartPolicy string
+	Ports           []PortBinding
+	Mounts          []Mount
+	Networks        []string
+	Aliases         []string
+	HealthCheck     *HealthCheck
+	MemoryBytes     int64
+	MilliCPU        int64
+	RestartPolicy   string
 }
 
 // PortBinding publishes ContainerPort. HostPort 0 means the port is not published.

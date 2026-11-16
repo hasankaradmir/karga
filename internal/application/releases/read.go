@@ -4,6 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net"
+	"slices"
+	"strings"
 
 	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/domain/release"
@@ -148,7 +151,7 @@ func (s *Service) Status(ctx context.Context, name string) (*StatusReport, error
 				st.Actual, st.Health = ws.State, ws.Health
 			}
 			if a.Kind == deployment.KindProxy {
-				st.Backend, _ = envoy.Backend(deployment.ProxyDir(s.Home, name, a.Name))
+				st.Backend = backends(deployment.ProxyDir(s.Home, name))
 			}
 		case resource.KindNetwork, resource.KindVolume:
 			kind := ports.ObjectNetwork
@@ -172,4 +175,25 @@ func (s *Service) Status(ctx context.Context, name string) (*StatusReport, error
 		}
 	}
 	return rep, nil
+}
+
+// backends lists the aliases a release proxy routes to, e.g. "karga-api-r2, karga-web-r3".
+func backends(dir string) string {
+	eps, _ := envoy.Endpoints(dir)
+	var out []string
+	for _, ep := range eps {
+		host, _, _ := net.SplitHostPort(ep)
+		out = append(out, host)
+	}
+	slices.Sort(out)
+	return strings.Join(slices.Compact(out), ", ")
+}
+
+// Gateway lists what the host gateway serves, across releases.
+func (s *Service) Gateway(ctx context.Context) ([]deployment.GatewayRoute, error) {
+	rt, err := s.Runtime(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return deployment.GatewayRoutes(ctx, rt)
 }

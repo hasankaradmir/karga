@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"slices"
 	"sort"
 	"strings"
 
@@ -100,6 +101,7 @@ func withoutStrategy(r resource.Resource) resource.Resource {
 // covers the Config and Secret resources it mounts, so changing their content recreates it.
 func Specs(rs []resource.Resource) (map[Key]release.AppliedResource, error) {
 	out := map[Key]release.AppliedResource{}
+	behind, _ := proxied(rs)
 	for _, pass := range []bool{false, true} { // non-workloads first, workloads need their digests
 		for _, r := range rs {
 			w, isWorkload := r.Spec.(*resource.WorkloadSpec)
@@ -113,8 +115,8 @@ func Specs(rs []resource.Resource) (map[Key]release.AppliedResource, error) {
 			h := sha256.New()
 			h.Write(js)
 			if isWorkload {
-				if proxied(w) {
-					h.Write([]byte("\nproxied")) // running behind a proxy changes the container (no host ports)
+				if behind[r.Metadata.Name] != nil {
+					h.Write([]byte("\nproxied")) // behind the proxy the container answers to its backend alias
 				}
 				for _, m := range w.Mounts {
 					kind, name := m.Target()
@@ -143,13 +145,11 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 		return Plan{}, err
 	}
 	current := map[Key]release.AppliedResource{}
-	hadProxy := map[string]bool{}
 	for _, a := range applied {
 		current[Key{a.Kind, a.Name}] = a
-		if a.Kind == KindProxy {
-			hadProxy[a.Name] = true
-		}
 	}
+	hadProxy := appliedProxied(applied)
+	behind, reasons := proxied(desired)
 	ordered, err := Order(desired)
 	if err != nil {
 		return Plan{}, err
@@ -157,6 +157,13 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 
 	var plan Plan
 	var errs []string
+	if !proxySupported {
+		for _, r := range ordered {
+			if w, ok := r.Spec.(*resource.WorkloadSpec); ok && slices.ContainsFunc(w.Ports, func(p resource.Port) bool { return len(p.Routes) > 0 }) {
+				errs = append(errs, fmt.Sprintf("workload %q: routes need the gateway (Linux with a local Docker)", r.Metadata.Name))
+			}
+		}
+	}
 	for _, r := range ordered {
 		r := r
 		k := keyOf(r)
@@ -173,11 +180,11 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 			c.Fields = fieldChanges(k.Kind, have.Spec, want.Spec)
 			w, isWorkload := r.Spec.(*resource.WorkloadSpec)
 			if isWorkload {
-				c.Strategy, c.StrategyReason = workloadStrategy(w, strategy, hadProxy[k.Name])
+				c.Strategy, c.StrategyReason = workloadStrategy(w, strategy, behind[k.Name] != nil, hadProxy[k.Name], reasons[k.Name])
 			}
 			if len(c.Fields) == 0 {
 				why := "(mounted Config/Secret content or previous failure)"
-				if isWorkload && proxied(w) != hadProxy[k.Name] {
+				if isWorkload && (behind[k.Name] != nil) != hadProxy[k.Name] {
 					why = "(proxy placement)"
 				}
 				c.Fields = []FieldChange{{Path: why}}
@@ -189,17 +196,13 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 		plan.Changes = append(plan.Changes, c)
 		delete(current, k)
 	}
-	for _, r := range ordered {
-		w, ok := r.Spec.(*resource.WorkloadSpec)
-		if !ok || !proxied(w) {
-			continue
-		}
-		c, err := proxyChange(releaseName, r.Metadata.Name, w, current)
+	if len(behind) > 0 {
+		c, err := proxyChange(releaseName, behind, current)
 		if err != nil {
 			return Plan{}, err
 		}
 		plan.Changes = append(plan.Changes, c)
-		delete(current, Key{KindProxy, r.Metadata.Name})
+		delete(current, Key{KindProxy, ProxyResource})
 	}
 	var removed []release.AppliedResource
 	for _, a := range current {
@@ -221,46 +224,28 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 	return plan, nil
 }
 
-// workloadStrategy adds the proxy transitions to strategyFor: moving a workload behind its proxy or
-// out from behind it changes how its ports are published, which only a recreate can do. A proxied
-// workload is always replaced: its proxy keeps serving while the backend changes.
-func workloadStrategy(w *resource.WorkloadSpec, override string, hadProxy bool) (string, string) {
-	switch now := proxied(w); {
-	case now && !hadProxy:
+// workloadStrategy adds the proxy transitions to strategyFor: moving a workload behind the release
+// proxy or out from behind it changes its network alias, which only a recreate can do. A proxied
+// workload is always replaced: the proxy keeps serving while the backend changes. notProxied says
+// why a replaced workload is not behind the proxy (its network clients switch by DNS).
+func workloadStrategy(w *resource.WorkloadSpec, override string, now, had bool, notProxied string) (string, string) {
+	switch {
+	case now && !had:
 		return resource.StrategyRecreate, "moving behind the proxy"
-	case !now && hadProxy:
+	case !now && had:
 		return resource.StrategyRecreate, "moving out from behind the proxy"
 	case now:
 		return resource.StrategyReplace, ""
 	}
-	return strategyFor(w, override)
-}
-
-// proxyChange plans a proxied workload's proxy. Any change to it is a recreate: Docker cannot change
-// the ports of a running container.
-func proxyChange(releaseName, name string, w *resource.WorkloadSpec, current map[Key]release.AppliedResource) (Change, error) {
-	want, err := proxyApplied(releaseName, name, w)
-	if err != nil {
-		return Change{}, err
+	typ, why := strategyFor(w, override)
+	if typ == resource.StrategyReplace && notProxied != "" {
+		why = "not behind the proxy, " + notProxied
 	}
-	spec := proxySpecFor(w)
-	c := Change{Kind: KindProxy, Name: name, Spec: want.Spec, Digest: want.Digest, RuntimeName: want.RuntimeName, Proxy: &spec}
-	have, exists := current[Key{KindProxy, name}]
-	switch {
-	case !exists:
-		c.Action = ActionCreate
-	case have.Digest == want.Digest:
-		c.Action = ActionUnchanged
-	default:
-		c.Action, c.Applied = ActionUpdate, &have
-		c.Fields = fieldChanges(KindProxy, have.Spec, want.Spec)
-		c.Strategy, c.StrategyReason = resource.StrategyRecreate, "proxy config changed"
-	}
-	return c, nil
+	return typ, why
 }
 
 // strategyFor decides how a workload update is applied. replace runs the new container next to the
-// old one, which is only safe without host ports (two containers cannot bind one) unless a proxy
+// old one, which is only safe without host ports (two containers cannot bind one) unless the gateway
 // holds them, without read-write volumes (two writers on the same data) and with a healthcheck (to
 // know it is ready).
 func strategyFor(w *resource.WorkloadSpec, override string) (string, string) {
@@ -276,15 +261,9 @@ func strategyFor(w *resource.WorkloadSpec, override string) (string, string) {
 
 // eligible checks whether w can be replaced, ignoring what was requested.
 func eligible(w *resource.WorkloadSpec) (string, string) {
-	if proxyRequested(w) {
-		if reason := proxyReason(w); reason != "" {
-			return resource.StrategyRecreate, reason
-		}
-	} else {
-		for _, p := range w.Ports {
-			if p.HostPort != 0 {
-				return resource.StrategyRecreate, fmt.Sprintf("publishes hostPort %d; set updateStrategy.proxy: true", p.HostPort)
-			}
+	for _, p := range w.Ports {
+		if p.HostPort != 0 && (!proxySupported || p.Protocol == "udp") {
+			return resource.StrategyRecreate, fmt.Sprintf("publishes hostPort %d/%s without the gateway (Linux, tcp)", p.HostPort, p.Protocol)
 		}
 	}
 	for _, m := range w.Mounts {
