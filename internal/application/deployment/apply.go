@@ -14,6 +14,7 @@ import (
 
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
@@ -55,6 +56,10 @@ type ExecRequest struct {
 	Timeout time.Duration
 	// OnStep is called after every runtime step so the caller can record applied state and progress.
 	OnStep func(Change, release.Step) error
+	// Proxies controls workload proxies (default: Envoy). ProxyUser is the uid:gid the proxy runs as
+	// (default: the karga process user, so it can use the proxy's 0700 directory).
+	Proxies   ProxyControl
+	ProxyUser string
 }
 
 // RuntimeName is the runtime object name of a release-local resource name.
@@ -98,6 +103,12 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 	if req.OnStep == nil {
 		req.OnStep = func(Change, release.Step) error { return nil }
 	}
+	if req.Proxies == nil {
+		req.Proxies = EnvoyProxies{}
+	}
+	if req.ProxyUser == "" {
+		req.ProxyUser = fmt.Sprintf("%d:%d", os.Getuid(), os.Getgid())
+	}
 	report := func(c Change, action string, err error) error {
 		st := release.Step{Kind: c.Kind, Name: c.Name, Action: action, Status: StepDone}
 		if err != nil {
@@ -124,8 +135,16 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 		return err
 	}
 	for _, c := range req.Plan.Changes {
-		if w, ok := workloadOf(c); ok && (c.Action == ActionCreate || c.Action == ActionUpdate) {
+		if c.Action != ActionCreate && c.Action != ActionUpdate {
+			continue
+		}
+		if w, ok := workloadOf(c); ok {
 			if err := rt.EnsureImage(ctx, w.Image, w.PullPolicy); err != nil {
+				return fmt.Errorf("%s %q: %w", c.Kind, c.Name, err)
+			}
+		}
+		if c.Kind == KindProxy {
+			if err := rt.EnsureImage(ctx, c.Proxy.Image, "if-not-present"); err != nil {
 				return fmt.Errorf("%s %q: %w", c.Kind, c.Name, err)
 			}
 		}
@@ -144,9 +163,19 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 		}
 	}
 
+	// Proxies that go away or are recreated release their host ports before workloads take them.
+	for _, c := range req.Plan.Changes {
+		if c.Kind == KindProxy && (c.Action == ActionDelete || c.Action == ActionUpdate) {
+			*disrupted = true
+			if err := report(c, ActionDelete, removeProxy(ctx, rt, req.Home, req.Release, c, c.Action == ActionDelete)); err != nil {
+				return err
+			}
+		}
+	}
+
 	var changed []Change
 	for _, c := range req.Plan.Changes {
-		if c.Action != ActionCreate && c.Action != ActionUpdate {
+		if c.Kind == KindProxy || (c.Action != ActionCreate && c.Action != ActionUpdate) {
 			continue
 		}
 		name := RuntimeName(req.Release, c.Name)
@@ -162,7 +191,13 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 				rt.CreateVolume(ctx, ports.VolumeRequest{Name: name, Labels: lbl, Driver: s.Driver}))
 		case *resource.WorkloadSpec:
 			if c.Action == ActionUpdate && c.Strategy == resource.StrategyReplace {
-				touched, rerr := replaceStart(ctx, rt, c, owned, req.Release, s, lbl, paths, req.Timeout)
+				var touched bool
+				var rerr error
+				if proxied(s) {
+					touched, rerr = proxyReplace(ctx, rt, req.Proxies, req, c, owned, s, lbl, paths)
+				} else {
+					touched, rerr = replaceStart(ctx, rt, c, owned, req.Release, s, lbl, paths, req.Timeout)
+				}
 				*disrupted = *disrupted || touched
 				if rerr != nil && !touched {
 					// shortcut: workloads recreated earlier in this plan are not waited for or stopped here; they are
@@ -188,8 +223,18 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 		return err
 	}
 
+	// New and recreated proxies start once their workloads are ready, pointing at what runs now.
+	for _, c := range req.Plan.Changes {
+		if c.Kind == KindProxy && (c.Action == ActionCreate || c.Action == ActionUpdate) {
+			*disrupted = true
+			if err := report(c, c.Action, createProxy(ctx, rt, req.Proxies, req, c)); err != nil {
+				return err
+			}
+		}
+	}
+
 	for _, c := range Reverse(req.Plan.Changes) {
-		if c.Action != ActionDelete || c.Kind == resource.KindWorkload {
+		if c.Action != ActionDelete || c.Kind == resource.KindWorkload || c.Kind == KindProxy {
 			continue
 		}
 		var err error
@@ -342,10 +387,16 @@ func replaceStart(ctx context.Context, rt ports.Runtime, c Change, owned map[str
 // Reconcile repairs what an interrupted replace leaves behind, before the next plan is made:
 // with both <name> and <name>-next present the new one is removed; with only <name>-next it takes
 // the canonical name and is returned with an empty digest so the plan applies the workload again.
-func Reconcile(ctx context.Context, rt ports.Runtime, rel string, applied []release.AppliedResource) ([]release.AppliedResource, error) {
+func Reconcile(ctx context.Context, rt ports.Runtime, home, rel string, applied []release.AppliedResource) ([]release.AppliedResource, error) {
 	owned, err := managedObjects(ctx, rt, rel)
 	if err != nil {
 		return nil, err
+	}
+	behindProxy := map[string]bool{}
+	for _, a := range applied {
+		if a.Kind == KindProxy {
+			behindProxy[a.Name] = true
+		}
 	}
 	var repaired []release.AppliedResource
 	for _, a := range applied {
@@ -353,6 +404,20 @@ func Reconcile(ctx context.Context, rt ports.Runtime, rel string, applied []rele
 			continue
 		}
 		next := a.RuntimeName + nextSuffix
+		// Behind a proxy the one to keep is whichever the proxy routes to.
+		keepNext := false
+		if behindProxy[a.Name] {
+			backend, _ := envoy.Backend(ProxyDir(home, rel, a.Name))
+			if rev, err := revisionOf(ctx, rt, next); err == nil && backend == BackendAlias(a.Name, rev) {
+				keepNext = true
+			}
+		}
+		if keepNext && owned[ports.ObjectWorkload+"/"+a.RuntimeName] {
+			if err := removeWorkload(ctx, rt, a.RuntimeName); err != nil {
+				return nil, err
+			}
+			delete(owned, ports.ObjectWorkload+"/"+a.RuntimeName)
+		}
 		if owned[ports.ObjectWorkload+"/"+a.RuntimeName] {
 			if err := removeWorkload(ctx, rt, next); err != nil {
 				return nil, err
@@ -422,6 +487,15 @@ func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[str
 			return wr, fmt.Errorf("mount %s: %s %q was not materialized", m.MountPath, kind, target)
 		}
 		wr.Mounts = append(wr.Mounts, ports.Mount{Type: ports.MountBind, Source: dir, Target: m.MountPath, ReadOnly: true})
+	}
+	if proxied(s) {
+		// Behind its proxy a workload publishes nothing and answers to its revision's backend alias;
+		// the proxy holds the host ports and the workload's own alias.
+		rev, _ := strconv.Atoi(lbl[ports.LabelRevision])
+		for i := range wr.Ports {
+			wr.Ports[i].HostPort, wr.Ports[i].HostIP = 0, ""
+		}
+		wr.Aliases = []string{BackendAlias(name, rev)}
 	}
 	if hc := s.HealthCheck; hc != nil {
 		// Durations were validated when the resource was decoded.
@@ -512,7 +586,7 @@ func Delete(ctx context.Context, rt ports.Runtime, home, release string, deleteV
 		}
 	}
 	if home != "" {
-		errs = append(errs, os.RemoveAll(filepath.Join(home, "releases", release)))
+		errs = append(errs, os.RemoveAll(filepath.Join(home, "releases", release)), os.RemoveAll(proxiesDir(home, release)))
 	}
 	return errors.Join(errs...)
 }

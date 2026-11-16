@@ -275,7 +275,7 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 
 // reconcile repairs leftovers of an interrupted replace and, if anything changed, plans again.
 func (s *Service) reconcile(ctx context.Context, rt ports.Runtime, in deployInput, applied []release.AppliedResource, plan deployment.Plan) (deployment.Plan, error) {
-	repaired, err := deployment.Reconcile(ctx, rt, in.Name, applied)
+	repaired, err := deployment.Reconcile(ctx, rt, s.Home, in.Name, applied)
 	if err != nil || len(repaired) == 0 {
 		return plan, err
 	}
@@ -371,8 +371,12 @@ func (s *Service) record(ctx context.Context, op *release.Operation, in deployIn
 	if err := s.Store.SaveOperationSteps(ctx, op.ID, op.Steps); err != nil {
 		return err
 	}
+	runtimeName := c.RuntimeName
+	if runtimeName == "" {
+		runtimeName = deployment.RuntimeName(in.Name, c.Name)
+	}
 	applied := release.AppliedResource{Kind: c.Kind, Name: c.Name, Revision: in.Revision,
-		RuntimeName: deployment.RuntimeName(in.Name, c.Name), Spec: c.Spec, Digest: c.Digest}
+		RuntimeName: runtimeName, Spec: c.Spec, Digest: c.Digest}
 	switch {
 	case st.Status == deployment.StepKept:
 		// The change failed before touching anything; the previous state is still what runs.
@@ -380,7 +384,7 @@ func (s *Service) record(ctx context.Context, op *release.Operation, in deployIn
 		return s.Store.DeleteResource(ctx, in.Name, c.Kind, c.Name)
 	case st.Status == deployment.StepDone:
 		return s.Store.SaveResource(ctx, in.Name, applied)
-	case c.Kind == resource.KindWorkload && c.Spec != nil:
+	case (c.Kind == resource.KindWorkload || c.Kind == deployment.KindProxy) && c.Spec != nil:
 		applied.Digest = ""
 		return s.Store.SaveResource(ctx, in.Name, applied)
 	}

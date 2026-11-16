@@ -55,15 +55,19 @@ func (tr *tracker) onStep(rev int) func(Change, release.Step) error {
 	return func(c Change, st release.Step) error {
 		tr.steps = append(tr.steps, st)
 		k := Key{c.Kind, c.Name}
+		rn := c.RuntimeName
+		if rn == "" {
+			rn = "cache-" + c.Name
+		}
 		switch {
 		case st.Status == StepKept:
 		case c.Action == ActionDelete && st.Status == StepDone:
 			delete(tr.applied, k)
 		case st.Status == StepDone:
-			tr.applied[k] = release.AppliedResource{Kind: c.Kind, Name: c.Name, Revision: rev, RuntimeName: "cache-" + c.Name, Spec: c.Spec, Digest: c.Digest}
+			tr.applied[k] = release.AppliedResource{Kind: c.Kind, Name: c.Name, Revision: rev, RuntimeName: rn, Spec: c.Spec, Digest: c.Digest}
 		default:
 			a := tr.applied[k]
-			a.Kind, a.Name, a.RuntimeName, a.Spec, a.Digest = c.Kind, c.Name, "cache-"+c.Name, c.Spec, ""
+			a.Kind, a.Name, a.RuntimeName, a.Spec, a.Digest = c.Kind, c.Name, rn, c.Spec, ""
 			tr.applied[k] = a
 		}
 		return nil
@@ -421,7 +425,7 @@ func TestReconcile(t *testing.T) {
 	// Both present: the unfinished new container is removed.
 	create("web-app")
 	create("web-app-next")
-	repaired, err := Reconcile(ctx, rt, "web", applied)
+	repaired, err := Reconcile(ctx, rt, t.TempDir(), "web", applied)
 	if err != nil || len(repaired) != 0 || rt.Workloads["web-app-next"] != nil || rt.Workloads["web-app"] == nil {
 		t.Fatalf("both present: %v %v %v", repaired, err, rt.Workloads)
 	}
@@ -431,7 +435,7 @@ func TestReconcile(t *testing.T) {
 		t.Fatal(err)
 	}
 	create("web-app-next")
-	repaired, err = Reconcile(ctx, rt, "web", applied)
+	repaired, err = Reconcile(ctx, rt, t.TempDir(), "web", applied)
 	if err != nil || len(repaired) != 1 || repaired[0].Digest != "" || rt.Workloads["web-app"] == nil {
 		t.Fatalf("only -next: %v %v %v", repaired, err, rt.Workloads)
 	}
