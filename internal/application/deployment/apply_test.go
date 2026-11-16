@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
+	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
@@ -36,15 +37,70 @@ func manifest(port int) []resource.Resource {
 	}
 }
 
-func request(t *testing.T, port int) Request {
-	return Request{Home: t.TempDir(), Release: "cache", Revision: 1, Supported: []string{"docker"}, Resources: manifest(port), Timeout: time.Second}
+// tracker records applied state the way the release service does.
+type tracker struct {
+	applied map[Key]release.AppliedResource
+	steps   []release.Step
 }
 
-func TestApply(t *testing.T) {
-	rt := fakeruntime.New()
-	req := request(t, freePort(t))
-	if err := Apply(context.Background(), rt, req); err != nil {
+func (tr *tracker) list() []release.AppliedResource {
+	var out []release.AppliedResource
+	for _, a := range tr.applied {
+		out = append(out, a)
+	}
+	return out
+}
+
+func (tr *tracker) onStep(rev int) func(Change, release.Step) error {
+	return func(c Change, st release.Step) error {
+		tr.steps = append(tr.steps, st)
+		k := Key{c.Kind, c.Name}
+		switch {
+		case c.Action == ActionDelete && st.Status == StepDone:
+			delete(tr.applied, k)
+		case st.Status == StepDone:
+			tr.applied[k] = release.AppliedResource{Kind: c.Kind, Name: c.Name, Revision: rev, RuntimeName: "cache-" + c.Name, Spec: c.Spec, Digest: c.Digest}
+		default:
+			a := tr.applied[k]
+			a.Kind, a.Name, a.RuntimeName, a.Spec, a.Digest = c.Kind, c.Name, "cache-"+c.Name, c.Spec, ""
+			tr.applied[k] = a
+		}
+		return nil
+	}
+}
+
+type request struct {
+	t   *testing.T
+	rt  *fakeruntime.Runtime
+	tr  *tracker
+	req ExecRequest
+}
+
+func newRequest(t *testing.T, port int) *request {
+	return &request{t: t, rt: fakeruntime.New(), tr: &tracker{applied: map[Key]release.AppliedResource{}},
+		req: ExecRequest{Home: t.TempDir(), Release: "cache", Revision: 1, Supported: []string{"docker"}, Resources: manifest(port), Timeout: time.Second}}
+}
+
+// run plans r.req.Resources against the tracked state and executes it.
+func (r *request) run() error {
+	r.t.Helper()
+	plan, err := Diff("cache", r.req.Resources, r.tr.list())
+	if err != nil {
+		return err
+	}
+	r.req.Plan = plan
+	r.req.OnStep = r.tr.onStep(r.req.Revision)
+	return Execute(context.Background(), r.rt, r.req)
+}
+
+func TestExecuteInstall(t *testing.T) {
+	r := newRequest(t, freePort(t))
+	if err := r.run(); err != nil {
 		t.Fatal(err)
+	}
+	rt := r.rt
+	if len(r.tr.applied) != 5 {
+		t.Fatalf("applied: %v", r.tr.applied)
 	}
 
 	// Image pulled before anything is created; dependencies before the workload.
@@ -80,11 +136,11 @@ func TestApply(t *testing.T) {
 	}
 }
 
-func TestApplyImageFailureCreatesNothing(t *testing.T) {
-	rt := fakeruntime.New()
-	req := request(t, freePort(t))
-	req.Resources[0].Spec.(*resource.WorkloadSpec).Image = "missing/redis:0"
-	err := Apply(context.Background(), rt, req)
+func TestExecuteImageFailureCreatesNothing(t *testing.T) {
+	r := newRequest(t, freePort(t))
+	rt := r.rt
+	r.req.Resources[0].Spec.(*resource.WorkloadSpec).Image = "missing/redis:0"
+	err := r.run()
 	if !errors.Is(err, ports.ErrImageNotFound) {
 		t.Fatalf("want ErrImageNotFound, got %v", err)
 	}
@@ -93,7 +149,7 @@ func TestApplyImageFailureCreatesNothing(t *testing.T) {
 	}
 }
 
-func TestApplyFailures(t *testing.T) {
+func TestExecuteFailures(t *testing.T) {
 	tests := []struct {
 		name  string
 		setup func(*fakeruntime.Runtime)
@@ -105,11 +161,10 @@ func TestApplyFailures(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			rt := fakeruntime.New()
-			tt.setup(rt)
-			req := request(t, freePort(t))
-			req.Timeout = 50 * time.Millisecond
-			err := Apply(context.Background(), rt, req)
+			r := newRequest(t, freePort(t))
+			tt.setup(r.rt)
+			r.req.Timeout = 50 * time.Millisecond
+			err := r.run()
 			if err == nil || !strings.Contains(err.Error(), tt.want) {
 				t.Fatalf("want %q, got %v", tt.want, err)
 			}
@@ -117,26 +172,115 @@ func TestApplyFailures(t *testing.T) {
 	}
 }
 
-func TestApplyExistingWorkloadConflicts(t *testing.T) {
-	rt := fakeruntime.New()
-	req := request(t, freePort(t))
-	if err := Apply(context.Background(), rt, req); err != nil {
+func TestExecuteUpgradeRecreatesOnlyChangedWorkload(t *testing.T) {
+	r := newRequest(t, freePort(t))
+	if err := r.run(); err != nil {
 		t.Fatal(err)
 	}
-	if err := Apply(context.Background(), rt, req); !errors.Is(err, ports.ErrConflict) {
-		t.Fatalf("second apply: want ErrConflict, got %v", err)
+	r.rt.Calls = nil
+	r.req.Revision = 2
+	r.req.Resources = manifest(r.req.Resources[0].Spec.(*resource.WorkloadSpec).Ports[0].HostPort)
+	r.req.Resources[0].Spec.(*resource.WorkloadSpec).Image = "redis:7.2"
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	want := []string{"StopWorkload:cache-redis", "DeleteWorkload:cache-redis", "CreateWorkload:cache-redis", "StartWorkload:cache-redis"}
+	var got []string
+	for _, c := range r.rt.Calls {
+		if !strings.HasPrefix(c, "Info") && !strings.HasPrefix(c, "EnsureImage") && !strings.HasPrefix(c, "Pull") {
+			got = append(got, c)
+		}
+	}
+	if !slices.Equal(got, want) {
+		t.Fatalf("upgrade calls: %v", got)
+	}
+	if r.rt.Workloads["cache-redis"].Request.Labels[ports.LabelRevision] != "2" || r.rt.Workloads["cache-redis"].Request.Image != "redis:7.2" {
+		t.Fatalf("workload not recreated: %+v", r.rt.Workloads["cache-redis"].Request)
+	}
+
+	// Nothing changed: nothing touched.
+	r.rt.Calls = nil
+	r.req.Revision = 3
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range r.rt.Calls {
+		if strings.Contains(c, "Workload") || strings.HasPrefix(c, "Create") {
+			t.Fatalf("no-op upgrade touched the runtime: %v", r.rt.Calls)
+		}
+	}
+}
+
+func TestExecuteFailedUpgradeStopsButKeepsContainer(t *testing.T) {
+	r := newRequest(t, freePort(t))
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	r.req.Revision = 2
+	r.req.Timeout = 50 * time.Millisecond
+	r.req.Resources[0].Spec.(*resource.WorkloadSpec).Image = "redis:7.2"
+	r.rt.Health = ports.HealthUnhealthy
+	if err := r.run(); err == nil || !strings.Contains(err.Error(), "unhealthy") {
+		t.Fatalf("want unhealthy, got %v", err)
+	}
+	w, ok := r.rt.Workloads["cache-redis"]
+	if !ok || w.State != ports.StateExited {
+		t.Fatalf("failed workload should be stopped and kept: %+v", w)
+	}
+	if r.tr.applied[Key{resource.KindWorkload, "redis"}].Digest != "" {
+		t.Fatal("failed workload must be marked for recreation")
+	}
+
+	// "Rollback": the original spec recreates it even though the image matches nothing new.
+	r.rt.Health = ""
+	r.req.Revision = 3
+	r.req.Resources[0].Spec.(*resource.WorkloadSpec).Image = "redis:7.4"
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	if w := r.rt.Workloads["cache-redis"]; w.State != ports.StateRunning || w.Request.Image != "redis:7.4" {
+		t.Fatalf("rollback: %+v", w)
+	}
+}
+
+func TestExecuteRemovesDeletedResources(t *testing.T) {
+	r := newRequest(t, freePort(t))
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	r.req.Revision = 2
+	r.req.Resources = r.req.Resources[1:] // drop the workload
+	r.req.Resources = slices.DeleteFunc(r.req.Resources, func(x resource.Resource) bool { return x.Metadata.Name == "cache" })
+	if err := r.run(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := r.rt.Workloads["cache-redis"]; ok {
+		t.Fatal("removed workload still exists")
+	}
+	if _, ok := r.rt.Volumes["cache-cache"]; ok {
+		t.Fatal("removed volume with retention delete still exists")
+	}
+}
+
+func TestExecuteRefusesForeignNetwork(t *testing.T) {
+	r := newRequest(t, freePort(t))
+	if err := r.rt.CreateNetwork(context.Background(), ports.NetworkRequest{Name: "cache-net"}); err != nil {
+		t.Fatal(err)
+	}
+	if err := r.run(); err == nil || !strings.Contains(err.Error(), "not managed by this release") {
+		t.Fatalf("want ownership error, got %v", err)
 	}
 }
 
 func TestDelete(t *testing.T) {
 	ctx := context.Background()
 	for _, deleteVolumes := range []bool{false, true} {
-		rt := fakeruntime.New()
-		req := request(t, freePort(t))
-		if err := Apply(ctx, rt, req); err != nil {
+		r := newRequest(t, freePort(t))
+		if err := r.run(); err != nil {
 			t.Fatal(err)
 		}
-		if err := Delete(ctx, rt, req.Home, req.Release, deleteVolumes); err != nil {
+		rt := r.rt
+		if err := Delete(ctx, rt, r.req.Home, r.req.Release, deleteVolumes); err != nil {
 			t.Fatal(err)
 		}
 		if len(rt.Workloads) != 0 || len(rt.Networks) != 0 {

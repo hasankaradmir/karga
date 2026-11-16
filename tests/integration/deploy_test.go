@@ -54,19 +54,25 @@ func render(t *testing.T, example, release string, sets ...string) []resource.Re
 	return rs
 }
 
-// deploy applies an example and always removes everything it created, volumes included.
-func deploy(t *testing.T, rt ports.Runtime, example, release string, sets ...string) (deployment.Request, error) {
+// deploy installs an example (plan against nothing applied) and always removes everything it
+// created, volumes included.
+func deploy(t *testing.T, rt ports.Runtime, example, release string, sets ...string) (deployment.ExecRequest, error) {
 	t.Helper()
-	req := deployment.Request{
+	rs := render(t, example, release, sets...)
+	plan, err := deployment.Diff(release, rs, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	req := deployment.ExecRequest{
 		Home: t.TempDir(), Release: release, Revision: 1,
-		Supported: []string{"docker"}, Resources: render(t, example, release, sets...), Timeout: 3 * time.Minute,
+		Supported: []string{"docker"}, Resources: rs, Plan: plan, Timeout: 3 * time.Minute,
 	}
 	t.Cleanup(func() {
 		if err := deployment.Delete(context.Background(), rt, req.Home, release, true); err != nil {
 			t.Errorf("cleanup %s: %v", release, err)
 		}
 	})
-	return req, deployment.Apply(context.Background(), rt, req)
+	return req, deployment.Execute(context.Background(), rt, req)
 }
 
 func managed(t *testing.T, rt ports.Runtime, release string) []ports.Object {

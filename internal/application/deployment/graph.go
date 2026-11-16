@@ -36,9 +36,9 @@ func Order(rs []resource.Resource) ([]resource.Resource, error) {
 	return order(rs, dependencies)
 }
 
-// Reverse returns a reversed copy of rs.
-func Reverse(rs []resource.Resource) []resource.Resource {
-	out := slices.Clone(rs)
+// Reverse returns a reversed copy of s.
+func Reverse[T any](s []T) []T {
+	out := slices.Clone(s)
 	slices.Reverse(out)
 	return out
 }

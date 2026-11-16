@@ -10,23 +10,36 @@ import (
 	"strconv"
 	"time"
 
+	"encoding/json"
+
+	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
-// DefaultTimeout bounds how long Apply waits for workloads to become ready.
+// DefaultTimeout bounds how long Execute waits for workloads to become ready.
 const DefaultTimeout = 5 * time.Minute
 
-// Request describes one deployment of a rendered manifest.
-type Request struct {
+// Step statuses reported to ExecRequest.OnStep.
+const (
+	StepDone   = "done"
+	StepFailed = "failed"
+)
+
+// ExecRequest applies Plan, computed from Resources against the applied state, as revision Revision.
+type ExecRequest struct {
 	Home      string
 	Release   string
 	Revision  int
 	Supported []string
+	// Resources is the full desired manifest (pre-flight and materialization need all of it).
 	Resources []resource.Resource
+	Plan      Plan
 	// Redact receives every secret value before anything is logged.
 	Redact  func(string)
 	Timeout time.Duration
+	// OnStep is called after every runtime step so the caller can record applied state and progress.
+	OnStep func(Change, release.Step) error
 }
 
 // RuntimeName is the runtime object name of a release-local resource name.
@@ -42,16 +55,36 @@ func labels(release string, revision int, kind, name string) map[string]string {
 	}
 }
 
-// Apply creates the manifest's resources in dependency order and waits for workloads to be ready.
-// Images are ensured before anything is created, so a bad image fails without side effects.
-// shortcut: create-only; an existing workload is ErrConflict. Recreate and diff arrive with M3 upgrade.
-func Apply(ctx context.Context, rt ports.Runtime, req Request) error {
+// Execute applies a plan with the recreate strategy (D2):
+//  1. pre-flight, materialize files, and ensure every needed image before touching anything running;
+//  2. delete removed workloads (frees their ports);
+//  3. create and update in dependency order; a workload update is stop, delete, create, start;
+//  4. wait for changed workloads; ones that do not become ready are stopped, not removed (D14);
+//  5. delete removed networks and volumes (volumes only with retention delete).
+func Execute(ctx context.Context, rt ports.Runtime, req ExecRequest) error {
 	if req.Timeout == 0 {
 		req.Timeout = DefaultTimeout
 	}
 	if req.Redact == nil {
 		req.Redact = func(string) {}
 	}
+	if req.OnStep == nil {
+		req.OnStep = func(Change, release.Step) error { return nil }
+	}
+	report := func(c Change, action string, err error) error {
+		st := release.Step{Kind: c.Kind, Name: c.Name, Action: action, Status: StepDone}
+		if err != nil {
+			st.Status, st.Error = StepFailed, err.Error()
+		}
+		if serr := req.OnStep(c, st); serr != nil {
+			return errors.Join(err, serr)
+		}
+		if err != nil {
+			return fmt.Errorf("%s %q: %w", c.Kind, c.Name, err)
+		}
+		return nil
+	}
+
 	info, err := rt.Info(ctx)
 	if err != nil {
 		return err
@@ -59,55 +92,177 @@ func Apply(ctx context.Context, rt ports.Runtime, req Request) error {
 	if err := Preflight(ctx, rt, info, req.Release, req.Supported, req.Resources); err != nil {
 		return err
 	}
-	ordered, err := Order(req.Resources)
+	paths, err := Materialize(req.Home, req.Release, req.Revision, req.Resources, req.Redact)
 	if err != nil {
 		return err
 	}
-	paths, err := Materialize(req.Home, req.Release, req.Revision, ordered, req.Redact)
-	if err != nil {
-		return err
-	}
-	for _, r := range ordered {
-		if w, ok := r.Spec.(*resource.WorkloadSpec); ok {
+	for _, c := range req.Plan.Changes {
+		if w, ok := workloadOf(c); ok && (c.Action == ActionCreate || c.Action == ActionUpdate) {
 			if err := rt.EnsureImage(ctx, w.Image, w.PullPolicy); err != nil {
-				return fmt.Errorf("%s %q: %w", r.Kind, r.Metadata.Name, err)
+				return fmt.Errorf("%s %q: %w", c.Kind, c.Name, err)
+			}
+		}
+	}
+	owned, err := managedObjects(ctx, rt, req.Release)
+	if err != nil {
+		return err
+	}
+
+	for _, c := range req.Plan.Changes {
+		if c.Action == ActionDelete && c.Kind == resource.KindWorkload {
+			if err := report(c, ActionDelete, removeWorkload(ctx, rt, c.Applied.RuntimeName)); err != nil {
+				return err
 			}
 		}
 	}
 
-	var workloads []string
-	for _, r := range ordered {
-		name := RuntimeName(req.Release, r.Metadata.Name)
-		lbl := labels(req.Release, req.Revision, r.Kind, r.Metadata.Name)
-		switch s := r.Spec.(type) {
+	var changed []Change
+	for _, c := range req.Plan.Changes {
+		if c.Action != ActionCreate && c.Action != ActionUpdate {
+			continue
+		}
+		name := RuntimeName(req.Release, c.Name)
+		lbl := labels(req.Release, req.Revision, c.Kind, c.Name)
+		var err error
+		switch s := c.Resource.Spec.(type) {
 		case *resource.NetworkSpec:
-			err = existingOK(rt.CreateNetwork(ctx, ports.NetworkRequest{Name: name, Labels: lbl, Driver: s.Driver, Internal: s.Internal}))
+			err = ownedOK(owned, ports.ObjectNetwork, name,
+				rt.CreateNetwork(ctx, ports.NetworkRequest{Name: name, Labels: lbl, Driver: s.Driver, Internal: s.Internal}))
 		case *resource.VolumeSpec:
 			lbl[ports.LabelRetention] = s.Retention
-			err = existingOK(rt.CreateVolume(ctx, ports.VolumeRequest{Name: name, Labels: lbl, Driver: s.Driver}))
+			err = ownedOK(owned, ports.ObjectVolume, name,
+				rt.CreateVolume(ctx, ports.VolumeRequest{Name: name, Labels: lbl, Driver: s.Driver}))
 		case *resource.WorkloadSpec:
-			var wr ports.WorkloadRequest
-			if wr, err = workloadRequest(req.Release, r.Metadata.Name, s, lbl, paths); err == nil {
-				if err = rt.CreateWorkload(ctx, wr); err == nil {
-					err = rt.StartWorkload(ctx, name)
-				}
-			}
-			workloads = append(workloads, name)
+			err = replaceWorkload(ctx, rt, c, owned, req.Release, s, lbl, paths)
+			changed = append(changed, c)
 		}
-		if err != nil {
-			return fmt.Errorf("%s %q: %w", r.Kind, r.Metadata.Name, err)
+		// Config and Secret have no runtime object: they were materialized above.
+		if err := report(c, c.Action, err); err != nil {
+			return err
 		}
 	}
-	return waitReady(ctx, rt, workloads, req.Timeout)
+
+	if err := waitChanged(ctx, rt, req.Release, changed, req.Timeout, report); err != nil {
+		return err
+	}
+
+	for _, c := range Reverse(req.Plan.Changes) {
+		if c.Action != ActionDelete || c.Kind == resource.KindWorkload {
+			continue
+		}
+		var err error
+		switch c.Kind {
+		case resource.KindNetwork:
+			err = rt.DeleteNetwork(ctx, c.Applied.RuntimeName)
+		case resource.KindVolume:
+			if volumeRetention(c.Applied.Spec) == "delete" {
+				err = rt.DeleteVolume(ctx, c.Applied.RuntimeName)
+			}
+		}
+		if err := report(c, ActionDelete, err); err != nil {
+			return err
+		}
+	}
+	return nil
 }
 
-// existingOK treats an existing network or volume as created: volumes are reused across installs on purpose.
-// shortcut: ownership of an existing object is not checked; M3 compares labels before reusing.
-func existingOK(err error) error {
-	if errors.Is(err, ports.ErrConflict) {
+func workloadOf(c Change) (*resource.WorkloadSpec, bool) {
+	if c.Resource == nil {
+		return nil, false
+	}
+	w, ok := c.Resource.Spec.(*resource.WorkloadSpec)
+	return w, ok
+}
+
+func volumeRetention(spec []byte) string {
+	var v struct {
+		Spec resource.VolumeSpec `json:"spec"`
+	}
+	_ = json.Unmarshal(spec, &v)
+	return v.Spec.Retention
+}
+
+// managedObjects returns "kind/name" of every runtime object labelled as belonging to release.
+func managedObjects(ctx context.Context, rt ports.Runtime, rel string) (map[string]bool, error) {
+	objs, err := rt.ListManaged(ctx, rel)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string]bool{}
+	for _, o := range objs {
+		out[o.Kind+"/"+o.Name] = true
+	}
+	return out, nil
+}
+
+// ownedOK accepts an existing network or volume only if it already belongs to this release
+// (volumes are reused across reinstalls on purpose). Anything else with the name is an error.
+func ownedOK(owned map[string]bool, kind, name string, err error) error {
+	if !errors.Is(err, ports.ErrConflict) {
+		return err
+	}
+	if owned[kind+"/"+name] {
 		return nil
 	}
-	return err
+	return fmt.Errorf("%s %s already exists and is not managed by this release: %w", kind, name, err)
+}
+
+func removeWorkload(ctx context.Context, rt ports.Runtime, name string) error {
+	if err := rt.StopWorkload(ctx, name, stopTimeout); err != nil && !errors.Is(err, ports.ErrNotFound) {
+		return err
+	}
+	return rt.DeleteWorkload(ctx, name)
+}
+
+// replaceWorkload recreates a workload: the old container goes first, so ports and names are free.
+func replaceWorkload(ctx context.Context, rt ports.Runtime, c Change, owned map[string]bool, rel string, s *resource.WorkloadSpec, lbl map[string]string, paths map[Key]string) error {
+	name := RuntimeName(rel, c.Name)
+	if c.Applied != nil {
+		if err := removeWorkload(ctx, rt, c.Applied.RuntimeName); err != nil {
+			return err
+		}
+	}
+	wr, err := workloadRequest(rel, c.Name, s, lbl, paths)
+	if err != nil {
+		return err
+	}
+	err = rt.CreateWorkload(ctx, wr)
+	if errors.Is(err, ports.ErrConflict) && owned[ports.ObjectWorkload+"/"+name] {
+		// Left over from an interrupted operation of this release.
+		if err = removeWorkload(ctx, rt, name); err == nil {
+			err = rt.CreateWorkload(ctx, wr)
+		}
+	}
+	if err != nil {
+		return err
+	}
+	return rt.StartWorkload(ctx, name)
+}
+
+// waitChanged waits for every changed workload. On failure the ones that are not ready are stopped
+// (kept for inspection) and reported as failed, so the next plan recreates them.
+func waitChanged(ctx context.Context, rt ports.Runtime, rel string, changed []Change, timeout time.Duration, report func(Change, string, error) error) error {
+	names := make([]string, len(changed))
+	for i, c := range changed {
+		names[i] = RuntimeName(rel, c.Name)
+	}
+	werr := waitReady(ctx, rt, names, timeout)
+	if werr == nil {
+		return nil
+	}
+	errs := []error{werr}
+	for _, c := range changed {
+		name := RuntimeName(rel, c.Name)
+		st, err := rt.GetWorkload(ctx, name)
+		if err == nil && st.State == ports.StateRunning && st.Health != ports.HealthUnhealthy && st.Health != ports.HealthStarting {
+			continue
+		}
+		if err := rt.StopWorkload(ctx, name, stopTimeout); err != nil && !errors.Is(err, ports.ErrNotFound) {
+			errs = append(errs, err)
+		}
+		_ = report(c, "wait", werr)
+	}
+	return errors.Join(errs...)
 }
 
 func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[string]string, paths map[Key]string) (ports.WorkloadRequest, error) {
