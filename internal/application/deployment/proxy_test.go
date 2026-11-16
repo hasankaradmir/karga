@@ -48,13 +48,15 @@ func TestProxyPlan(t *testing.T) {
 		t.Fatalf("proxy create: %+v", px)
 	}
 
-	// Moving an existing workload behind the proxy recreates it.
-	plain := appliedFrom(t, manifest(6379))
+	// Moving an existing workload behind the proxy recreates it; only the proxy flag differs.
+	notProxied := proxiedManifest(6379)
+	notProxied[0].Spec.(*resource.WorkloadSpec).UpdateStrategy.Proxy = false
+	plain := appliedFrom(t, notProxied)
 	p, err = Diff("cache", proxiedManifest(6379), plain, "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if w := changeOf(t, p, resource.KindWorkload); w.Action != ActionUpdate || w.Label() != "recreate: moving behind the proxy" {
+	if w := changeOf(t, p, resource.KindWorkload); w.Action != ActionUpdate || w.Label() != "recreate: moving behind the proxy" || w.Fields[0].Path != "(proxy placement)" {
 		t.Fatalf("enable: %+v", w)
 	}
 

@@ -171,11 +171,16 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 		default:
 			c.Action, c.Applied = ActionUpdate, &have
 			c.Fields = fieldChanges(k.Kind, have.Spec, want.Spec)
-			if len(c.Fields) == 0 {
-				c.Fields = []FieldChange{{Path: "(mounted Config/Secret content or previous failure)"}}
-			}
-			if w, ok := r.Spec.(*resource.WorkloadSpec); ok {
+			w, isWorkload := r.Spec.(*resource.WorkloadSpec)
+			if isWorkload {
 				c.Strategy, c.StrategyReason = workloadStrategy(w, strategy, hadProxy[k.Name])
+			}
+			if len(c.Fields) == 0 {
+				why := "(mounted Config/Secret content or previous failure)"
+				if isWorkload && proxied(w) != hadProxy[k.Name] {
+					why = "(proxy placement)"
+				}
+				c.Fields = []FieldChange{{Path: why}}
 			}
 			if k.Kind == resource.KindNetwork || k.Kind == resource.KindVolume {
 				errs = append(errs, fmt.Sprintf("changing %s %q is not supported (uninstall the release or rename the resource)", k.Kind, k.Name))
