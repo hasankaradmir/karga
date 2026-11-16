@@ -75,6 +75,8 @@ func (r *Runtime) CreateWorkload(ctx context.Context, req ports.WorkloadRequest)
 		RestartPolicy: container.RestartPolicy{Name: mode},
 		Resources:     container.Resources{Memory: req.MemoryBytes, NanoCPUs: req.MilliCPU * 1_000_000},
 		Sysctls:       req.Sysctls,
+		CapAdd:        req.CapAdd,
+		CapDrop:       req.CapDrop,
 		// Explicit even though these are Docker defaults (tech design §17.5).
 		Privileged: false,
 	}
@@ -106,7 +108,13 @@ func (r *Runtime) CreateWorkload(ctx context.Context, req ports.WorkloadRequest)
 		}
 		host.Mounts = append(host.Mounts, mount.Mount{Type: t, Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
 	}
+	if req.NoNewPrivileges {
+		host.SecurityOpt = []string{"no-new-privileges"}
+	}
 	var netCfg *network.NetworkingConfig
+	if req.HostNetwork {
+		host.NetworkMode = network.NetworkHost
+	}
 	if len(req.Networks) > 0 {
 		host.NetworkMode = container.NetworkMode(req.Networks[0])
 		netCfg = &network.NetworkingConfig{EndpointsConfig: map[string]*network.EndpointSettings{
@@ -214,6 +222,22 @@ func (r *Runtime) ListManaged(ctx context.Context, release string) ([]ports.Obje
 	}
 	for _, v := range vs.Items {
 		out = append(out, ports.Object{Kind: ports.ObjectVolume, Name: v.Name, Labels: v.Labels})
+	}
+	return out, nil
+}
+
+// ListLabeled implements ports.Runtime.
+func (r *Runtime) ListLabeled(ctx context.Context, key string) ([]ports.Object, error) {
+	cs, err := r.c.ContainerList(ctx, client.ContainerListOptions{All: true,
+		Filters: client.Filters{}.Add("label", ports.LabelManaged+"=true").Add("label", key)})
+	if err != nil {
+		return nil, wrap(err, "list workloads")
+	}
+	var out []ports.Object
+	for _, c := range cs.Items {
+		if len(c.Names) > 0 {
+			out = append(out, ports.Object{Kind: ports.ObjectWorkload, Name: strings.TrimPrefix(c.Names[0], "/"), Labels: c.Labels})
+		}
 	}
 	return out, nil
 }

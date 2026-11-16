@@ -276,6 +276,20 @@ func (r *Runtime) ListManaged(_ context.Context, release string) ([]ports.Object
 	return out, nil
 }
 
+// ListLabeled implements ports.Runtime.
+func (r *Runtime) ListLabeled(_ context.Context, key string) ([]ports.Object, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	var out []ports.Object
+	for n, w := range r.Workloads {
+		if _, ok := w.Request.Labels[key]; ok && w.Request.Labels[ports.LabelManaged] == "true" {
+			out = append(out, ports.Object{Kind: ports.ObjectWorkload, Name: n, Labels: maps.Clone(w.Request.Labels)})
+		}
+	}
+	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
+	return out, nil
+}
+
 // PublishedPorts implements ports.Runtime.
 func (r *Runtime) PublishedPorts(context.Context) ([]ports.PublishedPort, error) {
 	r.mu.Lock()

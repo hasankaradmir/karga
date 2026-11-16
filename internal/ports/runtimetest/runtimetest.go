@@ -110,11 +110,15 @@ func Run(t *testing.T, rt ports.Runtime, cfg Config) {
 			HealthCheck: &ports.HealthCheck{
 				Command: cfg.HealthyCommand, Interval: time.Second, Timeout: time.Second, Retries: 3,
 			},
-			MemoryBytes:   64 << 20,
-			MilliCPU:      500,
-			Sysctls:       map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"},
-			RestartPolicy: "never",
+			MemoryBytes:     64 << 20,
+			MilliCPU:        500,
+			Sysctls:         map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"},
+			RestartPolicy:   "never",
+			CapDrop:         []string{"ALL"},
+			CapAdd:          []string{"NET_BIND_SERVICE"},
+			NoNewPrivileges: true,
 		}
+		req.Labels["io.karga.contract"] = "x"
 		must(t, rt.CreateWorkload(ctx, req))
 		t.Cleanup(func() { _ = rt.DeleteWorkload(ctx, req.Name) })
 		if err := rt.CreateWorkload(ctx, req); !errors.Is(err, ports.ErrConflict) {
@@ -134,6 +138,11 @@ func Run(t *testing.T, rt ports.Runtime, cfg Config) {
 			t.Fatalf("labels: %v", st.Labels)
 		}
 		assertListed(t, rt, release, ports.ObjectWorkload, req.Name, true)
+		labeled, err := rt.ListLabeled(ctx, "io.karga.contract")
+		must(t, err)
+		if !slices.ContainsFunc(labeled, func(o ports.Object) bool { return o.Name == req.Name && o.Labels["io.karga.contract"] == "x" }) {
+			t.Fatalf("ListLabeled does not return %s: %+v", req.Name, labeled)
+		}
 
 		pub, err := rt.PublishedPorts(ctx)
 		must(t, err)
@@ -170,7 +179,21 @@ func Run(t *testing.T, rt ports.Runtime, cfg Config) {
 			t.Fatalf("after delete: want ErrNotFound, got %v", err)
 		}
 		must(t, rt.DeleteWorkload(ctx, req.Name))
+
+		req.Name = name("hostnet")
+		hostNetworkCase(t, rt, cfg, req)
 	})
+}
+
+// hostNetworkCase runs a workload in the host network namespace (the gateway's mode).
+func hostNetworkCase(t *testing.T, rt ports.Runtime, cfg Config, req ports.WorkloadRequest) {
+	ctx := context.Background()
+	req.HostNetwork, req.Networks, req.Aliases, req.Ports, req.HealthCheck, req.Sysctls = true, nil, nil, nil, nil, nil
+	must(t, rt.CreateWorkload(ctx, req))
+	t.Cleanup(func() { _ = rt.DeleteWorkload(ctx, req.Name) })
+	must(t, rt.StartWorkload(ctx, req.Name))
+	waitFor(t, rt, req.Name, cfg.Wait, func(s ports.WorkloadStatus) bool { return s.State == ports.StateRunning })
+	must(t, rt.DeleteWorkload(ctx, req.Name))
 }
 
 func waitFor(t *testing.T, rt ports.Runtime, name string, d time.Duration, ok func(ports.WorkloadStatus) bool) ports.WorkloadStatus {

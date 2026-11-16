@@ -76,6 +76,8 @@ type Runtime interface {
 
 	// ListManaged returns every karga-managed object of a release.
 	ListManaged(ctx context.Context, release string) ([]Object, error)
+	// ListLabeled returns every workload, of any release, that carries label key.
+	ListLabeled(ctx context.Context, key string) ([]Object, error)
 	// PublishedPorts returns host ports published by any container.
 	PublishedPorts(ctx context.Context) ([]PublishedPort, error)
 }
@@ -116,7 +118,13 @@ type WorkloadRequest struct {
 	// User overrides the image user ("uid[:gid]"). Empty keeps the image default.
 	User string
 	// Sysctls are namespaced kernel parameters for the container (e.g. net.ipv4.ip_unprivileged_port_start).
-	Sysctls       map[string]string
+	Sysctls map[string]string
+	// HostNetwork runs the container in the host's network namespace; Networks and Ports must be empty.
+	HostNetwork bool
+	// CapAdd and CapDrop change the container's Linux capabilities ("ALL" drops every one).
+	CapAdd, CapDrop []string
+	// NoNewPrivileges blocks privilege gains through setuid binaries.
+	NoNewPrivileges bool
 	Ports         []PortBinding
 	Mounts        []Mount
 	Networks      []string
