@@ -149,10 +149,11 @@ type Mount struct {
 
 // HealthCheck runs Command inside the container.
 type HealthCheck struct {
-	Command  []string
-	Interval time.Duration
-	Timeout  time.Duration
-	Retries  int
+	Command     []string
+	Interval    time.Duration
+	Timeout     time.Duration
+	Retries     int
+	StartPeriod time.Duration
 }
 
 // Workload states and health values.

@@ -27,7 +27,7 @@ func manifest(port int) []resource.Resource {
 				{Volume: "data", MountPath: "/data"},
 				{Config: "conf", MountPath: "/etc/redis"},
 			},
-			HealthCheck: &resource.HealthCheck{Type: "exec", Command: []string{"redis-cli", "ping"}, Interval: "10s", Timeout: "3s", Retries: 3},
+			HealthCheck: &resource.HealthCheck{Type: "exec", Command: []string{"redis-cli", "ping"}, Interval: "10s", Timeout: "3s", Retries: 3, StartPeriod: "5s"},
 			Resources:   &resource.Resources{Memory: "512Mi", CPU: "500m"},
 		}},
 		cfgRes("conf", map[string]string{"redis.conf": "x"}),
@@ -124,7 +124,7 @@ func TestExecuteInstall(t *testing.T) {
 	if w.Ports[0].HostIP != "127.0.0.1" || w.MemoryBytes != 512<<20 || w.MilliCPU != 500 {
 		t.Fatalf("ports/resources: %+v", w)
 	}
-	if w.HealthCheck.Interval != 10*time.Second || w.HealthCheck.Retries != 3 {
+	if w.HealthCheck.Interval != 10*time.Second || w.HealthCheck.Retries != 3 || w.HealthCheck.StartPeriod != 5*time.Second {
 		t.Fatalf("healthcheck: %+v", w.HealthCheck)
 	}
 	if w.Mounts[0] != (ports.Mount{Type: ports.MountVolume, Source: "cache-data", Target: "/data"}) {

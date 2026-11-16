@@ -80,6 +80,7 @@ func (r *Runtime) CreateWorkload(ctx context.Context, req ports.WorkloadRequest)
 	if hc := req.HealthCheck; hc != nil {
 		cfg.Healthcheck = &container.HealthConfig{
 			Test: append([]string{"CMD"}, hc.Command...), Interval: hc.Interval, Timeout: hc.Timeout, Retries: hc.Retries,
+			StartPeriod: hc.StartPeriod,
 		}
 	}
 	for _, p := range req.Ports {

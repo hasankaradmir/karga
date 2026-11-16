@@ -427,7 +427,8 @@ func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[str
 		// Durations were validated when the resource was decoded.
 		interval, _ := time.ParseDuration(hc.Interval)
 		timeout, _ := time.ParseDuration(hc.Timeout)
-		wr.HealthCheck = &ports.HealthCheck{Command: hc.Command, Interval: interval, Timeout: timeout, Retries: hc.Retries}
+		start, _ := time.ParseDuration(hc.StartPeriod)
+		wr.HealthCheck = &ports.HealthCheck{Command: hc.Command, Interval: interval, Timeout: timeout, Retries: hc.Retries, StartPeriod: start}
 	}
 	if r := s.Resources; r != nil {
 		if r.Memory != "" {
