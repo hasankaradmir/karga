@@ -141,7 +141,7 @@ func TestStrategyFlag(t *testing.T) {
 	if out := e.mustRun("upgrade", "w", web, "--set", "content=v2", "--dry-run", "--strategy", "recreate"); !strings.Contains(out, "WORKLOAD web (recreate)") {
 		t.Fatalf("override:\n%s", out)
 	}
-	if out := e.mustRun("upgrade", "w", web, "--set", "content=v2", "--set", "publish=true", "--dry-run"); !strings.Contains(out, "(recreate: publishes hostPort 18080)") {
+	if out := e.mustRun("upgrade", "w", web, "--set", "content=v2", "--set", "publish=true", "--dry-run"); !strings.Contains(out, "(recreate: publishes hostPort 18080; set updateStrategy.proxy: true)") {
 		t.Fatalf("fallback:\n%s", out)
 	}
 	if out := e.mustRun("upgrade", "w", web, "--set", "content=v2"); !strings.Contains(out, "update workload web (replace)") {

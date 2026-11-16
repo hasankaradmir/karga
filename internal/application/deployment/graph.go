@@ -12,6 +12,7 @@ import (
 // kindRank breaks ties between independent resources so the order is stable.
 var kindRank = map[string]int{
 	resource.KindNetwork: 0, resource.KindVolume: 1, resource.KindConfig: 2, resource.KindSecret: 3, resource.KindWorkload: 4,
+	KindProxy: 5,
 }
 
 // dependencies returns the resources r needs to exist first.
