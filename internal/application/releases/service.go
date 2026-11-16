@@ -198,6 +198,8 @@ type deployInput struct {
 	Values        map[string]any
 	Resources     []resource.Resource
 	Revision      int
+	// Strategy overrides the workloads' updateStrategy ("" = use the spec).
+	Strategy string
 	// Existing is the current release row, nil for a new release.
 	Existing *release.Release
 }
@@ -221,7 +223,7 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	plan, err := deployment.Diff(in.Name, in.Resources, applied)
+	plan, err := deployment.Diff(in.Name, in.Resources, applied, in.Strategy)
 	if err != nil {
 		return nil, err
 	}

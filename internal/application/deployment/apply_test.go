@@ -70,10 +70,11 @@ func (tr *tracker) onStep(rev int) func(Change, release.Step) error {
 }
 
 type request struct {
-	t   *testing.T
-	rt  *fakeruntime.Runtime
-	tr  *tracker
-	req ExecRequest
+	strategy string
+	t        *testing.T
+	rt       *fakeruntime.Runtime
+	tr       *tracker
+	req      ExecRequest
 }
 
 func newRequest(t *testing.T, port int) *request {
@@ -84,7 +85,7 @@ func newRequest(t *testing.T, port int) *request {
 // run plans r.req.Resources against the tracked state and executes it.
 func (r *request) run() error {
 	r.t.Helper()
-	plan, err := Diff("cache", r.req.Resources, r.tr.list())
+	plan, err := Diff("cache", r.req.Resources, r.tr.list(), r.strategy)
 	if err != nil {
 		return err
 	}

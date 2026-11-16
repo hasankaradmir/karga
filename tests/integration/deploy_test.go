@@ -59,7 +59,7 @@ func render(t *testing.T, example, release string, sets ...string) []resource.Re
 func deploy(t *testing.T, rt ports.Runtime, example, release string, sets ...string) (deployment.ExecRequest, error) {
 	t.Helper()
 	rs := render(t, example, release, sets...)
-	plan, err := deployment.Diff(release, rs, nil)
+	plan, err := deployment.Diff(release, rs, nil, "")
 	if err != nil {
 		t.Fatal(err)
 	}

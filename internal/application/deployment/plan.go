@@ -27,6 +27,10 @@ type Change struct {
 	Name   string        `json:"name"`
 	Action string        `json:"action"`
 	Fields []FieldChange `json:"fields,omitempty"`
+	// Strategy is how a workload update is applied (recreate or replace); StrategyReason says why
+	// a requested replace fell back to recreate.
+	Strategy       string `json:"strategy,omitempty"`
+	StrategyReason string `json:"strategyReason,omitempty"`
 	// Resource is the desired resource (nil for delete).
 	Resource *resource.Resource `json:"-"`
 	// Spec and Digest describe the desired state to record once applied.
@@ -121,8 +125,12 @@ func Specs(rs []resource.Resource) (map[Key]release.AppliedResource, error) {
 }
 
 // Diff compares the desired manifest with what is applied. Changing a Network or Volume is refused:
-// it would mean recreating it, which breaks attached workloads or destroys data.
-func Diff(releaseName string, desired []resource.Resource, applied []release.AppliedResource) (Plan, error) {
+// it would mean recreating it, which breaks attached workloads or destroys data. strategy overrides
+// the workloads' updateStrategy when not empty.
+func Diff(releaseName string, desired []resource.Resource, applied []release.AppliedResource, strategy string) (Plan, error) {
+	if strategy != "" && strategy != resource.StrategyRecreate && strategy != resource.StrategyReplace {
+		return Plan{}, fmt.Errorf("unknown strategy %q (want recreate or replace)", strategy)
+	}
 	specs, err := Specs(desired)
 	if err != nil {
 		return Plan{}, err
@@ -155,6 +163,9 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 			if len(c.Fields) == 0 {
 				c.Fields = []FieldChange{{Path: "(mounted Config/Secret content or previous failure)"}}
 			}
+			if w, ok := r.Spec.(*resource.WorkloadSpec); ok {
+				c.Strategy, c.StrategyReason = strategyFor(w, strategy)
+			}
 			if k.Kind == resource.KindNetwork || k.Kind == resource.KindVolume {
 				errs = append(errs, fmt.Sprintf("changing %s %q is not supported (uninstall the release or rename the resource)", k.Kind, k.Name))
 			}
@@ -180,6 +191,41 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 		return plan, fmt.Errorf("release %s: %s", releaseName, strings.Join(errs, "; "))
 	}
 	return plan, nil
+}
+
+// strategyFor decides how a workload update is applied. replace runs the new container next to the
+// old one, which is only safe without host ports (two containers cannot bind one), without
+// read-write volumes (two writers on the same data) and with a healthcheck (to know it is ready).
+func strategyFor(w *resource.WorkloadSpec, override string) (string, string) {
+	requested, _ := w.Strategy()
+	if override != "" {
+		requested = override
+	}
+	if requested != resource.StrategyReplace {
+		return resource.StrategyRecreate, ""
+	}
+	for _, p := range w.Ports {
+		if p.HostPort != 0 {
+			return resource.StrategyRecreate, fmt.Sprintf("publishes hostPort %d", p.HostPort)
+		}
+	}
+	for _, m := range w.Mounts {
+		if m.Volume != "" && !m.ReadOnly {
+			return resource.StrategyRecreate, fmt.Sprintf("mounts volume %s read-write", m.Volume)
+		}
+	}
+	if w.HealthCheck == nil {
+		return resource.StrategyRecreate, "no healthCheck to verify readiness"
+	}
+	return resource.StrategyReplace, ""
+}
+
+// Label returns the strategy shown next to a change, e.g. "replace" or "recreate: mounts volume x read-write".
+func (c Change) Label() string {
+	if c.StrategyReason != "" {
+		return c.Strategy + ": " + c.StrategyReason
+	}
+	return c.Strategy
 }
 
 // fieldChanges lists leaf differences between two resource JSON documents. Lists compare as a whole.
@@ -238,7 +284,11 @@ func (p Plan) Print(w io.Writer, releaseName string, from, to int) error {
 	}
 	b.WriteString("\nChanges:\n")
 	for _, c := range p.Changes {
-		fmt.Fprintf(&b, "\n  %s %s\n", strings.ToUpper(c.Kind), c.Name)
+		if c.Strategy != "" {
+			fmt.Fprintf(&b, "\n  %s %s (%s)\n", strings.ToUpper(c.Kind), c.Name, c.Label())
+		} else {
+			fmt.Fprintf(&b, "\n  %s %s\n", strings.ToUpper(c.Kind), c.Name)
+		}
 		switch c.Action {
 		case ActionUpdate:
 			for _, f := range c.Fields {
