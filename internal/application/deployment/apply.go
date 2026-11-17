@@ -604,7 +604,7 @@ func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[str
 		rev, _ := strconv.Atoi(lbl[ports.LabelRevision])
 		wr.Aliases = []string{BackendAlias(name, rev)}
 	}
-	if err := gatewayLabel(&wr, gatewayPorts(s)); err != nil {
+	if err := gatewayLabel(&wr, gatewayPorts(s), paths); err != nil {
 		return wr, err
 	}
 	if hc := s.HealthCheck; hc != nil {

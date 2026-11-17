@@ -67,10 +67,20 @@ type TCPListener struct {
 }
 
 // HTTPListener serves HTTP on Address:Port and routes requests by Host header and path prefix.
+// With Certs it serves HTTPS: each host gets its certificate by SNI. Redirects lists hosts whose
+// plain requests are sent to HTTPS on RedirectPort.
 type HTTPListener struct {
-	Address string
-	Port    int
-	Routes  []HTTPRoute
+	Address      string
+	Port         int
+	Routes       []HTTPRoute
+	Certs        map[string]Cert // host -> certificate files, inside the container
+	Redirects    []string
+	RedirectPort int
+}
+
+// Cert is a certificate chain and private key, as file paths Envoy reads.
+type Cert struct {
+	Chain, Key string
 }
 
 // HTTPRoute sends requests for Host whose path starts with Path to Cluster.

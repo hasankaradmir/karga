@@ -17,8 +17,10 @@ import (
 	dnscommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/common/dns/v3"
 	dnsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dns/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
+	tlsinspectorv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/listener/tls_inspector/v3"
 	hcmv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/http_connection_manager/v3"
 	tcpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
+	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
@@ -93,24 +95,98 @@ func (c Config) Listeners() ([]byte, error) {
 		return nil, err
 	}
 	for _, l := range httpls {
-		name := httpName(l.Address, l.Port)
-		lis, err := filterListener(name, l.Address, l.Port, "envoy.filters.network.http_connection_manager", &hcmv3.HttpConnectionManager{
-			StatPrefix: name,
-			// The gateway sees the real client address and passes it on in x-forwarded-for.
-			UseRemoteAddress: wrapperspb.Bool(true),
-			HttpFilters: []*hcmv3.HttpFilter{{
-				Name: "envoy.filters.http.router", ConfigType: &hcmv3.HttpFilter_TypedConfig{TypedConfig: router},
-			}},
-			RouteSpecifier: &hcmv3.HttpConnectionManager_RouteConfig{RouteConfig: &routev3.RouteConfiguration{
-				Name: name, VirtualHosts: virtualHosts(l.Routes),
-			}},
-		})
+		lis, err := httpListener(l, router)
 		if err != nil {
 			return nil, err
 		}
 		items = append(items, lis)
 	}
 	return resources(items)
+}
+
+func hcm(name string, router *anypb.Any, hosts []*routev3.VirtualHost) *hcmv3.HttpConnectionManager {
+	return &hcmv3.HttpConnectionManager{
+		StatPrefix: name,
+		// The gateway sees the real client address and passes it on in x-forwarded-for.
+		UseRemoteAddress: wrapperspb.Bool(true),
+		HttpFilters: []*hcmv3.HttpFilter{{
+			Name: "envoy.filters.http.router", ConfigType: &hcmv3.HttpFilter_TypedConfig{TypedConfig: router},
+		}},
+		RouteSpecifier: &hcmv3.HttpConnectionManager_RouteConfig{RouteConfig: &routev3.RouteConfiguration{
+			Name: name, VirtualHosts: hosts,
+		}},
+	}
+}
+
+// httpListener renders a plain listener (one filter chain) or a TLS one (a chain per host,
+// selected by SNI, each with its certificate and its routes).
+func httpListener(l HTTPListener, router *anypb.Any) (*listenerv3.Listener, error) {
+	name := httpName(l.Address, l.Port)
+	if len(l.Certs) == 0 {
+		hosts := virtualHosts(l.Routes)
+		for _, h := range slices.Sorted(slices.Values(l.Redirects)) {
+			hosts = append(hosts, redirectHost(h, l.RedirectPort))
+		}
+		return filterListener(name, l.Address, l.Port, "envoy.filters.network.http_connection_manager", hcm(name, router, hosts))
+	}
+	inspector, err := pack(&tlsinspectorv3.TlsInspector{})
+	if err != nil {
+		return nil, err
+	}
+	lis := &listenerv3.Listener{
+		Name:    name,
+		Address: socketAddress(l.Address, l.Port),
+		ListenerFilters: []*listenerv3.ListenerFilter{{
+			Name: "envoy.filters.listener.tls_inspector", ConfigType: &listenerv3.ListenerFilter_TypedConfig{TypedConfig: inspector},
+		}},
+	}
+	for _, host := range slices.Sorted(maps.Keys(l.Certs)) {
+		var routes []HTTPRoute
+		for _, r := range l.Routes {
+			if r.Host == host {
+				routes = append(routes, r)
+			}
+		}
+		cert := l.Certs[host]
+		tlsCtx, err := pack(&tlsv3.DownstreamTlsContext{CommonTlsContext: &tlsv3.CommonTlsContext{
+			TlsCertificates: []*tlsv3.TlsCertificate{{
+				CertificateChain: &corev3.DataSource{Specifier: &corev3.DataSource_Filename{Filename: cert.Chain}},
+				PrivateKey:       &corev3.DataSource{Specifier: &corev3.DataSource_Filename{Filename: cert.Key}},
+			}},
+		}})
+		if err != nil {
+			return nil, err
+		}
+		manager, err := pack(hcm(name, router, virtualHosts(routes)))
+		if err != nil {
+			return nil, err
+		}
+		lis.FilterChains = append(lis.FilterChains, &listenerv3.FilterChain{
+			FilterChainMatch: &listenerv3.FilterChainMatch{ServerNames: []string{host}},
+			TransportSocket: &corev3.TransportSocket{
+				Name: "envoy.transport_sockets.tls", ConfigType: &corev3.TransportSocket_TypedConfig{TypedConfig: tlsCtx},
+			},
+			Filters: []*listenerv3.Filter{{
+				Name: "envoy.filters.network.http_connection_manager", ConfigType: &listenerv3.Filter_TypedConfig{TypedConfig: manager},
+			}},
+		})
+	}
+	return lis, nil
+}
+
+// redirectHost answers every plain request for host with a redirect to HTTPS.
+func redirectHost(host string, port int) *routev3.VirtualHost {
+	redirect := &routev3.RedirectAction{SchemeRewriteSpecifier: &routev3.RedirectAction_HttpsRedirect{HttpsRedirect: true}}
+	if port != 443 {
+		redirect.PortRedirect = uint32(port)
+	}
+	return &routev3.VirtualHost{
+		Name: host + "-https", Domains: []string{host, host + ":*"},
+		Routes: []*routev3.Route{{
+			Match:  &routev3.RouteMatch{PathSpecifier: &routev3.RouteMatch_Prefix{Prefix: "/"}},
+			Action: &routev3.Route_Redirect{Redirect: redirect},
+		}},
+	}
 }
 
 // virtualHosts groups routes by host; within a host longer path prefixes match first.

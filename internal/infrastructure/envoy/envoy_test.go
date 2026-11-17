@@ -22,7 +22,9 @@ var sample = Config{
 		{Host: "app.local", Path: "/", Cluster: "app_web_p3000"},
 		{Host: "app.local", Path: "/api", Cluster: "app_api_p8080"},
 		{Host: "b.local", Path: "/", Cluster: "b_web_p3000"},
-	}}},
+	}, Redirects: []string{"secure.example"}, RedirectPort: 443}, {Address: "0.0.0.0", Port: 443, Routes: []HTTPRoute{
+		{Host: "secure.example", Path: "/", Cluster: "app_web_p3000"},
+	}, Certs: map[string]Cert{"secure.example": {Chain: "/etc/karga-proxy/certs/app_443_secure.example.crt", Key: "/etc/karga-proxy/certs/app_443_secure.example.key"}}}},
 	Clusters: []Cluster{
 		{Name: "db_pg_p5432", Host: "127.0.0.1", Port: 41001},
 		{Name: "web-p8080", Host: "karga-web-r2", Port: 8080, DNS: true},

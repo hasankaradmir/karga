@@ -27,6 +27,95 @@
     },
     {
       "@type": "type.googleapis.com/envoy.config.listener.v3.Listener",
+      "name": "http_0.0.0.0_443",
+      "address": {
+        "socket_address": {
+          "address": "0.0.0.0",
+          "port_value": 443
+        }
+      },
+      "filter_chains": [
+        {
+          "filter_chain_match": {
+            "server_names": [
+              "secure.example"
+            ]
+          },
+          "filters": [
+            {
+              "name": "envoy.filters.network.http_connection_manager",
+              "typed_config": {
+                "@type": "type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager",
+                "stat_prefix": "http_0.0.0.0_443",
+                "route_config": {
+                  "name": "http_0.0.0.0_443",
+                  "virtual_hosts": [
+                    {
+                      "name": "secure.example",
+                      "domains": [
+                        "secure.example",
+                        "secure.example:*"
+                      ],
+                      "routes": [
+                        {
+                          "match": {
+                            "prefix": "/"
+                          },
+                          "route": {
+                            "cluster": "app_web_p3000",
+                            "retry_policy": {
+                              "retry_on": "connect-failure",
+                              "num_retries": 2
+                            }
+                          }
+                        }
+                      ]
+                    }
+                  ]
+                },
+                "http_filters": [
+                  {
+                    "name": "envoy.filters.http.router",
+                    "typed_config": {
+                      "@type": "type.googleapis.com/envoy.extensions.filters.http.router.v3.Router"
+                    }
+                  }
+                ],
+                "use_remote_address": true
+              }
+            }
+          ],
+          "transport_socket": {
+            "name": "envoy.transport_sockets.tls",
+            "typed_config": {
+              "@type": "type.googleapis.com/envoy.extensions.transport_sockets.tls.v3.DownstreamTlsContext",
+              "common_tls_context": {
+                "tls_certificates": [
+                  {
+                    "certificate_chain": {
+                      "filename": "/etc/karga-proxy/certs/app_443_secure.example.crt"
+                    },
+                    "private_key": {
+                      "filename": "/etc/karga-proxy/certs/app_443_secure.example.key"
+                    }
+                  }
+                ]
+              }
+            }
+          }
+        }
+      ],
+      "listener_filters": [
+        {
+          "name": "envoy.filters.listener.tls_inspector",
+          "typed_config": {
+            "@type": "type.googleapis.com/envoy.extensions.filters.listener.tls_inspector.v3.TlsInspector"
+          }
+        }
+      ]
+    },
+    {
+      "@type": "type.googleapis.com/envoy.config.listener.v3.Listener",
       "name": "http_0.0.0.0_80",
       "address": {
         "socket_address": {
@@ -95,6 +184,23 @@
                               "retry_on": "connect-failure",
                               "num_retries": 2
                             }
+                          }
+                        }
+                      ]
+                    },
+                    {
+                      "name": "secure.example-https",
+                      "domains": [
+                        "secure.example",
+                        "secure.example:*"
+                      ],
+                      "routes": [
+                        {
+                          "match": {
+                            "prefix": "/"
+                          },
+                          "redirect": {
+                            "https_redirect": true
                           }
                         }
                       ]

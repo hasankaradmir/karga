@@ -19,3 +19,7 @@ second: false
 echoPort: 0
 # drain is the replace drain timeout.
 drain: 2s
+# tls.cert/tls.key (PEM) serve the route as HTTPS on port; plain HTTP on 80 redirects to it.
+tls:
+  cert: ""
+  key: ""
