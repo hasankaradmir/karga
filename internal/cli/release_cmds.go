@@ -530,3 +530,48 @@ func newLogsCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&req.Gateway, "gateway", false, "the host gateway")
 	return cmd
 }
+
+func newVolumeCmd(a *app) *cobra.Command {
+	cmd := &cobra.Command{Use: "volume", Short: "Back up and restore a release's volumes"}
+	var backup releases.VolumeBackupRequest
+	b := &cobra.Command{
+		Use:   "backup <release> <volume> <file.tar.gz>",
+		Short: "Copy a volume's files to a backup file (0600, must not exist)",
+		Long: "Copy a volume's files to a gzipped tar through a workload that mounts it. By default the copy is\n" +
+			"taken while the workloads run; --stop stops them meanwhile for a consistent copy. For databases\n" +
+			"prefer --stop or the database's own dump tool.",
+		Args: cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			backup.Release, backup.Volume, backup.File = args[0], args[1], args[2]
+			return a.withService(cmd.Context(), func(s *releases.Service) error {
+				if err := s.BackupVolume(cmd.Context(), backup); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(a.stdout, "volume %s of %s written to %s\n", backup.Volume, backup.Release, backup.File)
+				return err
+			})
+		},
+	}
+	b.Flags().BoolVar(&backup.Stop, "stop", false, "stop the workloads mounting the volume during the copy")
+	var restore releases.VolumeRestoreRequest
+	r := &cobra.Command{
+		Use:   "restore <release> <volume> <file.tar.gz>",
+		Short: "Write a backup into a volume (its workloads are stopped meanwhile)",
+		Long: "Write a backup into a volume. The workloads mounting it are stopped during the copy and started\n" +
+			"again. Files in the backup overwrite files of the same name; other files in the volume are kept.",
+		Args: cobra.ExactArgs(3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			restore.Release, restore.Volume, restore.File = args[0], args[1], args[2]
+			return a.withService(cmd.Context(), func(s *releases.Service) error {
+				if err := s.RestoreVolume(cmd.Context(), restore); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(a.stdout, "volume %s of %s restored from %s\n", restore.Volume, restore.Release, restore.File)
+				return err
+			})
+		},
+	}
+	r.Flags().BoolVar(&restore.Force, "force", false, "restore a backup taken from another volume or release")
+	cmd.AddCommand(b, r)
+	return cmd
+}

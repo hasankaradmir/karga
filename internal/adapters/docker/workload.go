@@ -281,6 +281,23 @@ func (r *Runtime) Logs(ctx context.Context, name string, tail int, follow bool, 
 	return nil
 }
 
+// ExportPath implements ports.Runtime.
+func (r *Runtime) ExportPath(ctx context.Context, workload, path string, w io.Writer) error {
+	res, err := r.c.CopyFromContainer(ctx, workload, client.CopyFromContainerOptions{SourcePath: path})
+	if err != nil {
+		return wrap(err, fmt.Sprintf("copy %s from %s", path, workload))
+	}
+	defer func() { _ = res.Content.Close() }()
+	_, err = io.Copy(w, res.Content)
+	return err
+}
+
+// ImportPath implements ports.Runtime.
+func (r *Runtime) ImportPath(ctx context.Context, workload, dir string, rd io.Reader) error {
+	_, err := r.c.CopyToContainer(ctx, workload, client.CopyToContainerOptions{DestinationPath: dir, Content: rd, CopyUIDGID: true})
+	return wrap(err, fmt.Sprintf("copy into %s of %s", dir, workload))
+}
+
 // ListLabeled implements ports.Runtime.
 func (r *Runtime) ListLabeled(ctx context.Context, key string) ([]ports.Object, error) {
 	cs, err := r.c.ContainerList(ctx, client.ContainerListOptions{All: true,

@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -222,5 +223,34 @@ func TestStatusShowsRestartsAndOOM(t *testing.T) {
 	out := e.mustRun("status", "w")
 	if !strings.Contains(out, "RESTARTS") || !strings.Contains(out, "3") || !strings.Contains(out, "oom-killed") {
 		t.Fatalf("status:\n%s", out)
+	}
+}
+
+func TestVolumeBackupRestore(t *testing.T) {
+	e := newCLIEnv(t)
+	e.mustRun("install", "r", redis, "--set", "network.port="+e.port)
+	e.rt.Files = map[string]map[string][]byte{"r-redis": {"/data/dump.rdb": []byte("snapshot"), "/data/appendonly/a.aof": []byte("log")}}
+	file := filepath.Join(t.TempDir(), "data.tar.gz")
+
+	if out := e.mustRun("volume", "backup", "r", "redis-data", file, "--stop"); !strings.Contains(out, "written to") {
+		t.Fatalf("backup: %s", out)
+	}
+	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0o600 {
+		t.Fatalf("backup file: %v %v", info, err)
+	}
+	if w := e.rt.Workloads["r-redis"]; w.State != ports.StateRunning {
+		t.Fatalf("--stop must start the workload again: %s", w.State)
+	}
+	if _, err := e.run("volume", "backup", "r", "redis-data", file); err == nil {
+		t.Fatal("backup over an existing file must fail")
+	}
+
+	e.rt.Files["r-redis"] = map[string][]byte{}
+	e.mustRun("volume", "restore", "r", "redis-data", file)
+	if got := e.rt.Files["r-redis"]; string(got["/data/dump.rdb"]) != "snapshot" || string(got["/data/appendonly/a.aof"]) != "log" {
+		t.Fatalf("restored files: %v", got)
+	}
+	if _, err := e.run("volume", "backup", "r", "nope", file+"2"); err == nil || !strings.Contains(err.Error(), `no volume "nope"`) {
+		t.Fatalf("unknown volume: %v", err)
 	}
 }

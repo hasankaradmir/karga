@@ -2,10 +2,13 @@
 package runtimetest
 
 import (
+	"archive/tar"
+	"bytes"
 	"context"
 	"crypto/rand"
 	"encoding/hex"
 	"errors"
+	"io"
 	"net"
 	"slices"
 	"strings"
@@ -202,7 +205,40 @@ func Run(t *testing.T, rt ports.Runtime, cfg Config) {
 
 		req.Name = name("hostnet")
 		hostNetworkCase(t, rt, cfg, req)
+		req.Name = name("copy")
+		copyCase(t, rt, cfg, req)
 	})
+}
+
+// copyCase imports a file into a stopped workload and exports it again (volume backup's mechanism).
+func copyCase(t *testing.T, rt ports.Runtime, cfg Config, req ports.WorkloadRequest) {
+	ctx := context.Background()
+	req.ReadOnlyRootfs, req.Tmpfs = false, nil
+	must(t, rt.CreateWorkload(ctx, req))
+	t.Cleanup(func() { _ = rt.DeleteWorkload(ctx, req.Name) })
+	var in bytes.Buffer
+	tw := tar.NewWriter(&in)
+	must(t, tw.WriteHeader(&tar.Header{Name: "karga-copy/hello.txt", Mode: 0o644, Size: 2}))
+	_, _ = tw.Write([]byte("hi"))
+	must(t, tw.Close())
+	must(t, rt.ImportPath(ctx, req.Name, "/", &in))
+	var out bytes.Buffer
+	must(t, rt.ExportPath(ctx, req.Name, "/karga-copy", &out))
+	tr := tar.NewReader(&out)
+	for {
+		h, err := tr.Next()
+		if err != nil {
+			t.Fatalf("hello.txt not exported: %v", err)
+		}
+		if h.Name == "karga-copy/hello.txt" {
+			data, _ := io.ReadAll(tr)
+			if string(data) != "hi" {
+				t.Fatalf("exported %q", data)
+			}
+			break
+		}
+	}
+	must(t, rt.DeleteWorkload(ctx, req.Name))
 }
 
 // hostNetworkCase runs a workload in the host network namespace (the gateway's mode).

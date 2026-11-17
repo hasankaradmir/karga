@@ -197,6 +197,24 @@ func TestRedisLifecycle(t *testing.T) {
 	if got := redis(t, port, "SET e2e kept"); !strings.HasPrefix(got, "+OK") {
 		t.Fatalf("SET: %q", got)
 	}
+
+	// 3b. Volume backup and restore: the key comes back after the data is wiped.
+	backup := filepath.Join(t.TempDir(), "redis-data.tar.gz")
+	redis(t, port, "SAVE")
+	if out := e.run("volume", "backup", rel, "redis-data", backup, "--stop"); !strings.Contains(out, "written to") {
+		t.Fatalf("volume backup:\n%s", out)
+	}
+	redis(t, port, "FLUSHALL")
+	redis(t, port, "SAVE")
+	if got := redis(t, port, "GET e2e"); !strings.HasPrefix(got, "$-1") {
+		t.Fatalf("data not wiped: %q", got)
+	}
+	if out := e.run("volume", "restore", rel, "redis-data", backup); !strings.Contains(out, "restored from") {
+		t.Fatalf("volume restore:\n%s", out)
+	}
+	if got := redis(t, port, "GET e2e"); !strings.Contains(got, "kept") {
+		t.Fatalf("key after restore: %q", got)
+	}
 	// Docker publishes the port itself, or (Linux gateway) only a loopback upstream: never on 0.0.0.0.
 	if out, _ := exec.Command("docker", "port", rel+"-redis").Output(); !strings.Contains(string(out), "127.0.0.1:") || strings.Contains(string(out), "0.0.0.0") {
 		t.Fatalf("published ports: %s", out)

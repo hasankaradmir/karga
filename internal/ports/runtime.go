@@ -83,6 +83,11 @@ type Runtime interface {
 	// Logs writes the last tail lines (all with tail < 0) a workload wrote to stdout and stderr to w.
 	// With follow it keeps writing new lines until ctx is done.
 	Logs(ctx context.Context, name string, tail int, follow bool, w io.Writer) error
+	// ExportPath writes path of a workload (running or stopped) as a tar stream whose entries are
+	// prefixed with the base name of path.
+	ExportPath(ctx context.Context, workload, path string, w io.Writer) error
+	// ImportPath extracts a tar stream into dir of a workload, keeping owners and modes.
+	ImportPath(ctx context.Context, workload, dir string, r io.Reader) error
 	// ListLabeled returns every workload, of any release, that carries label key.
 	ListLabeled(ctx context.Context, key string) ([]Object, error)
 	// PublishedPorts returns host ports published by any container.

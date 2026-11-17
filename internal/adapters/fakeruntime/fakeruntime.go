@@ -2,10 +2,13 @@
 package fakeruntime
 
 import (
+	"archive/tar"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"maps"
+	pathpkg "path"
 	"slices"
 	"sort"
 	"strings"
@@ -32,6 +35,8 @@ type Runtime struct {
 	Capabilities []string
 	// Output is what Logs returns for a workload.
 	Output map[string]string
+	// Files holds file contents by workload and absolute path, for ExportPath and ImportPath.
+	Files map[string]map[string][]byte
 }
 
 // Workload is a fake container. Aliases maps each attached network to the workload's DNS aliases.
@@ -307,6 +312,73 @@ func (r *Runtime) Logs(_ context.Context, name string, tail int, _ bool, w io.Wr
 	}
 	_, err := io.WriteString(w, strings.Join(lines, ""))
 	return err
+}
+
+// ExportPath implements ports.Runtime: files below path, as tar entries prefixed with its base name.
+func (r *Runtime) ExportPath(_ context.Context, workload, path string, w io.Writer) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.call("ExportPath", workload); err != nil {
+		return err
+	}
+	if _, ok := r.Workloads[workload]; !ok {
+		return fmt.Errorf("workload %s: %w", workload, ports.ErrNotFound)
+	}
+	path = strings.TrimSuffix(path, "/")
+	tw := tar.NewWriter(w)
+	for _, name := range slices.Sorted(maps.Keys(r.Files[workload])) {
+		rel, ok := strings.CutPrefix(name, path+"/")
+		if !ok {
+			continue
+		}
+		data := r.Files[workload][name]
+		if err := tw.WriteHeader(&tar.Header{Name: pathpkg.Base(path) + "/" + rel, Mode: 0o644, Size: int64(len(data))}); err != nil {
+			return err
+		}
+		if _, err := tw.Write(data); err != nil {
+			return err
+		}
+	}
+	return tw.Close()
+}
+
+// ImportPath implements ports.Runtime: tar entries become files below dir.
+func (r *Runtime) ImportPath(_ context.Context, workload, dir string, rd io.Reader) error {
+	tr := tar.NewReader(rd)
+	files := map[string][]byte{}
+	for {
+		h, err := tr.Next()
+		if errors.Is(err, io.EOF) {
+			break
+		}
+		if err != nil {
+			return err
+		}
+		if h.Typeflag == tar.TypeDir {
+			continue
+		}
+		data, err := io.ReadAll(tr)
+		if err != nil {
+			return err
+		}
+		files[pathpkg.Join(dir, h.Name)] = data
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if err := r.call("ImportPath", workload); err != nil {
+		return err
+	}
+	if _, ok := r.Workloads[workload]; !ok {
+		return fmt.Errorf("workload %s: %w", workload, ports.ErrNotFound)
+	}
+	if r.Files == nil {
+		r.Files = map[string]map[string][]byte{}
+	}
+	if r.Files[workload] == nil {
+		r.Files[workload] = map[string][]byte{}
+	}
+	maps.Copy(r.Files[workload], files)
+	return nil
 }
 
 // ListLabeled implements ports.Runtime.
