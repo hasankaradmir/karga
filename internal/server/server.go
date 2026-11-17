@@ -143,12 +143,15 @@ func (s *Server) Serve(ctx context.Context, l net.Listener, grace time.Duration)
 	hs := &http.Server{Handler: api.NewServer(s.Service, version.Current().Version), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- hs.Serve(l) }()
+	// Operations a stopped karga-server left running are finished first; then the reconciler starts.
 	loopDone := make(chan struct{})
-	if s.Loop != nil {
-		go func() { s.Loop.Run(ctx); close(loopDone) }()
-	} else {
-		close(loopDone)
-	}
+	go func() {
+		defer close(loopDone)
+		s.Service.Resume(context.WithoutCancel(ctx))
+		if s.Loop != nil && ctx.Err() == nil {
+			s.Loop.Run(ctx)
+		}
+	}()
 	s.cfg.Log.Info("karga-server listening", "socket", s.cfg.Socket, "home", s.cfg.Home, "version", version.Current().Version)
 	select {
 	case err := <-errc:

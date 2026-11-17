@@ -212,7 +212,13 @@ func TestInterruptedOperation(t *testing.T) {
 		}
 	}
 
-	begin(e.svc.PID) // this very process: alive
+	// Another process that is alive. One with this process's PID is from an earlier process: stale.
+	live := exec.Command("sleep", "60")
+	if err := live.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = live.Process.Kill(); _ = live.Wait() })
+	begin(live.Process.Pid)
 	if _, err := e.upgrade("image.tag=7.2"); !errors.Is(err, ErrLocked) {
 		t.Fatalf("live lock: want ErrLocked, got %v", err)
 	}

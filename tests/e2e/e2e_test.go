@@ -53,6 +53,8 @@ type env struct {
 	t      *testing.T
 	home   string
 	socket string
+	srv    *exec.Cmd
+	log    *os.File
 }
 
 // newEnv starts a karga-server with its own KARGA_HOME and socket; the CLI connects to it.
@@ -63,36 +65,50 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	e := &env{t: t, home: t.TempDir(), socket: filepath.Join(dir, "s.sock")}
-	srv := exec.Command(kargaServer, "--home", e.home, "--socket", e.socket)
-	log, err := os.Create(filepath.Join(e.home, "server.log"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	srv.Stdout, srv.Stderr = log, log
-	if err := srv.Start(); err != nil {
+	if e.log, err = os.Create(filepath.Join(e.home, "server.log")); err != nil {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() {
-		_ = srv.Process.Signal(syscall.SIGTERM)
-		_ = srv.Wait()
-		_ = log.Close()
+		e.stop(syscall.SIGTERM)
+		_ = e.log.Close()
 		if t.Failed() {
 			b, _ := os.ReadFile(filepath.Join(e.home, "server.log"))
 			t.Logf("karga-server log:\n%s", b)
 		}
 		_ = os.RemoveAll(dir)
 	})
+	e.start()
+	return e
+}
+
+// start runs karga-server and waits until it answers.
+func (e *env) start() {
+	e.t.Helper()
+	e.srv = exec.Command(kargaServer, "--home", e.home, "--socket", e.socket)
+	e.srv.Stdout, e.srv.Stderr = e.log, e.log
+	if err := e.srv.Start(); err != nil {
+		e.t.Fatal(err)
+	}
 	deadline := time.Now().Add(15 * time.Second)
 	for {
 		if out, err := e.try("version"); err == nil && !strings.Contains(out, "not running") {
-			break
+			return
 		}
 		if time.Now().After(deadline) {
-			t.Fatal("karga-server did not start")
+			e.t.Fatal("karga-server did not start")
 		}
 		time.Sleep(100 * time.Millisecond)
 	}
-	return e
+}
+
+// stop sends sig to karga-server and waits for it to exit.
+func (e *env) stop(sig syscall.Signal) {
+	if e.srv == nil {
+		return
+	}
+	_ = e.srv.Process.Signal(sig)
+	_ = e.srv.Wait()
+	e.srv = nil
 }
 
 // run executes karga and fails the test on error.
@@ -337,5 +353,58 @@ func TestPostgresSecretStaysOutOfDocker(t *testing.T) {
 	}
 	if out := e.run("get", "values", rel, "--all"); strings.Contains(out, password) || !strings.Contains(out, "<redacted>") {
 		t.Fatalf("get values:\n%s", out)
+	}
+}
+
+// TestServerRestartResumesAnUpgrade kills karga-server in the middle of an upgrade: when it runs
+// again it finishes the upgrade, without a new revision.
+func TestServerRestartResumesAnUpgrade(t *testing.T) {
+	e := newEnv(t)
+	rel := releaseName("e2e-resume")
+	e.cleanup(rel)
+	e.run("install", rel, "../testdata/redis", "--set", "service.enabled=false")
+
+	up := exec.Command(karga, "upgrade", rel, "../testdata/redis", "--set", "service.enabled=false", "--set", "image.tag=7.4-alpine")
+	up.Env = append(os.Environ(), "KARGA_SOCKET="+e.socket)
+	stderr, err := up.StderrPipe()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := up.Start(); err != nil {
+		t.Fatal(err)
+	}
+	// The first progress line: the revision is recorded and the executor is working.
+	if !bufio.NewScanner(stderr).Scan() {
+		t.Fatal("no progress from the upgrade")
+	}
+	e.stop(syscall.SIGKILL)
+	if err := up.Wait(); err == nil {
+		t.Fatal("the upgrade's client should see karga-server go away")
+	}
+
+	e.start()
+	deadline := time.Now().Add(2 * time.Minute)
+	for {
+		st, actual := status(t, e, rel)
+		if st == "deployed" && actual["Workload"] == "running/healthy" {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("not resumed: %s %v", st, actual)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+	var revs []struct {
+		Number int    `json:"number"`
+		Status string `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(e.run("history", rel, "-o", "json")), &revs); err != nil || len(revs) != 2 || revs[1].Status != "deployed" {
+		t.Fatalf("history: %+v %v", revs, err)
+	}
+	if out := e.run("events", rel); !strings.Contains(out, "resume") || !strings.Contains(out, "aborted") {
+		t.Fatalf("events:\n%s", out)
+	}
+	if img, _ := exec.Command("docker", "inspect", "-f", "{{.Config.Image}}", rel+"-redis").Output(); strings.TrimSpace(string(img)) != "redis:7.4-alpine" {
+		t.Fatalf("image after resume: %q", img)
 	}
 }

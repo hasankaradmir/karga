@@ -122,7 +122,9 @@ func (s *Service) beginLocked(ctx context.Context, rel, typ string, revision int
 	op := release.Operation{Release: rel, Type: typ, Revision: revision, Status: release.OperationRunning,
 		PID: s.PID, Hostname: s.Hostname, StartedAt: s.Now()}
 	id, err := s.Store.BeginOperation(ctx, op, func(running release.Operation) error {
-		if running.Hostname == s.Hostname && processAlive(running.PID) {
+		// Under the release mutex no operation of this process runs: one with its PID is from an
+		// earlier process that got the same PID (a container's PID 1).
+		if running.Hostname == s.Hostname && running.PID != s.PID && processAlive(running.PID) {
 			return fmt.Errorf("%w: %s", ErrLocked, describe(running))
 		}
 		if !force {
@@ -285,6 +287,8 @@ type deployInput struct {
 	Existing *release.Release
 	// Notes is the rendered NOTES.txt (writeOnly values redacted).
 	Notes string
+	// resumed deploys a revision that is already recorded, for an operation a stopped karga-server left.
+	resumed bool
 }
 
 func (s *Service) nextRevision(ctx context.Context, name string) (int, error) {
@@ -358,7 +362,11 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 			in.Type, strings.Join(gone, ", "))
 	}
 
-	op, err := s.begin(ctx, in.Name, in.Type, in.Revision, in.Force)
+	opType := in.Type
+	if in.resumed {
+		opType = ResumeOperation
+	}
+	op, err := s.begin(ctx, in.Name, opType, in.Revision, in.Force)
 	if err != nil {
 		return nil, err
 	}
@@ -530,7 +538,8 @@ func (s *Service) run(ctx context.Context, rt ports.Runtime, op *release.Operati
 	if err != nil {
 		return err
 	}
-	if err := s.Store.CreateRevision(ctx, release.Revision{
+	// A resumed operation's revision is already recorded.
+	if err := s.createRevision(ctx, in, release.Revision{
 		Release: in.Name, Number: in.Revision, PackageName: in.Package.Name, PackageVersion: in.Package.Version,
 		RuntimeSupported: in.Package.Runtime.Supported, PackageDigest: in.PackageDigest, ValuesDigest: valuesDigest, ManifestDigest: manifestDigest,
 		Values: values.Mask(in.Overrides, in.SecretPaths), ValuesAll: values.Mask(in.Values, in.SecretPaths), Manifest: manifest,
@@ -565,6 +574,13 @@ func (s *Service) run(ctx context.Context, rt ports.Runtime, op *release.Operati
 	return errors.Join(
 		s.Store.UpdateRevisionStatus(bg, in.Name, in.Revision, release.RevisionDeployed, in.Description),
 		s.Store.SaveRelease(bg, rel))
+}
+
+func (s *Service) createRevision(ctx context.Context, in deployInput, rev release.Revision) error {
+	if in.resumed {
+		return nil
+	}
+	return s.Store.CreateRevision(ctx, rev)
 }
 
 func titled(t string) string { return strings.ToUpper(t[:1]) + t[1:] }

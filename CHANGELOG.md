@@ -24,6 +24,9 @@ First release.
   hand-changed containers are recreated, stopped ones started, unhealthy ones restarted, without a
   new revision. `karga reconcile`, `karga pause|resume` and `karga events`; `karga status` shows the
   last repair and what it gave up on.
+- Operations go on when the CLI is interrupted (Ctrl-C, a lost connection); the CLI says how to
+  follow them. A karga-server that is killed mid-operation finishes it when it starts again
+  (`resume` in `karga events`).
 - Linux only: without karga's gateway and release proxy (macOS, a remote Docker host) a plan with
   Services is refused. Upgrading an installed release with its new package recreates its workloads
   once.

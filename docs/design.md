@@ -131,7 +131,11 @@ Opening and migrating hold `karga.db.lock`; before migrating an existing databas
 to `karga.db.bak-v<n>` and refuses a database written by a newer karga.
 
 Every mutating command records an operation first. An operation whose process is alive on this
-host locks the release; one whose process is gone is aborted only with `--force`. A failed apply
+host locks the release; one whose process is gone is aborted only with `--force`. Operations do
+not depend on their client's connection. When karga-server starts it resumes the operations it
+left running: install, upgrade and rollback deploy their recorded revision again (the plan skips
+what is done; no new revision), uninstall runs again keeping volumes and history, others are
+aborted. The finishing operation is recorded as `resume`. A failed apply
 marks the revision failed; an install that failed before creating anything removes the release; if nothing that was running changed (an image that cannot be pulled, an
 unhealthy new container in a replace), the release keeps its status. Rollback re-applies a stored
 revision as a new revision. `--history-max` (default 10) prunes old revisions.

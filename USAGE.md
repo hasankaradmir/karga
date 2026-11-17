@@ -88,6 +88,15 @@ Error: karga-server is not running (no server on /run/karga/karga.sock): start i
 `create`, `lint`, `template`, `show`, `completion` and `version` work without it. `--socket` or
 `KARGA_SOCKET` point the CLI at another socket.
 
+Operations run in the server, not in the CLI. Ctrl-C (or a lost connection) stops only the
+progress output: the operation goes on to its end, and `karga events -f <release>` follows it. When
+the server stops (`systemctl stop`, a reboot) it waits up to 5 minutes for running operations. If
+it is killed in the middle of one, it finishes the operation when it starts again: an install,
+upgrade or rollback deploys its revision again (steps already done are skipped, no new revision),
+an uninstall runs again keeping volumes and history, and other operations (volume backup or
+restore, a repair) are aborted. `karga events` shows the interrupted operation as `aborted` and
+the one that finished it as `resume`.
+
 ### From source
 
 ```console
@@ -658,7 +667,7 @@ machine-readable output for every read command.
 | `image ... was not found in its registry` | Wrong repository or tag; nothing running changed. |
 | `workload X is unhealthy: http check on ... failed` | The application did not answer its health check; `karga logs` the stopped container. |
 | `another operation is running on this release` | Another karga command works on the release; wait for it. |
-| `a previous operation on this release was interrupted` | A karga process died mid-operation; check `karga status`, then rerun with `--force`. |
+| `a previous operation on this release was interrupted` | An operation was left by a process that is gone (karga-server finishes its own when it starts); check `karga status`, then rerun with `--force`. |
 | `gateway: proxy does not route to ... : <reason>` | The gateway did not accept or reach the new backend; the reason (and Envoy's own message, if it refused the configuration) follows. |
 | `services ... need karga's gateway and release proxy (Linux with a local Docker)` | karga runs on Linux with a local Docker daemon. |
 | `karga-server is not running` | Start it: `sudo systemctl start karga-server`; see `journalctl -u karga-server`. |
