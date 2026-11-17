@@ -215,3 +215,22 @@ func TestBackupAndSchemaGuards(t *testing.T) {
 		t.Fatalf("no backup before migrating: %v %v", info, err)
 	}
 }
+
+func TestConcurrentOpenMigratesOnce(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "karga.db")
+	errs := make(chan error, 8)
+	for range 8 {
+		go func() {
+			s, err := Open(context.Background(), path)
+			if err == nil {
+				_ = s.Close()
+			}
+			errs <- err
+		}()
+	}
+	for range 8 {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent open: %v", err)
+		}
+	}
+}

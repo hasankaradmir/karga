@@ -13,6 +13,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"syscall"
 	"time"
 
 	// Pure-Go SQLite driver, registered as "sqlite".
@@ -36,14 +37,24 @@ type Store struct {
 var _ ports.StateStore = (*Store)(nil)
 
 // Open opens (creating if needed) the database at path with mode 0600 and applies migrations.
+// Opening and migrating hold <path>.lock: several karga processes may open a new database at once,
+// and SQLite's switch to WAL does not wait for a busy database.
 func Open(ctx context.Context, path string) (*Store, error) {
+	lock, err := os.OpenFile(path+".lock", os.O_CREATE|os.O_RDWR, 0o600)
+	if err != nil {
+		return nil, fmt.Errorf("open state database: %w", err)
+	}
+	defer func() { _ = lock.Close() }() // closing releases the lock
+	if err := syscall.Flock(int(lock.Fd()), syscall.LOCK_EX); err != nil {
+		return nil, fmt.Errorf("lock state database: %w", err)
+	}
 	f, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("open state database: %w", err)
 	}
 	_ = f.Close()
 	// SQLite creates the -wal and -shm files with the database file's permissions.
-	dsn := "file:" + path + "?_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_pragma=busy_timeout(5000)&_txlock=immediate"
+	dsn := "file:" + path + "?_pragma=busy_timeout(5000)&_pragma=foreign_keys(1)&_pragma=journal_mode(WAL)&_txlock=immediate"
 	db, err := sql.Open("sqlite", dsn)
 	if err != nil {
 		return nil, err
@@ -104,21 +115,32 @@ func (s *Store) migrate(ctx context.Context, path string) error {
 			}
 		}
 	}
-	for i := version; i < len(names); i++ {
-		body, err := fs.ReadFile(migrations, "migrations/"+names[i])
-		if err != nil {
-			return err
-		}
+	// Each step re-reads the version inside its (immediate, so exclusive) transaction: another karga
+	// opening the same new database at the same time must not apply a migration twice.
+	for {
 		tx, err := s.db.BeginTx(ctx, nil)
 		if err != nil {
 			return err
 		}
+		var current int
+		if err := tx.QueryRowContext(ctx, "PRAGMA user_version").Scan(&current); err != nil {
+			_ = tx.Rollback()
+			return err
+		}
+		if current >= len(names) {
+			return tx.Rollback()
+		}
+		body, err := fs.ReadFile(migrations, "migrations/"+names[current])
+		if err != nil {
+			_ = tx.Rollback()
+			return err
+		}
 		if _, err := tx.ExecContext(ctx, string(body)); err != nil {
 			_ = tx.Rollback()
-			return fmt.Errorf("%s: %w", names[i], err)
+			return fmt.Errorf("%s: %w", names[current], err)
 		}
-		// PRAGMA does not take bind parameters; i is an int we control.
-		if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", i+1)); err != nil {
+		// PRAGMA does not take bind parameters; current is an int we control.
+		if _, err := tx.ExecContext(ctx, fmt.Sprintf("PRAGMA user_version = %d", current+1)); err != nil {
 			_ = tx.Rollback()
 			return err
 		}
@@ -126,7 +148,6 @@ func (s *Store) migrate(ctx context.Context, path string) error {
 			return err
 		}
 	}
-	return nil
 }
 
 const timeFormat = time.RFC3339Nano
