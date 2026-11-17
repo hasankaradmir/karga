@@ -3,6 +3,7 @@ package releases
 import (
 	"context"
 	"errors"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
 	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
+	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/application/packages"
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
@@ -431,5 +433,33 @@ func TestWriteOnlyValuesNotStored(t *testing.T) {
 	vals := must[map[string]any](t)(e.svc.GetValues(ctx, "db", 0, false))
 	if vals["network"].(map[string]any)["port"] == nil {
 		t.Fatalf("reused values lost: %#v", vals)
+	}
+}
+
+func TestStateKeyAndKeyedDigests(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	if _, err := e.svc.Install(ctx, InstallRequest{CommonOptions: CommonOptions{}, Name: "cache", Package: redisPkg, Values: e.opts()}); err != nil {
+		t.Fatal(err)
+	}
+	keyPath := filepath.Join(e.svc.Home, "state.key")
+	info, err := os.Stat(keyPath)
+	if err != nil || info.Mode().Perm() != 0o600 || info.Size() != 32 {
+		t.Fatalf("state key: %v %v", info, err)
+	}
+	rev, err := e.svc.Store.GetRevision(ctx, "cache", 1)
+	if err != nil || !strings.HasPrefix(rev.ValuesDigest, "hmac-sha256:") {
+		t.Fatalf("values digest not keyed: %q %v", rev.ValuesDigest, err)
+	}
+	// Another key gives another digest; the same key the same one.
+	a := deployment.Digest([]byte("pw"))
+	deployment.SetDigestKey([]byte("another-key-of-16b"))
+	if deployment.Digest([]byte("pw")) == a {
+		t.Fatal("digest does not depend on the key")
+	}
+	key, _ := os.ReadFile(keyPath)
+	deployment.SetDigestKey(key)
+	if deployment.Digest([]byte("pw")) != a {
+		t.Fatal("same key, different digest")
 	}
 }

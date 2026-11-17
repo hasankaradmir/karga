@@ -3,8 +3,7 @@ package releases
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -13,6 +12,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"sync"
 	"syscall"
 	"time"
 
@@ -45,6 +45,10 @@ type Service struct {
 	Now      func() time.Time
 	PID      int
 	Hostname string
+
+	keyOnce sync.Once
+	key     []byte
+	keyErr  error
 }
 
 // New returns a Service with process defaults filled in.
@@ -130,13 +134,62 @@ func (s *Service) finish(ctx context.Context, op release.Operation, err error) {
 	}
 }
 
+// digestJSON is the keyed digest of v's JSON: values and manifests may hold secret material.
 func digestJSON(v any) (string, []byte, error) {
 	js, err := json.Marshal(v)
 	if err != nil {
 		return "", nil, err
 	}
-	sum := sha256.Sum256(js)
-	return "sha256:" + hex.EncodeToString(sum[:]), js, nil
+	return deployment.Digest(js), js, nil
+}
+
+// keyFile holds the key of the state database's digests of secret material (R7).
+const keyFile = "state.key"
+
+// loadKey reads $KARGA_HOME/state.key, creating it (32 random bytes, 0600) on first use, and makes
+// it the digest key. Losing it only means secrets are re-applied once.
+func (s *Service) loadKey() error {
+	s.keyOnce.Do(func() {
+		path := filepath.Join(s.Home, keyFile)
+		key, err := os.ReadFile(path)
+		if errors.Is(err, os.ErrNotExist) {
+			key = make([]byte, 32)
+			if _, err = rand.Read(key); err == nil {
+				err = writeNewFile(path, key)
+				if errors.Is(err, os.ErrExist) { // another karga created it first
+					key, err = os.ReadFile(path)
+				}
+			}
+		}
+		if err == nil && len(key) < 16 {
+			err = fmt.Errorf("%s is too short; remove it to create a new key", path)
+		}
+		if err != nil {
+			s.keyErr = fmt.Errorf("state key: %w", err)
+			return
+		}
+		s.key = key
+	})
+	if s.keyErr != nil {
+		return s.keyErr
+	}
+	// shortcut: the digest key is process-wide; services of different homes in one process must
+	// not plan concurrently (karga runs one per process). Pass the key down if a daemon needs more.
+	deployment.SetDigestKey(s.key)
+	return nil
+}
+
+func writeNewFile(path string, data []byte) error {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	if _, err := f.Write(data); err != nil {
+		_ = f.Close()
+		_ = os.Remove(path)
+		return err
+	}
+	return f.Close()
 }
 
 // encodeManifest stores resources as a JSON array with secret values replaced by digests.
@@ -237,6 +290,9 @@ func (s *Service) runtime(ctx context.Context) (ports.Runtime, error) {
 }
 
 func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
+	if err := s.loadKey(); err != nil {
+		return nil, err
+	}
 	applied, err := s.Store.ListResources(ctx, in.Name)
 	if err != nil {
 		return nil, err

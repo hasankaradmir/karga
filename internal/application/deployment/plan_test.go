@@ -233,3 +233,26 @@ func TestTLSSecretChangeReappliesWorkload(t *testing.T) {
 		t.Fatalf("a new certificate must re-apply the workload: %s", got)
 	}
 }
+
+func TestDigestSchemeUpgrade(t *testing.T) {
+	rs := append(manifest(0), secretRes("creds", map[string]string{"password": "pw"}))
+	rs[0].Spec.(*resource.WorkloadSpec).Mounts = append(rs[0].Spec.(*resource.WorkloadSpec).Mounts, resource.Mount{Secret: "creds", MountPath: "/run/creds"})
+	old := appliedFrom(t, rs) // written by a karga without keyed digests
+	SetDigestKey([]byte("0123456789abcdef0123456789abcdef"))
+	t.Cleanup(func() { SetDigestKey(nil) })
+	p, err := Diff("cache", rs, old, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	sec := changeOf(t, p, resource.KindSecret, "creds")
+	if sec.Action != ActionUpdate || len(sec.Fields) != 1 || sec.Fields[0].New != "(digest scheme upgraded)" {
+		t.Fatalf("secret: %+v", sec)
+	}
+	if w := changeOf(t, p, resource.KindWorkload, "redis"); w.Action != ActionUpdate {
+		t.Fatalf("the workload mounting it is applied once more: %+v", w)
+	}
+	again, err := Diff("cache", rs, appliedFrom(t, rs), "")
+	if err != nil || again.HasChanges() {
+		t.Fatalf("second plan must be unchanged: %s %v", actions(again), err)
+	}
+}

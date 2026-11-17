@@ -105,6 +105,9 @@ func (s *Service) Install(ctx context.Context, req InstallRequest) (*Result, err
 			if err != nil {
 				return nil, err
 			}
+			if err := s.loadKey(); err != nil {
+				return nil, err
+			}
 			valuesDigest, _, err := digestJSON(in.Values)
 			if err != nil {
 				return nil, err

@@ -1,6 +1,7 @@
 package deployment
 
 import (
+	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -9,6 +10,7 @@ import (
 	"slices"
 	"sort"
 	"strings"
+	"sync/atomic"
 
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
@@ -67,11 +69,26 @@ func (p Plan) HasChanges() bool {
 	return false
 }
 
-// redactedSecret marks secret values in stored specs; only a digest of the value is kept.
-func redactedSecret(v string) string {
-	sum := sha256.Sum256([]byte(v))
+// digestKey keys the digests of secret material (R7): without it a weak secret could be guessed
+// offline from the state database. The release service sets it from $KARGA_HOME/state.key.
+var digestKey atomic.Pointer[[]byte]
+
+// SetDigestKey sets the key for Digest.
+func SetDigestKey(key []byte) { digestKey.Store(&key) }
+
+// Digest is "hmac-sha256:<hex>" of data under the digest key, or "sha256:<hex>" without one (tests).
+func Digest(data []byte) string {
+	if k := digestKey.Load(); k != nil && len(*k) > 0 {
+		m := hmac.New(sha256.New, *k)
+		m.Write(data)
+		return "hmac-sha256:" + hex.EncodeToString(m.Sum(nil))
+	}
+	sum := sha256.Sum256(data)
 	return "sha256:" + hex.EncodeToString(sum[:])
 }
+
+// redactedSecret marks secret values in stored specs; only a keyed digest of the value is kept.
+func redactedSecret(v string) string { return Digest([]byte(v)) }
 
 // Redacted returns r with secret values replaced by digests, for storage and display.
 func Redacted(r resource.Resource) resource.Resource {
@@ -312,6 +329,9 @@ func fieldChanges(kind string, oldJS, newJS json.RawMessage) []FieldChange {
 		fc := FieldChange{Path: p, Old: flatOld[p], New: flatNew[p]}
 		if kind == resource.KindSecret && strings.HasPrefix(p, "spec.values.") {
 			fc.Old, fc.New = "", "(changed)"
+			if strings.HasPrefix(flatOld[p], `"sha256:`) && strings.HasPrefix(flatNew[p], `"hmac-sha256:`) {
+				fc.New = "(digest scheme upgraded)"
+			}
 		}
 		out = append(out, fc)
 	}
