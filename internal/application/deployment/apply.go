@@ -57,6 +57,8 @@ type ExecRequest struct {
 	Timeout time.Duration
 	// OnStep is called after every runtime step so the caller can record applied state and progress.
 	OnStep func(Change, release.Step) error
+	// OnProgress, if set, receives what is going on as it happens (for display only).
+	OnProgress func(Event)
 	// Proxies controls the release proxy and the gateway (default: Envoy). ProxyUser is the uid:gid
 	// the release proxy runs as (default: the karga process user, so it can use its 0700 directory).
 	Proxies   ProxyControl
@@ -86,6 +88,7 @@ func labels(release string, revision int, kind, name string) map[string]string {
 //
 // Errors after the pre-flight phase are *ExecError.
 func Execute(ctx context.Context, rt ports.Runtime, req ExecRequest) error {
+	ctx = withProgress(ctx, req.OnProgress)
 	disrupted := false
 	err := execute(ctx, rt, req, &disrupted)
 	if err == nil {
@@ -123,6 +126,9 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 		st := release.Step{Kind: c.Kind, Name: c.Name, Action: action, Status: StepDone}
 		if err != nil {
 			st.Status, st.Error = StepFailed, err.Error()
+			progress(ctx, c.Kind, c.Name, PhaseFailed, "%s: %v", action, err)
+		} else {
+			progress(ctx, c.Kind, c.Name, PhaseDone, "%s", action)
 		}
 		if serr := req.OnStep(c, st); serr != nil {
 			return errors.Join(err, serr)
@@ -152,6 +158,7 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 		}
 		if w, ok := workloadOf(c); ok {
 			needGateway = needGateway || len(gatewayPorts(w)) > 0
+			progress(ctx, c.Kind, c.Name, PhasePull, "image %s (%s)", w.Image, w.PullPolicy)
 			if err := rt.EnsureImage(ctx, w.Image, w.PullPolicy); err != nil {
 				return fmt.Errorf("%s %q: %w", c.Kind, c.Name, err)
 			}
@@ -276,6 +283,7 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 		}
 	}
 	if proxySupported.Load() {
+		progress(ctx, "Gateway", GatewayName, PhaseSwitch, "updating the host gateway")
 		targets, err := SyncGateway(ctx, rt, req.Proxies, req.Home, releaseRouting(req.Release, workloadNames(req.Resources)))
 		if err == nil {
 			err = envoyErr(ctx, rt, GatewayName, waitGateway(ctx, req.Proxies, req.Home, req.Release, targets))
@@ -383,10 +391,12 @@ func removeWorkload(ctx context.Context, rt ports.Runtime, name string) error {
 func recreateWorkload(ctx context.Context, rt ports.Runtime, c Change, owned map[string]bool, rel string, s *resource.WorkloadSpec, lbl map[string]string, paths map[Key]string, behind bool) error {
 	name := RuntimeName(rel, c.Name)
 	if c.Applied != nil {
+		progress(ctx, c.Kind, c.Name, PhaseStop, "stopping and removing %s", c.Applied.RuntimeName)
 		if err := removeWorkload(ctx, rt, c.Applied.RuntimeName); err != nil {
 			return err
 		}
 	}
+	progress(ctx, c.Kind, c.Name, PhaseCreate, "creating %s", name)
 	wr, err := workloadRequest(rel, c.Name, s, lbl, paths, behind)
 	if err != nil {
 		return err
@@ -438,6 +448,7 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 	if !behind {
 		wr.Aliases = nil
 	}
+	progress(ctx, c.Kind, c.Name, PhaseCreate, "starting %s next to %s", next, c.Applied.RuntimeName)
 	if err := rt.CreateWorkload(ctx, wr); err != nil {
 		return false, err
 	}
@@ -455,6 +466,7 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 	}
 
 	revertProxy := func() error { return nil }
+	progress(ctx, c.Kind, c.Name, PhaseSwitch, "switching traffic to %s", next)
 	if behind {
 		alias := BackendAlias(c.Name, req.Revision)
 		if err := writeProxy(ctx, rt, req.Proxies, req, set, map[string]string{c.Name: alias}); err != nil {
@@ -491,6 +503,7 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 
 	_, drain := s.Strategy()
 	stopWait := drain
+	progress(ctx, c.Kind, c.Name, PhaseDrain, "waiting up to %s for connections to %s to finish", drain, c.Applied.RuntimeName)
 	if behind {
 		if _, err := req.Proxies.WaitDrained(ctx, ProxyDir(req.Home, req.Release), proxyClusters(c.Name, s), drain); err != nil {
 			return true, err
@@ -507,6 +520,7 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 		}
 	}
 	old := c.Applied.RuntimeName
+	progress(ctx, c.Kind, c.Name, PhaseStop, "stopping %s", old)
 	if err := rt.StopWorkload(ctx, old, stopWait); err != nil && !errors.Is(err, ports.ErrNotFound) {
 		return true, err
 	}

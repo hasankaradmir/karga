@@ -141,8 +141,13 @@ func waitReady(ctx context.Context, rt ports.Runtime, targets []readyTarget, tim
 		return out
 	}
 	var last ports.WorkloadStatus
+	start, lastReport := time.Now(), time.Now()
 	for {
 		var still []readyTarget
+		report := time.Since(lastReport) >= waitEvery
+		if report {
+			lastReport = time.Now()
+		}
 		for _, t := range pending {
 			st, err := rt.GetWorkload(ctx, t.name)
 			if err != nil {
@@ -168,6 +173,17 @@ func waitReady(ctx context.Context, rt ports.Runtime, targets []readyTarget, tim
 		}
 		if pending = still; len(pending) == 0 {
 			return nil, nil
+		}
+		if report {
+			for _, t := range pending {
+				why := "starting"
+				if ps := probes[t.name]; ps != nil && ps.lastErr != nil {
+					why = ps.lastErr.Error()
+				} else if t.name == last.Name && last.Health != "" && last.Health != ports.HealthNone {
+					why = "health " + last.Health
+				}
+				progress(ctx, "Workload", t.name, PhaseWait, "waiting for %s to be ready (%s, %s)", t.name, why, time.Since(start).Round(time.Second))
+			}
 		}
 		select {
 		case <-ctx.Done():

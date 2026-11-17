@@ -18,11 +18,14 @@ import (
 
 // cliEnv runs commands against a fake runtime and a temporary KARGA_HOME.
 type cliEnv struct {
-	t    *testing.T
-	home string
-	rt   *fakeruntime.Runtime
-	port string
+	t      *testing.T
+	home   string
+	rt     *fakeruntime.Runtime
+	port   string
+	stderr string // of the last run
 }
+
+func (e *cliEnv) lastStderr() string { return e.stderr }
 
 func newCLIEnv(t *testing.T) *cliEnv {
 	return &cliEnv{t: t, home: t.TempDir(), rt: fakeruntime.New(), port: strconv.Itoa(runtimetest.FreePort(t))}
@@ -34,6 +37,7 @@ func (e *cliEnv) run(args ...string) (string, error) {
 	cmd := newRootCmd(&out, &errOut, func(context.Context) (ports.Runtime, func(), error) { return e.rt, func() {}, nil })
 	cmd.SetArgs(append(args, "--home", e.home))
 	err := cmd.Execute()
+	e.stderr = errOut.String()
 	return out.String(), err
 }
 
@@ -257,5 +261,25 @@ func TestVolumeBackupRestore(t *testing.T) {
 	}
 	if _, err := e.run("volume", "backup", "r", "nope", file+"2"); err == nil || !strings.Contains(err.Error(), `no volume "nope"`) {
 		t.Fatalf("unknown volume: %v", err)
+	}
+}
+
+func TestLiveProgress(t *testing.T) {
+	e := newCLIEnv(t)
+	web := "../../tests/integration/testdata/web"
+	e.mustRun("install", "w", web)
+	progress := e.lastStderr()
+	for _, want := range []string{"workload web: image busybox:1.37", "workload web: creating w-web", "workload web: create done"} {
+		if !strings.Contains(progress, want) {
+			t.Errorf("progress misses %q:\n%s", want, progress)
+		}
+	}
+	e.mustRun("upgrade", "w", web, "--set", "content=v2")
+	if p := e.lastStderr(); !strings.Contains(p, "starting w-web-next next to w-web") || !strings.Contains(p, "switching traffic to w-web-next") {
+		t.Errorf("replace progress:\n%s", p)
+	}
+	e.mustRun("upgrade", "w", web, "--set", "content=v3", "-o", "json")
+	if p := e.lastStderr(); p != "" {
+		t.Errorf("no progress with JSON output: %q", p)
 	}
 }

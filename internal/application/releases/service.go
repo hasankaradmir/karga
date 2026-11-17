@@ -70,6 +70,8 @@ type CommonOptions struct {
 	HistoryMax int
 	// Force aborts an interrupted operation (whose process is gone) instead of refusing to run.
 	Force bool
+	// Progress, if set, receives what the deployment is doing as it happens.
+	Progress func(deployment.Event) `json:"-"`
 }
 
 // Result describes what a mutating command did.
@@ -417,7 +419,8 @@ func (s *Service) run(ctx context.Context, rt ports.Runtime, op *release.Operati
 	execErr := deployment.Execute(ctx, rt, deployment.ExecRequest{
 		Home: s.Home, Release: in.Name, Revision: in.Revision, Supported: in.Package.Runtime.Supported,
 		Resources: in.Resources, Plan: plan, Redact: s.Redact, Timeout: in.Timeout,
-		OnStep: func(c deployment.Change, st release.Step) error { return s.record(ctx, op, in, c, st) },
+		OnStep:     func(c deployment.Change, st release.Step) error { return s.record(ctx, op, in, c, st) },
+		OnProgress: in.Progress,
 	})
 
 	bg := context.WithoutCancel(ctx)

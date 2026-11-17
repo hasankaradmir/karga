@@ -74,6 +74,17 @@ func (c commonFlags) options() releases.CommonOptions {
 	return releases.CommonOptions{DryRun: c.dryRun, Timeout: c.timeout, HistoryMax: c.historyMax, Force: c.force}
 }
 
+// optionsFor adds live progress on stderr, except for JSON output and dry runs.
+func (a *app) optionsFor(c commonFlags) (releases.CommonOptions, func()) {
+	o := c.options()
+	if a.output == outputJSON || c.dryRun {
+		return o, func() {}
+	}
+	p := newProgressPrinter(a.stderr)
+	o.Progress = p.event
+	return o, p.finish
+}
+
 // printResult reports a mutating command. A failed deployment still has a result worth showing.
 func (a *app) printResult(verb string, res *releases.Result, verbose bool) error {
 	if a.output == outputJSON {
@@ -117,9 +128,11 @@ func newInstallCmd(a *app) *cobra.Command {
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withService(cmd.Context(), func(s *releases.Service) error {
+				opts, done := a.optionsFor(common)
 				res, err := s.Install(cmd.Context(), releases.InstallRequest{
-					CommonOptions: common.options(), Name: args[0], Package: args[1], Values: vals.options(args[0]),
+					CommonOptions: opts, Name: args[0], Package: args[1], Values: vals.options(args[0]),
 				})
+				done()
 				if err != nil {
 					return err
 				}
@@ -157,10 +170,12 @@ func newUpgradeCmd(a *app) *cobra.Command {
 				return err
 			}
 			return a.withService(cmd.Context(), func(s *releases.Service) error {
+				opts, done := a.optionsFor(common)
 				res, err := s.Upgrade(cmd.Context(), releases.UpgradeRequest{
-					CommonOptions: common.options(), Name: args[0], Package: args[1], Values: vals.options(args[0]),
+					CommonOptions: opts, Name: args[0], Package: args[1], Values: vals.options(args[0]),
 					ReuseValues: reuse, Install: install, Strategy: strategy,
 				})
+				done()
 				if err != nil {
 					return err
 				}
@@ -196,7 +211,9 @@ func newRollbackCmd(a *app) *cobra.Command {
 				rev = n
 			}
 			return a.withService(cmd.Context(), func(s *releases.Service) error {
-				res, err := s.Rollback(cmd.Context(), releases.RollbackRequest{CommonOptions: common.options(), Name: args[0], Revision: rev, Strategy: strategy})
+				opts, done := a.optionsFor(common)
+				res, err := s.Rollback(cmd.Context(), releases.RollbackRequest{CommonOptions: opts, Name: args[0], Revision: rev, Strategy: strategy})
+				done()
 				if err != nil {
 					return err
 				}
