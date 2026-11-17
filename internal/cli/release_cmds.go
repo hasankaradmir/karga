@@ -341,50 +341,83 @@ func newListCmd(a *app) *cobra.Command {
 }
 
 func newStatusCmd(a *app) *cobra.Command {
-	return &cobra.Command{
+	var watch bool
+	var interval time.Duration
+	var count int
+	cmd := &cobra.Command{
 		Use:   "status <release>",
 		Short: "Compare a release's desired state with the runtime",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withService(cmd.Context(), func(s *releases.Service) error {
-				rep, err := s.Status(cmd.Context(), args[0])
-				if err != nil {
-					return err
+				if !watch {
+					return a.printStatus(cmd.Context(), s, args[0])
 				}
-				if a.output == outputJSON {
-					return writeJSON(a.stdout, rep)
-				}
-				r := rep.Release
-				_, _ = fmt.Fprintf(a.stdout, "Release:  %s\nStatus:   %s\nRevision: %d\nPackage:  %s %s\nUpdated:  %s\n\n",
-					r.Name, r.Status, r.CurrentRevision, r.PackageName, r.PackageVersion, ago(r.UpdatedAt))
-				var rows [][]string
-				for _, x := range rep.Resources {
-					health := x.Health
-					if x.Backend != "" {
-						health = "-> " + x.Backend
+				tty := isTerminal(a.stdout)
+				for n := 1; ; n++ {
+					if tty {
+						_, _ = io.WriteString(a.stdout, "\x1b[H\x1b[2J") // clear and redraw
+					} else if n > 1 {
+						_, _ = io.WriteString(a.stdout, "\n")
 					}
-					if x.OOMKilled {
-						health = strings.TrimPrefix(health+", oom-killed", ", ")
+					_, _ = fmt.Fprintf(a.stdout, "Every %s: karga status %s    %s\n\n", interval, args[0], time.Now().Format("15:04:05"))
+					if err := a.printStatus(cmd.Context(), s, args[0]); err != nil {
+						return err
 					}
-					restarts := ""
-					if x.Kind == resource.KindWorkload || x.Kind == deployment.KindProxy {
-						restarts = strconv.Itoa(x.Restarts)
+					if count > 0 && n >= count {
+						return nil
 					}
-					rows = append(rows, []string{x.Kind, x.Name, x.RuntimeName, strconv.Itoa(x.Revision), x.Desired, x.Actual, restarts, health})
+					select {
+					case <-cmd.Context().Done():
+						return nil
+					case <-time.After(interval):
+					}
 				}
-				if err := a.table("KIND\tNAME\tRUNTIME NAME\tREVISION\tDESIRED\tACTUAL\tRESTARTS\tHEALTH/BACKEND", rows); err != nil {
-					return err
-				}
-				if len(rep.Orphans) > 0 {
-					_, _ = fmt.Fprintf(a.stdout, "\nNot tracked by karga: %s\n", strings.Join(rep.Orphans, ", "))
-				}
-				if rep.Interrupted != "" {
-					_, _ = fmt.Fprintf(a.stdout, "\nWARNING: operation still marked running: %s\n", rep.Interrupted)
-				}
-				return nil
 			})
 		},
 	}
+	cmd.Flags().BoolVarP(&watch, "watch", "w", false, "refresh until interrupted")
+	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "time between refreshes with --watch")
+	cmd.Flags().IntVar(&count, "count", 0, "with --watch, stop after this many refreshes (0: until interrupted)")
+	return cmd
+}
+
+func (a *app) printStatus(ctx context.Context, s *releases.Service, name string) error {
+	rep, err := s.Status(ctx, name)
+	if err != nil {
+		return err
+	}
+	if a.output == outputJSON {
+		return writeJSON(a.stdout, rep)
+	}
+	r := rep.Release
+	_, _ = fmt.Fprintf(a.stdout, "Release:  %s\nStatus:   %s\nRevision: %d\nPackage:  %s %s\nUpdated:  %s\n\n",
+		r.Name, a.paint(string(r.Status)), r.CurrentRevision, r.PackageName, r.PackageVersion, ago(r.UpdatedAt))
+	var rows [][]string
+	for _, x := range rep.Resources {
+		health := x.Health
+		if x.Backend != "" {
+			health = "-> " + x.Backend
+		}
+		if x.OOMKilled {
+			health = strings.TrimPrefix(health+", oom-killed", ", ")
+		}
+		restarts := ""
+		if x.Kind == resource.KindWorkload || x.Kind == deployment.KindProxy {
+			restarts = strconv.Itoa(x.Restarts)
+		}
+		rows = append(rows, []string{x.Kind, x.Name, x.RuntimeName, strconv.Itoa(x.Revision), x.Desired, x.Actual, restarts, health})
+	}
+	if err := a.table("KIND\tNAME\tRUNTIME NAME\tREVISION\tDESIRED\tACTUAL\tRESTARTS\tHEALTH/BACKEND", rows); err != nil {
+		return err
+	}
+	if len(rep.Orphans) > 0 {
+		_, _ = fmt.Fprintf(a.stdout, "\nNot tracked by karga: %s\n", strings.Join(rep.Orphans, ", "))
+	}
+	if rep.Interrupted != "" {
+		_, _ = fmt.Fprintf(a.stdout, "\nWARNING: operation still marked running: %s\n", rep.Interrupted)
+	}
+	return nil
 }
 
 func newGetCmd(a *app) *cobra.Command {

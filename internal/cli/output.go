@@ -99,3 +99,11 @@ func (a *app) table(header string, rows [][]string) error {
 	_, err := io.WriteString(a.stdout, b.String())
 	return err
 }
+
+// paint colors one state word when tables are colored.
+func (a *app) paint(word string) string {
+	if code := stateColor(word); code != "" && a.colorful() {
+		return code + word + colorReset
+	}
+	return word
+}

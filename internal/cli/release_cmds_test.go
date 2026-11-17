@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"testing"
@@ -373,5 +374,24 @@ func TestCreateLintInstallNotes(t *testing.T) {
 	}
 	if _, err := e.run("create", filepath.Join(t.TempDir(), "Bad_Name")); err == nil {
 		t.Fatal("a package name must be a DNS label")
+	}
+}
+
+func TestStatusWatchAndColor(t *testing.T) {
+	e := newCLIEnv(t)
+	e.mustRun("install", "w", "../../tests/integration/testdata/web")
+	out := e.mustRun("status", "w", "--watch", "--count", "2", "--interval", "10ms")
+	if strings.Count(out, "Every 10ms: karga status w") != 2 || strings.Contains(out, "\x1b[") {
+		t.Fatalf("watch without a terminal:\n%s", out)
+	}
+	out = e.mustRun("status", "w", "--color", "always")
+	if !strings.Contains(out, colorGreen+"deployed"+colorReset) || !strings.Contains(out, colorGreen+"running"+colorReset) {
+		t.Fatalf("colors:\n%q", out)
+	}
+	// Coloring never shifts columns: the plain and colored tables have the same layout.
+	plain := e.mustRun("status", "w", "--color", "never")
+	stripped := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(out, "")
+	if stripped != plain {
+		t.Fatalf("colored table misaligned:\n%s\n---\n%s", stripped, plain)
 	}
 }
