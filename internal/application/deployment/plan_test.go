@@ -104,7 +104,7 @@ func TestSecretsRedactedInPlan(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := plan.Print(&buf, "db", 1, 2); err != nil {
+	if err := plan.Wire().Print(&buf, "db", 1, 2); err != nil {
 		t.Fatal(err)
 	}
 	out := buf.String()
@@ -122,7 +122,7 @@ func TestPlanPrint(t *testing.T) {
 		t.Fatal(err)
 	}
 	var buf bytes.Buffer
-	if err := plan.Print(&buf, "cache", 2, 3); err != nil {
+	if err := plan.Wire().Print(&buf, "cache", 2, 3); err != nil {
 		t.Fatal(err)
 	}
 	want := `Deployment Plan
@@ -274,7 +274,7 @@ func TestPlanSummary(t *testing.T) {
 		t.Fatal(err)
 	}
 	var b strings.Builder
-	if err := p.Summary(&b, "cache", 1, 2); err != nil {
+	if err := p.Wire().Summary(&b, "cache", 1, 2); err != nil {
 		t.Fatal(err)
 	}
 	out := b.String()
@@ -287,7 +287,7 @@ func TestPlanSummary(t *testing.T) {
 		t.Errorf("summary shows unchanged resources or fields:\n%s", out)
 	}
 	b.Reset()
-	if err := (Plan{}).Summary(&b, "cache", 2, 3); err != nil || !strings.Contains(b.String(), "No changes.") {
+	if err := (Plan{}).Wire().Summary(&b, "cache", 2, 3); err != nil || !strings.Contains(b.String(), "No changes.") {
 		t.Fatalf("empty plan: %q %v", b.String(), err)
 	}
 }

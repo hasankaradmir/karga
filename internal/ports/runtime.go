@@ -7,6 +7,8 @@ import (
 	"io"
 	"slices"
 	"time"
+
+	"github.com/hasankaradmir/karga-sdk/api"
 )
 
 // Errors every Runtime implementation wraps (with %w) so callers can react to them.
@@ -238,16 +240,8 @@ type WorkloadStatus struct {
 	AnonymousVolumes []Mount
 }
 
-// ExecOptions describe a command run in a workload. With TTY the output is one stream (Stdout) and
-// Width/Height and Resize set the terminal size; without it Stdout and Stderr are separate.
-type ExecOptions struct {
-	Cmd            []string
-	TTY            bool
-	Stdin          io.Reader // nil: no input
-	Stdout, Stderr io.Writer
-	Width, Height  uint
-	Resize         <-chan [2]uint // width, height
-}
+// ExecOptions is shared with the CLI (karga-sdk/api).
+type ExecOptions = api.ExecOptions
 
 // Limits are the enforced resource and logging limits of a workload.
 type Limits struct {

@@ -12,17 +12,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hasankaradmir/karga-sdk/api"
+
 	"encoding/json"
 
-	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga-sdk/release"
 	"github.com/hasankaradmir/karga-sdk/resource"
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
 // DefaultTimeout bounds how long Execute waits for workloads to become ready.
-const DefaultTimeout = 5 * time.Minute
+const DefaultTimeout = api.DefaultTimeout
 
 // Step statuses reported to ExecRequest.OnStep. StepKept means the change failed before anything
 // running was touched: the previous state is still applied (a replace whose new container failed).

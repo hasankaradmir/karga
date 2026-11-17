@@ -20,9 +20,9 @@ import (
 	"strings"
 	"syscall"
 
-	"github.com/hasankaradmir/karga/internal/application/deployment/runtimeops"
-	"github.com/hasankaradmir/karga-sdk/pkg"
+	"github.com/hasankaradmir/karga-sdk/api"
 	"github.com/hasankaradmir/karga-sdk/resource"
+	"github.com/hasankaradmir/karga/internal/application/deployment/runtimeops"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
@@ -217,7 +217,7 @@ func buildConfig(settings Settings, targets []Target) envoy.Config {
 		var redirects []string
 		redirectPort := 0
 		if l.Protocol == ProtocolHTTP && l.Port == 80 {
-			redirects, redirectPort = settings.redirects(uses, u)
+			redirects, redirectPort = redirectHosts(settings, uses, u)
 		}
 		if u == nil && len(redirects) == 0 {
 			continue
@@ -240,9 +240,9 @@ func buildConfig(settings Settings, targets []Target) envoy.Config {
 	return cfg
 }
 
-// redirects returns the hosts served on an https listener but not on the http listener u, and the
+// redirectHosts returns the hosts served on an https listener but not on the http listener u, and the
 // port of the first https listener, so plain HTTP on port 80 redirects to HTTPS.
-func (s Settings) redirects(uses map[string]*use, u *use) ([]string, int) {
+func redirectHosts(s Settings, uses map[string]*use, u *use) ([]string, int) {
 	var hosts []string
 	port := 0
 	for _, l := range s.Listeners {
@@ -463,75 +463,22 @@ func Wait(ctx context.Context, px runtimeops.ProxyControl, home, rel string, tar
 
 // Listener protocols.
 const (
-	ProtocolTCP   = "tcp"
-	ProtocolHTTP  = "http"
-	ProtocolHTTPS = "https"
+	ProtocolTCP   = api.ProtocolTCP
+	ProtocolHTTP  = api.ProtocolHTTP
+	ProtocolHTTPS = api.ProtocolHTTPS
 )
 
-// Listener is a port the gateway serves on every listen address. A tcp listener belongs to one
-// service; http and https listeners are shared by host and path.
-type Listener struct {
-	Name     string `json:"name"`
-	Port     int    `json:"port"`
-	Protocol string `json:"protocol"`
-}
+// Listener is shared with the CLI (karga-sdk/api).
+type Listener = api.Listener
 
-// Settings are the host administrator's gateway: where it listens and on which listeners. They
-// outlive the gateway container. Packages cannot change them.
-type Settings struct {
-	// Listen are the host addresses every listener binds (default 127.0.0.1: nothing is reachable
-	// from other machines until the administrator says so).
-	Listen    []string   `json:"listen,omitempty"`
-	Listeners []Listener `json:"listeners"`
-	AccessLog bool       `json:"accessLog"`
-}
+// Settings is shared with the CLI (karga-sdk/api).
+type Settings = api.Settings
 
 // DefaultListen is where the gateway listens until the administrator sets addresses.
-const DefaultListen = "127.0.0.1"
+const DefaultListen = api.DefaultListen
 
 // DefaultListeners are the listeners a new host starts with.
-func DefaultListeners() []Listener {
-	return []Listener{{Name: "web", Port: 80, Protocol: ProtocolHTTP}, {Name: "websecure", Port: 443, Protocol: ProtocolHTTPS}}
-}
-
-// Listener returns the listener called name.
-func (s Settings) Listener(name string) (Listener, bool) {
-	i := slices.IndexFunc(s.Listeners, func(l Listener) bool { return l.Name == name })
-	if i < 0 {
-		return Listener{}, false
-	}
-	return s.Listeners[i], true
-}
-
-// Validate checks the settings.
-func (s Settings) Validate() error {
-	var errs []error
-	for _, ip := range s.Listen {
-		if net.ParseIP(ip) == nil {
-			errs = append(errs, fmt.Errorf("listen: %q is not an IP address", ip))
-		}
-	}
-	names, portsUsed := map[string]bool{}, map[int]string{}
-	for _, l := range s.Listeners {
-		switch {
-		case !pkg.IsDNSLabel(l.Name):
-			errs = append(errs, fmt.Errorf("listener %q: the name must be a DNS label", l.Name))
-		case names[l.Name]:
-			errs = append(errs, fmt.Errorf("listener %q is defined twice", l.Name))
-		}
-		names[l.Name] = true
-		if l.Port < 1 || l.Port > 65535 {
-			errs = append(errs, fmt.Errorf("listener %q: port %d out of range 1-65535", l.Name, l.Port))
-		} else if other, dup := portsUsed[l.Port]; dup {
-			errs = append(errs, fmt.Errorf("listener %q: port %d is used by listener %q", l.Name, l.Port, other))
-		}
-		portsUsed[l.Port] = l.Name
-		if l.Protocol != ProtocolTCP && l.Protocol != ProtocolHTTP && l.Protocol != ProtocolHTTPS {
-			errs = append(errs, fmt.Errorf("listener %q: protocol %q must be tcp, http or https", l.Name, l.Protocol))
-		}
-	}
-	return errors.Join(errs...)
-}
+var DefaultListeners = api.DefaultListeners
 
 func settingsPath(home string) string { return filepath.Join(home, "gateway.json") }
 
@@ -575,18 +522,8 @@ func WriteSettings(home string, s Settings) error {
 	return writeFile(settingsPath(home), data)
 }
 
-// State is the health part of `karga gateway status`.
-type State struct {
-	// Container is the gateway container's state, or "missing" when no release needs it.
-	Container string   `json:"container"`
-	Ready     bool     `json:"ready"`
-	Version   string   `json:"version,omitempty"`
-	Image     string   `json:"image,omitempty"`
-	Listen    []string `json:"listen"`
-	AccessLog bool     `json:"accessLog"`
-	// Error says why the admin API could not be read, if it could not.
-	Error string `json:"error,omitempty"`
-}
+// State is shared with the CLI (karga-sdk/api).
+type State = api.State
 
 // Health reads the gateway container and Envoy's admin API.
 func Health(ctx context.Context, rt ports.Runtime, home string) (State, error) {
@@ -616,14 +553,8 @@ func Health(ctx context.Context, rt ports.Runtime, home string) (State, error) {
 	return st, nil
 }
 
-// Exposed is one line of `karga gateway status`: a service port served on a listener.
-type Exposed struct {
-	Listener string `json:"listener"` // name:port
-	Route    string `json:"route"`    // "tcp" or host+path
-	Release  string `json:"release"`
-	Service  string `json:"service"` // name:port
-	Upstream string `json:"upstream"`
-}
+// Exposed is shared with the CLI (karga-sdk/api).
+type Exposed = api.Exposed
 
 // Routes lists what the gateway serves, as computed from the release proxies.
 func Routes(ctx context.Context, rt ports.Runtime, home string) ([]Exposed, error) {
@@ -647,8 +578,8 @@ func Routes(ctx context.Context, rt ports.Runtime, home string) ([]Exposed, erro
 			if r.Host != "" {
 				route = r.Host + r.Path
 			}
-			out = append(out, Exposed{fmt.Sprintf("%s:%d", l.Name, l.Port), route, t.Release,
-				fmt.Sprintf("%s:%d", r.Service, r.Port), net.JoinHostPort("127.0.0.1", strconv.Itoa(up))})
+			out = append(out, Exposed{Listener: fmt.Sprintf("%s:%d", l.Name, l.Port), Route: route, Release: t.Release,
+				Service: fmt.Sprintf("%s:%d", r.Service, r.Port), Upstream: net.JoinHostPort("127.0.0.1", strconv.Itoa(up))})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {

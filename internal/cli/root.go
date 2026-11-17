@@ -9,7 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hasankaradmir/karga/internal/api"
+	"github.com/hasankaradmir/karga-sdk/api"
 	"github.com/hasankaradmir/karga-sdk/logger"
 )
 

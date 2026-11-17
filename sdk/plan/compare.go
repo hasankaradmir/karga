@@ -1,4 +1,4 @@
-package deployment
+package plan
 
 import (
 	"encoding/json"
@@ -34,7 +34,7 @@ func CompareManifests(from, to json.RawMessage) ([]ResourceDiff, error) {
 		case !ok:
 			out = append(out, ResourceDiff{Kind: k.Kind, Name: k.Name, Action: ActionCreate})
 		default:
-			if fields := fieldChanges(k.Kind, old, doc); len(fields) > 0 {
+			if fields := FieldChanges(k.Kind, old, doc); len(fields) > 0 {
 				out = append(out, ResourceDiff{Kind: k.Kind, Name: k.Name, Action: ActionUpdate, Fields: fields})
 			}
 		}
@@ -57,17 +57,17 @@ func CompareManifests(from, to json.RawMessage) ([]ResourceDiff, error) {
 func CompareValues(from, to map[string]any) []FieldChange {
 	a, _ := json.Marshal(from)
 	b, _ := json.Marshal(to)
-	return fieldChanges("", a, b)
+	return FieldChanges("", a, b)
 }
 
-func manifestDocs(js json.RawMessage) (map[Key]json.RawMessage, error) {
+func manifestDocs(js json.RawMessage) (map[key]json.RawMessage, error) {
 	var docs []json.RawMessage
 	if len(js) > 0 {
 		if err := json.Unmarshal(js, &docs); err != nil {
 			return nil, err
 		}
 	}
-	out := map[Key]json.RawMessage{}
+	out := map[key]json.RawMessage{}
 	for _, d := range docs {
 		var head struct {
 			Kind     string            `json:"kind"`
@@ -76,7 +76,15 @@ func manifestDocs(js json.RawMessage) (map[Key]json.RawMessage, error) {
 		if err := json.Unmarshal(d, &head); err != nil {
 			return nil, fmt.Errorf("stored manifest: %w", err)
 		}
-		out[Key{head.Kind, head.Metadata.Name}] = d
+		out[key{head.Kind, head.Metadata.Name}] = d
 	}
 	return out, nil
+}
+
+type key struct{ Kind, Name string }
+
+// kindRank orders resources of different kinds: dependencies first.
+var kindRank = map[string]int{
+	resource.KindNetwork: 0, resource.KindVolume: 1, resource.KindConfig: 2, resource.KindSecret: 3,
+	resource.KindWorkload: 4, resource.KindService: 5,
 }

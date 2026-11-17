@@ -10,22 +10,14 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/hasankaradmir/karga-sdk/api"
+	"github.com/hasankaradmir/karga-sdk/resource"
 	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
-	"github.com/hasankaradmir/karga-sdk/resource"
 )
 
-// LogsRequest selects containers to show logs of: the workloads of a release (all, or the named
-// ones), its proxy, or the host gateway.
-type LogsRequest struct {
-	Release   string
-	Workloads []string
-	Proxy     bool
-	Gateway   bool
-	// Tail is the number of lines per container from the end (negative: all).
-	Tail   int
-	Follow bool
-}
+// LogsRequest is shared with the CLI (karga-sdk/api).
+type LogsRequest = api.LogsRequest
 
 // Logs writes container logs to w. Several containers are prefixed "name | " per line; without
 // Follow they are shown one after the other, with Follow side by side until ctx is done.

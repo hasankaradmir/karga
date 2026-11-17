@@ -9,6 +9,7 @@ build:
 
 test:
 	go test -race ./...
+	cd sdk && go test -race ./...
 
 # Needs a reachable Docker daemon (DOCKER_HOST or the active docker context).
 test-integration:
@@ -20,6 +21,7 @@ test-e2e:
 
 lint:
 	golangci-lint run
+	cd sdk && golangci-lint run --config ../.golangci.yml
 
 fmt:
 	golangci-lint fmt

@@ -4,28 +4,25 @@ import (
 	"context"
 	"fmt"
 	"time"
+
+	sdkplan "github.com/hasankaradmir/karga-sdk/plan"
 )
 
 // Event reports what Execute is doing, for a live progress display.
-type Event struct {
-	Kind, Name string
-	// Phase is one of pull, create, start, wait, switch, drain, stop, remove, done, failed.
-	Phase  string
-	Detail string
-}
+type Event = sdkplan.Event
 
 // Progress phases.
 const (
-	PhasePull   = "pull"
-	PhaseCreate = "create"
-	PhaseStart  = "start"
-	PhaseWait   = "wait"
-	PhaseSwitch = "switch"
-	PhaseDrain  = "drain"
-	PhaseStop   = "stop"
-	PhaseRemove = "remove"
-	PhaseDone   = "done"
-	PhaseFailed = "failed"
+	PhasePull   = sdkplan.PhasePull
+	PhaseCreate = sdkplan.PhaseCreate
+	PhaseStart  = sdkplan.PhaseStart
+	PhaseWait   = sdkplan.PhaseWait
+	PhaseSwitch = sdkplan.PhaseSwitch
+	PhaseDrain  = sdkplan.PhaseDrain
+	PhaseStop   = sdkplan.PhaseStop
+	PhaseRemove = sdkplan.PhaseRemove
+	PhaseDone   = sdkplan.PhaseDone
+	PhaseFailed = sdkplan.PhaseFailed
 )
 
 type progressKey struct{}

@@ -12,6 +12,8 @@ import (
 	"sort"
 	"strings"
 
+	"github.com/hasankaradmir/karga-sdk/api"
+
 	"github.com/hasankaradmir/karga-sdk/release"
 	"github.com/hasankaradmir/karga-sdk/resource"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
@@ -19,7 +21,7 @@ import (
 
 // KindProxy is the derived resource for a release's Envoy proxy (ADR-011). It is not written in
 // packages: karga adds it to the plan when the release has Services.
-const KindProxy = "Proxy"
+const KindProxy = api.KindProxy
 
 // ProxyResource is the name of the release proxy in the plan and the applied state.
 const ProxyResource = "proxy"

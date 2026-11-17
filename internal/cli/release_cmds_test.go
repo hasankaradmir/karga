@@ -2,508 +2,322 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"encoding/json"
 	"errors"
-	"io"
-	"net"
-	"net/http"
 	"os"
 	"path/filepath"
 	"regexp"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/spf13/cobra"
-
-	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
-	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
-	"github.com/hasankaradmir/karga/internal/api"
-	"github.com/hasankaradmir/karga/internal/application/deployment"
-	"github.com/hasankaradmir/karga/internal/ports"
-	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
-	"github.com/hasankaradmir/karga/internal/server"
+	"github.com/hasankaradmir/karga-sdk/api"
+	"github.com/hasankaradmir/karga-sdk/plan"
+	"github.com/hasankaradmir/karga-sdk/release"
 )
 
-// cliEnv runs commands against karga-server, started in the test with a fake runtime and a
-// temporary KARGA_HOME; the CLI reaches it on a unix socket like in production.
-type cliEnv struct {
-	t      *testing.T
-	home   string
-	socket string
-	rt     *fakeruntime.Runtime
-	port   string
-	stderr string // of the last run
+func installed() *api.Result {
+	return &api.Result{Release: "r", Revision: 2, From: 1, Status: release.StatusDeployed,
+		Plan: plan.Plan{Changes: []plan.Change{
+			{Kind: "Workload", Name: "web", Action: plan.ActionUpdate, Strategy: "replace",
+				Fields: []plan.FieldChange{{Path: "spec.image", Old: `"nginx:1"`, New: `"nginx:2"`}}},
+			{Kind: "Volume", Name: "cache", Action: plan.ActionDelete, Notice: "its data is deleted"},
+			{Kind: "Network", Name: "net", Action: plan.ActionUnchanged},
+		}},
+		Warnings: []string{"workload web keeps image VOLUME /data in an anonymous volume"},
+		Notes:    "r (revision 2) runs nginx:2."}
 }
 
-func (e *cliEnv) lastStderr() string { return e.stderr }
-
-func newCLIEnv(t *testing.T) *cliEnv {
-	t.Helper()
-	e := &cliEnv{t: t, home: t.TempDir(), rt: fakeruntime.New().WithGateway(), port: strconv.Itoa(runtimetest.FreePort(t))}
-	// Unix socket paths are short (104 bytes on macOS): t.TempDir() can be too long.
-	dir, err := os.MkdirTemp("", "kcli")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	e.socket = filepath.Join(dir, "s.sock")
-	srv, err := server.New(context.Background(), server.Config{Home: e.home, Socket: e.socket, ReconcileInterval: -1}, e.rt)
-	if err != nil {
-		t.Fatal(err)
-	}
-	l, err := srv.Listen()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ctx, cancel := context.WithCancel(context.Background())
-	done := make(chan struct{})
-	go func() { _ = srv.Serve(ctx, l, time.Second); close(done) }()
-	t.Cleanup(func() { cancel(); <-done; _ = srv.Close() })
-	return e
-}
-
-func (e *cliEnv) root(stdout, stderr io.Writer) *cobra.Command {
-	return newRootCmd(stdout, stderr, func() api.Backend { return api.NewClient(e.socket) })
-}
-
-func (e *cliEnv) run(args ...string) (string, error) {
-	e.t.Helper()
-	var out, errOut bytes.Buffer
-	cmd := e.root(&out, &errOut)
-	cmd.SetArgs(args)
-	err := cmd.Execute()
-	e.stderr = errOut.String()
-	return out.String(), err
-}
-
-func (e *cliEnv) mustRun(args ...string) string {
-	e.t.Helper()
-	out, err := e.run(args...)
-	if err != nil {
-		e.t.Fatalf("karga %v: %v\n%s", args, err, out)
-	}
-	return out
-}
-
-const redis = "../../tests/testdata/redis"
-
-// Tests run without Envoy: proxy and gateway configuration is written, readiness is assumed.
-func init() { deployment.Proxies = fakeruntime.Proxies{} }
-
-func TestReleaseLifecycleCLI(t *testing.T) {
+func TestDeploySendsPackageAndValues(t *testing.T) {
 	e := newCLIEnv(t)
-	port := "service.enabled=false"
-
-	out := e.mustRun("install", "r", redis, "--set", port)
-	if !strings.Contains(out, `Release "r" installed (revision 1)`) || !strings.Contains(out, "create workload redis") {
-		t.Fatalf("install:\n%s", out)
+	e.f.result = installed()
+	vals := filepath.Join(t.TempDir(), "prod.yaml")
+	if err := os.WriteFile(vals, []byte("replicas: 3\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	if out := e.mustRun("install", "r", redis, "--set", port); !strings.Contains(out, "already installed") {
-		t.Fatalf("second install:\n%s", out)
+	out := e.mustRun("upgrade", "r", demo, "-f", vals, "--set", "a=1", "--set-string", "b=007",
+		"--reuse-values", "--strategy", "recreate", "--delete-volumes", "--timeout", "1m")
+	u := e.f.upgrade
+	if u == nil || u.Name != "r" || !u.ReuseValues || u.Strategy != "recreate" || !u.DeleteVolumes || u.Timeout != time.Minute {
+		t.Fatalf("request: %+v", u)
 	}
-
-	out = e.mustRun("upgrade", "r", redis, "--set", port, "--set", "image.tag=7.2", "--dry-run")
-	if !strings.Contains(out, "Revision: 1 -> 2") || !strings.Contains(out, "~ WORKLOAD redis (recreate)") ||
-		!strings.Contains(out, "0 to create, 1 to update, 0 to delete") || strings.Contains(out, "spec.image") {
-		t.Fatalf("dry run summary:\n%s", out)
+	// The server cannot read the client's files: the package and the values file travel as content.
+	if e.f.pkg == nil || e.f.pkg.Metadata.Name != "demo" {
+		t.Fatalf("package archive not received: %+v", e.f.pkg)
 	}
-	out = e.mustRun("upgrade", "r", redis, "--set", port, "--set", "image.tag=7.2", "--dry-run", "--verbose")
-	if !strings.Contains(out, `spec.image: "redis:7.4" -> "redis:7.2"`) {
-		t.Fatalf("dry run --verbose:\n%s", out)
+	if len(u.Values.ValueFiles) != 0 || len(u.Values.ValueData) != 1 || string(u.Values.ValueData[0]) != "replicas: 3\n" ||
+		u.Values.Sets[0] != "a=1" || u.Values.SetStrings[0] != "b=007" {
+		t.Fatalf("values: %+v", u.Values)
 	}
-	if img := e.rt.Workloads["r-redis"].Request.Image; img != "redis:7.4" {
-		t.Fatalf("dry run changed the workload: %s", img)
-	}
-
-	e.mustRun("upgrade", "r", redis, "--set", port, "--set", "image.tag=7.2")
-	out = e.mustRun("history", "r")
-	if !strings.Contains(out, "REVISION") || !strings.Contains(out, "Upgrade complete") {
-		t.Fatalf("history:\n%s", out)
-	}
-	var hist []map[string]any
-	if err := json.Unmarshal([]byte(e.mustRun("history", "r", "-o", "json")), &hist); err != nil || len(hist) != 2 {
-		t.Fatalf("history json: %v %v", hist, err)
-	}
-
-	out = e.mustRun("get", "values", "r")
-	if !strings.Contains(out, "tag: \"7.2\"") || strings.Contains(out, "repository") {
-		t.Fatalf("get values:\n%s", out)
-	}
-	if out := e.mustRun("get", "values", "r", "--all"); !strings.Contains(out, "repository: redis") {
-		t.Fatalf("get values --all:\n%s", out)
-	}
-	if out := e.mustRun("get", "manifest", "r", "--revision", "1"); !strings.Contains(out, "image: redis:7.4") {
-		t.Fatalf("get manifest:\n%s", out)
-	}
-
-	out = e.mustRun("rollback", "r", "1")
-	if !strings.Contains(out, "rolled back (revision 3)") {
-		t.Fatalf("rollback:\n%s", out)
-	}
-	out = e.mustRun("status", "r")
-	if !strings.Contains(out, "Status:   deployed") || !strings.Contains(out, "r-redis") || !strings.Contains(out, "running") {
-		t.Fatalf("status:\n%s", out)
-	}
-	if out := e.mustRun("list"); !strings.Contains(out, "r     3         deployed") {
-		t.Fatalf("list:\n%s", out)
-	}
-
-	e.mustRun("uninstall", "r")
-	if out := e.mustRun("list", "-o", "json"); strings.TrimSpace(out) != "[]" {
-		t.Fatalf("list after uninstall: %s", out)
-	}
-	if _, ok := e.rt.Volumes["r-redis-data"]; !ok {
-		t.Fatal("uninstall must keep the volume")
-	}
-}
-
-func TestReleaseCLIErrors(t *testing.T) {
-	e := newCLIEnv(t)
-	for _, args := range [][]string{
-		{"upgrade", "nope", redis},
-		{"rollback", "nope"},
-		{"rollback", "nope", "zero"},
-		{"uninstall", "nope"},
-		{"status", "nope"},
-		{"history", "nope"},
-		{"get", "values", "nope"},
-	} {
-		if _, err := e.run(args...); err == nil {
-			t.Errorf("karga %v: expected error", args)
+	for _, want := range []string{`Release "r" upgraded (revision 2).`, "update workload web (replace)",
+		"delete volume cache (its data is deleted)", "NOTES:\nr (revision 2) runs nginx:2."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	e.mustRun("install", "r", redis, "--set", "service.enabled=false")
-	e.rt.Health = ports.HealthUnhealthy
-	_, err := e.run("upgrade", "r", redis, "--set", "service.enabled=false", "--set", "image.tag=7.2", "--timeout", "100ms")
-	if err == nil || !strings.Contains(err.Error(), "revision 1 stays current") || !strings.Contains(err.Error(), "karga rollback r") {
-		t.Fatalf("failed upgrade hint: %v", err)
+	if strings.Contains(out, "net") || !strings.Contains(e.stderr, "Warning: workload web keeps image VOLUME") {
+		t.Fatalf("unchanged resources listed or warning missing:\n%s\n%s", out, e.stderr)
 	}
 }
 
-func TestStrategyFlag(t *testing.T) {
+func TestDryRunPlan(t *testing.T) {
 	e := newCLIEnv(t)
-	web := "../../tests/integration/testdata/web"
-	e.mustRun("install", "w", web)
-	out := e.mustRun("upgrade", "w", web, "--set", "content=v2", "--dry-run")
-	if !strings.Contains(out, "WORKLOAD web (replace)") {
-		t.Fatalf("dry run:\n%s", out)
+	res := installed()
+	res.DryRun = true
+	e.f.result = res
+	out := e.mustRun("install", "r", demo, "--dry-run")
+	for _, want := range []string{"Deployment Plan", "Revision: 1 -> 2", "~ WORKLOAD web (replace)", "- VOLUME cache (its data is deleted)",
+		"0 to create, 1 to update, 1 to delete, 1 unchanged."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
 	}
-	if out := e.mustRun("upgrade", "w", web, "--set", "content=v2", "--dry-run", "--strategy", "recreate"); !strings.Contains(out, "WORKLOAD web (recreate)") {
-		t.Fatalf("override:\n%s", out)
+	if out := e.mustRun("install", "r", demo, "--dry-run", "--verbose"); !strings.Contains(out, `spec.image: "nginx:1" -> "nginx:2"`) {
+		t.Fatalf("verbose:\n%s", out)
 	}
-	if out := e.mustRun("upgrade", "w", web, "--set", "content=v2"); !strings.Contains(out, "update workload web (replace)") {
-		t.Fatalf("upgrade:\n%s", out)
-	}
-	if _, err := e.run("upgrade", "w", web, "--strategy", "rolling"); err == nil || !strings.Contains(err.Error(), "invalid --strategy") {
-		t.Fatalf("invalid strategy: %v", err)
+	if !e.f.install.DryRun {
+		t.Fatal("dry run not sent")
 	}
 }
 
-func TestStateBackup(t *testing.T) {
+func TestProgressAndErrors(t *testing.T) {
 	e := newCLIEnv(t)
-	e.mustRun("install", "w", "../../tests/integration/testdata/web")
-	dest := filepath.Join(t.TempDir(), "state.db")
-	if out := e.mustRun("state", "backup", dest); !strings.Contains(out, "state written to") {
-		t.Fatalf("backup: %s", out)
+	e.f.events = []plan.Event{{Kind: "Workload", Name: "web", Phase: plan.PhaseCreate, Detail: "creating r-web"}}
+	e.f.result = installed()
+	e.f.err = errors.New("Workload \"web\": image nginx:9 was not found")
+	_, err := e.run("rollback", "r", "1")
+	if err == nil || !strings.Contains(err.Error(), "image nginx:9 was not found") || e.f.rollback.Revision != 1 {
+		t.Fatalf("error from the server: %v", err)
 	}
-	if _, err := e.run("state", "backup", dest); err == nil {
-		t.Fatal("backup over an existing file must fail")
+	if !strings.Contains(e.stderr, "workload web: creating r-web") {
+		t.Fatalf("progress on stderr:\n%s", e.stderr)
 	}
-	store, err := sqlite.Open(context.Background(), dest)
-	if err != nil {
-		t.Fatal(err)
+	if _, err := e.run("upgrade", "x", demo, "--strategy", "rolling"); err == nil || !strings.Contains(err.Error(), `invalid --strategy "rolling"`) {
+		t.Fatalf("strategy checked locally: %v", err)
 	}
-	defer func() { _ = store.Close() }()
-	if _, err := store.GetRelease(context.Background(), "w"); err != nil {
-		t.Fatalf("backup misses release w: %v", err)
+	if _, err := e.run("install", "d", "does/not/exist"); err == nil || !strings.Contains(err.Error(), "does/not/exist") {
+		t.Fatalf("missing package: %v", err)
+	}
+	if _, err := e.run("list", "-o", "yaml"); err == nil || !strings.Contains(err.Error(), `invalid --output "yaml"`) {
+		t.Fatalf("output: %v", err)
 	}
 }
 
-func TestLogs(t *testing.T) {
+func TestStatusTable(t *testing.T) {
 	e := newCLIEnv(t)
-	web := "../../tests/integration/testdata/web"
-	e.mustRun("install", "w", web, "--set", "second=true")
-	e.rt.Output = map[string]string{"w-web": "web 1\nweb 2\nweb 3\n", "w-api": "api 1\napi 2"}
-
-	if out := e.mustRun("logs", "w", "web", "--tail", "2"); out != "web 2\nweb 3\n" {
-		t.Fatalf("one workload: %q", out)
+	e.f.status = &api.StatusReport{
+		Release: release.Release{Name: "r", Status: release.StatusDeployed, CurrentRevision: 3, PackageName: "shop", PackageVersion: "1.0.0", UpdatedAt: time.Now()},
+		Resources: []api.ResourceStatus{
+			{Kind: "Workload", Name: "web", RuntimeName: "r-web", Revision: 3, Desired: "applied", Actual: "running", Health: "healthy", Restarts: 4, OOMKilled: true},
+			{Kind: "Service", Name: "web", RuntimeName: "r-karga-proxy", Revision: 3, Desired: "applied", Actual: "routed", Backend: "karga-web-r3"},
+		},
+		Orphans:   []string{"workload/r-old"},
+		Reconcile: &api.ReconcileStatus{Last: time.Now(), Status: "succeeded", GaveUp: map[string]string{"Workload/web": "boom"}},
 	}
-	if out := e.mustRun("logs", "w", "--tail", "1"); out != "api | api 2\nweb | web 3\n" {
-		t.Fatalf("all workloads: %q", out)
+	out := e.mustRun("status", "r")
+	for _, want := range []string{"Status:   deployed", "Revision: 3", "Repaired: ", "succeeded", "healthy, oom-killed", "-> karga-web-r3",
+		"Not tracked by karga: workload/r-old", "gave up repairing", "Workload/web: boom"} {
+		if !strings.Contains(out, want) {
+			t.Errorf("missing %q in:\n%s", want, out)
+		}
 	}
-	if _, err := e.run("logs", "w", "nope"); err == nil || !strings.Contains(err.Error(), "workloads: api, web") {
-		t.Fatalf("unknown workload: %v", err)
+	e.f.status.Release.Paused = true
+	if out := e.mustRun("status", "r"); !strings.Contains(out, "Repaired: paused (karga resume r)") {
+		t.Fatalf("paused:\n%s", out)
 	}
-	if _, err := e.run("logs"); err == nil || !strings.Contains(err.Error(), "--gateway") {
-		t.Fatalf("no release: %v", err)
-	}
-	if _, err := e.run("logs", "w", "--proxy"); err != nil {
-		t.Fatalf("release proxy logs: %v", err)
-	}
-	e.mustRun("install", "r", redis, "--set", "service.enabled=false")
-	if _, err := e.run("logs", "r", "--proxy"); err == nil || !strings.Contains(err.Error(), "has no proxy") {
-		t.Fatalf("no services, no proxy: %v", err)
+	var js api.StatusReport
+	if err := json.Unmarshal([]byte(e.mustRun("status", "r", "-o", "json")), &js); err != nil || js.Resources[0].Restarts != 4 {
+		t.Fatalf("json: %+v %v", js, err)
 	}
 }
 
-func TestGatewayStatusAndSettings(t *testing.T) {
+func TestColorsAlignTables(t *testing.T) {
 	e := newCLIEnv(t)
-	out := e.mustRun("gateway", "status")
-	if !strings.Contains(out, "Gateway:    not running (nothing is exposed)") || !strings.Contains(out, "Access log: off") {
-		t.Fatalf("status:\n%s", out)
+	e.f.releases = []release.Release{{Name: "web", Status: release.StatusDeployed, CurrentRevision: 1}, {Name: "db", Status: release.StatusFailed, CurrentRevision: 2}}
+	plain := e.mustRun("list", "--color", "never")
+	colored := e.mustRun("list", "--color", "always")
+	if !strings.Contains(colored, "\x1b[") {
+		t.Fatal("no colors with --color always")
 	}
-	e.mustRun("gateway", "set", "access-log", "on")
-	if out := e.mustRun("gateway", "status"); !strings.Contains(out, "Access log: on") {
-		t.Fatalf("after set:\n%s", out)
-	}
-	if _, err := e.run("gateway", "set", "access-log", "maybe"); err == nil {
-		t.Fatal("invalid value accepted")
-	}
-	if out := e.mustRun("gateway", "status", "-o", "json"); !strings.Contains(out, `"accessLog": true`) || !strings.Contains(out, `"routes": []`) {
-		t.Fatalf("json:\n%s", out)
+	if stripped := regexp.MustCompile("\x1b\\[[0-9;]*m").ReplaceAllString(colored, ""); stripped != plain {
+		t.Fatalf("colored table misaligned:\n%s\n---\n%s", stripped, plain)
 	}
 }
 
-func TestGatewayListeners(t *testing.T) {
+func TestHistoryAndDiff(t *testing.T) {
 	e := newCLIEnv(t)
-	if out := e.mustRun("gateway", "listener", "list"); !strings.Contains(out, "web        80    http") || !strings.Contains(out, "websecure  443   https") {
-		t.Fatalf("default listeners:\n%s", out)
+	m1 := json.RawMessage(`[{"apiVersion":"karga.io/v1alpha1","kind":"Workload","metadata":{"name":"web"},"spec":{"image":"a"}}]`)
+	m2 := json.RawMessage(`[{"apiVersion":"karga.io/v1alpha1","kind":"Workload","metadata":{"name":"web"},"spec":{"image":"b"}}]`)
+	e.f.history = []release.Revision{
+		{Number: 1, Status: release.RevisionDeployed, Description: "Install complete", Manifest: m1, ValuesAll: map[string]any{"tag": "a"}},
+		{Number: 2, Status: release.RevisionDeployed, Description: "Upgrade complete", Manifest: m2, ValuesAll: map[string]any{"tag": "b"}},
 	}
-	pgPort := strconv.Itoa(runtimetest.FreePort(t))
-	e.mustRun("gateway", "listener", "add", "pg", "--port", pgPort, "--protocol", "tcp")
-	if _, err := e.run("gateway", "listener", "add", "alt", "--port", "80", "--protocol", "http"); err == nil || !strings.Contains(err.Error(), `port 80 is used by listener "web"`) {
-		t.Fatalf("duplicate port: %v", err)
+	if out := e.mustRun("history", "r", "--diff"); !strings.Contains(out, "first") || !strings.Contains(out, "+0 ~1 -0, 1 values") {
+		t.Fatalf("history --diff:\n%s", out)
 	}
-	if _, err := e.run("install", "r", redis, "--set", "service.listener=nope"); err == nil || !strings.Contains(err.Error(), "no such gateway listener") {
-		t.Fatalf("unknown listener: %v", err)
+	e.f.diff = &api.RevisionDiff{Release: "r", From: 1, To: 2,
+		Values:    []plan.FieldChange{{Path: "tag", Old: `"a"`, New: `"b"`}},
+		Resources: []plan.ResourceDiff{{Kind: "Workload", Name: "web", Action: plan.ActionUpdate, Fields: []plan.FieldChange{{Path: "spec.image", Old: `"a"`, New: `"b"`}}}}}
+	out := e.mustRun("diff", "r", "1")
+	for _, want := range []string{"revision 1 -> 2", `tag: "a" -> "b"`, "~ WORKLOAD web", `spec.image: "a" -> "b"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("diff misses %q:\n%s", want, out)
+		}
 	}
-	e.mustRun("install", "r", redis, "--set", "service.listener=pg")
-	if out := e.mustRun("gateway", "status"); !strings.Contains(out, "pg:"+pgPort) || !strings.Contains(out, "redis:6379") || !strings.Contains(out, "Listen:     127.0.0.1") {
-		t.Fatalf("status:\n%s", out)
-	}
-	if out := e.mustRun("gateway", "listener", "list"); !strings.Contains(out, "r/redis") {
-		t.Fatalf("users:\n%s", out)
-	}
-	if _, err := e.run("gateway", "listener", "remove", "pg"); err == nil || !strings.Contains(err.Error(), "is used by r/redis") {
-		t.Fatalf("remove in use: %v", err)
-	}
-	e.mustRun("gateway", "set", "listen", "127.0.0.1,::1")
-	if out := e.mustRun("gateway", "status", "-o", "json"); !strings.Contains(out, `"::1"`) {
-		t.Fatalf("listen:\n%s", out)
-	}
-	if _, err := e.run("gateway", "set", "listen", "localhost"); err == nil || !strings.Contains(err.Error(), "not an IP address") {
-		t.Fatalf("bad address: %v", err)
-	}
-	e.mustRun("uninstall", "r")
-	e.mustRun("gateway", "listener", "remove", "pg")
-}
-
-func TestStatusShowsRestartsAndOOM(t *testing.T) {
-	e := newCLIEnv(t)
-	e.mustRun("install", "w", "../../tests/integration/testdata/web")
-	e.rt.Workloads["w-web"].Restarts, e.rt.Workloads["w-web"].OOMKilled = 3, true
-	out := e.mustRun("status", "w")
-	if !strings.Contains(out, "RESTARTS") || !strings.Contains(out, "3") || !strings.Contains(out, "oom-killed") {
-		t.Fatalf("status:\n%s", out)
+	if _, err := e.run("diff", "r", "x"); err == nil {
+		t.Fatal("a revision must be a number")
 	}
 }
 
-func TestVolumeBackupRestore(t *testing.T) {
+func TestGetCommands(t *testing.T) {
 	e := newCLIEnv(t)
-	e.mustRun("install", "r", redis, "--set", "service.enabled=false")
-	e.rt.Files = map[string]map[string][]byte{"r-redis": {"/data/dump.rdb": []byte("snapshot"), "/data/appendonly/a.aof": []byte("log")}}
-	file := filepath.Join(t.TempDir(), "data.tar.gz")
+	if out := e.mustRun("get", "values", "r"); !strings.Contains(out, "password: <redacted>") || !strings.Contains(out, "replicas: 2") {
+		t.Fatalf("values:\n%s", out)
+	}
+	if out := e.mustRun("get", "notes", "r"); !strings.Contains(out, "notes here") {
+		t.Fatalf("notes:\n%s", out)
+	}
+	if out := e.mustRun("get", "manifest", "r"); !strings.Contains(out, "kind: Network") {
+		t.Fatalf("manifest:\n%s", out)
+	}
+}
 
-	if out := e.mustRun("volume", "backup", "r", "redis-data", file, "--stop"); !strings.Contains(out, "written to") {
+func TestStreams(t *testing.T) {
+	e := newCLIEnv(t)
+	e.f.logs = "web | line 1\nweb | line 2\n"
+	if out := e.mustRun("logs", "r", "web", "--tail", "2"); out != e.f.logs {
+		t.Fatalf("logs: %q", out)
+	}
+
+	// exec: stdin goes in, stdout and stderr come back, the exit code becomes karga's.
+	var out, errOut bytes.Buffer
+	cmd := e.root(&out, &errOut)
+	cmd.SetIn(strings.NewReader("hello"))
+	cmd.SetArgs([]string{"exec", "r", "web", "-i", "--", "cat"})
+	e.f.exitCode = 3
+	err := cmd.Execute()
+	var exit *ExitCodeError
+	if !errors.As(err, &exit) || exit.Code != 3 || out.String() != "out:hello" || errOut.String() != "to stderr" || e.f.execCmd[0] != "cat" {
+		t.Fatalf("exec: %v %q %q %v", err, out.String(), errOut.String(), e.f.execCmd)
+	}
+
+	// Backups are written by the CLI: 0600, never over an existing file.
+	dir := t.TempDir()
+	e.f.backup = "TARBALL"
+	file := filepath.Join(dir, "data.tar.gz")
+	if out := e.mustRun("volume", "backup", "r", "data", file, "--stop"); !strings.Contains(out, "written to "+file) {
 		t.Fatalf("backup: %s", out)
 	}
 	if info, err := os.Stat(file); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("backup file: %v %v", info, err)
 	}
-	if w := e.rt.Workloads["r-redis"]; w.State != ports.StateRunning {
-		t.Fatalf("--stop must start the workload again: %s", w.State)
+	if b, _ := os.ReadFile(file); string(b) != "TARBALL" {
+		t.Fatalf("backup content: %q", b)
 	}
-	if _, err := e.run("volume", "backup", "r", "redis-data", file); err == nil {
+	if _, err := e.run("volume", "backup", "r", "data", file); err == nil {
 		t.Fatal("backup over an existing file must fail")
 	}
-
-	e.rt.Files["r-redis"] = map[string][]byte{}
-	e.mustRun("volume", "restore", "r", "redis-data", file)
-	if got := e.rt.Files["r-redis"]; string(got["/data/dump.rdb"]) != "snapshot" || string(got["/data/appendonly/a.aof"]) != "log" {
-		t.Fatalf("restored files: %v", got)
+	if out := e.mustRun("volume", "restore", "r", "data", file); !strings.Contains(out, "restored from") || e.f.restored != "TARBALL" {
+		t.Fatalf("restore: %s %q", out, e.f.restored)
 	}
-	if _, err := e.run("volume", "backup", "r", "nope", file+"2"); err == nil || !strings.Contains(err.Error(), `no volume "nope"`) {
-		t.Fatalf("unknown volume: %v", err)
+	e.f.err = errors.New("volume data is not mounted")
+	failed := filepath.Join(dir, "failed.tar.gz")
+	if _, err := e.run("volume", "backup", "r", "data", failed); err == nil || !strings.Contains(err.Error(), "not mounted") {
+		t.Fatalf("failed backup: %v", err)
 	}
-}
-
-func TestLiveProgress(t *testing.T) {
-	e := newCLIEnv(t)
-	web := "../../tests/integration/testdata/web"
-	e.mustRun("install", "w", web)
-	progress := e.lastStderr()
-	for _, want := range []string{"workload web: image busybox:1.37", "workload web: creating w-web", "workload web: create done"} {
-		if !strings.Contains(progress, want) {
-			t.Errorf("progress misses %q:\n%s", want, progress)
-		}
+	if _, err := os.Stat(failed); err == nil {
+		t.Fatal("a failed backup leaves no file")
 	}
-	e.mustRun("upgrade", "w", web, "--set", "content=v2")
-	if p := e.lastStderr(); !strings.Contains(p, "starting w-web-next next to w-web") || !strings.Contains(p, "switching traffic to w-web-next") {
-		t.Errorf("replace progress:\n%s", p)
+	e.f.err = nil
+	state := filepath.Join(dir, "state.db")
+	if out := e.mustRun("state", "backup", state); !strings.Contains(out, "state written to") || !strings.Contains(out, "state.key") {
+		t.Fatalf("state backup: %s", out)
 	}
-	e.mustRun("upgrade", "w", web, "--set", "content=v3", "-o", "json")
-	if p := e.lastStderr(); p != "" {
-		t.Errorf("no progress with JSON output: %q", p)
+	if b, _ := os.ReadFile(state); string(b) != "SQLite format 3" {
+		t.Fatalf("state content: %q", b)
 	}
 }
 
-func TestExec(t *testing.T) {
+func TestGatewayCommands(t *testing.T) {
 	e := newCLIEnv(t)
-	e.mustRun("install", "w", "../../tests/integration/testdata/web")
-	var got []string
-	e.rt.ExecFunc = func(name string, o ports.ExecOptions) int {
-		got = append([]string{name}, o.Cmd...)
-		_, _ = io.WriteString(o.Stdout, "hello\\n")
-		return 7
-	}
-	out, err := e.run("exec", "w", "web", "--", "echo", "hello")
-	var exit *ExitCodeError
-	if !errors.As(err, &exit) || exit.Code != 7 || out != "hello\\n" || strings.Join(got, " ") != "w-web echo hello" {
-		t.Fatalf("exec: %q %v %v", out, err, got)
-	}
-	if _, err := e.run("exec", "w", "nope", "--", "true"); err == nil || !strings.Contains(err.Error(), "workloads: web") {
-		t.Fatalf("unknown workload: %v", err)
-	}
-	if _, err := e.run("exec", "w", "web"); err == nil || !strings.Contains(err.Error(), "needs a terminal") {
-		t.Fatalf("default interactive sh without a terminal: %v", err)
-	}
-}
-
-func TestDiffAndHistory(t *testing.T) {
-	e := newCLIEnv(t)
-	e.mustRun("install", "r", redis, "--set", "service.enabled=false")
-	e.mustRun("upgrade", "r", redis, "--set", "service.enabled=false", "--set", "image.tag=7.2")
-	out := e.mustRun("diff", "r", "1")
-	for _, want := range []string{"revision 1 -> 2", `image.tag: "7.4" -> "7.2"`, "~ WORKLOAD redis", `spec.image: "redis:7.4" -> "redis:7.2"`} {
+	e.f.health = api.State{Container: "running", Ready: true, Version: "1.36.13", Listen: []string{"127.0.0.1"}}
+	e.f.exposed = []api.Exposed{{Listener: "web:80", Route: "shop.local/", Release: "shop", Service: "web:80", Upstream: "127.0.0.1:4001"}}
+	out := e.mustRun("gateway", "status")
+	for _, want := range []string{"running, ready (Envoy 1.36.13)", "Listen:     127.0.0.1", "Access log: off", "web:80", "shop.local/", "127.0.0.1:4001"} {
 		if !strings.Contains(out, want) {
-			t.Errorf("diff misses %q:\n%s", want, out)
+			t.Errorf("missing %q in:\n%s", want, out)
 		}
 	}
-	if out := e.mustRun("diff", "r", "2", "2"); !strings.Contains(out, "no differences") {
-		t.Fatalf("same revision:\n%s", out)
+	e.f.health = api.State{Container: "missing", Listen: []string{"127.0.0.1"}}
+	e.f.exposed = nil
+	if out := e.mustRun("gateway", "status", "-o", "json"); !strings.Contains(out, `"routes": []`) {
+		t.Fatalf("json:\n%s", out)
 	}
-	if out := e.mustRun("history", "r", "--diff"); !strings.Contains(out, "CHANGES") || !strings.Contains(out, "first") || !strings.Contains(out, "~1") {
-		t.Fatalf("history --diff:\n%s", out)
+	e.f.settings = api.Settings{Listen: []string{"127.0.0.1"}, Listeners: api.DefaultListeners()}
+	e.f.users = map[string][]string{"web": {"shop/web"}}
+	if out := e.mustRun("gateway", "listener", "list"); !strings.Contains(out, "web        80    http      shop/web") {
+		t.Fatalf("listeners:\n%s", out)
 	}
-
-	// Secret values and writeOnly values never show, only that they changed.
-	pg := "../../tests/testdata/postgres"
-	pgPort := "service.enabled=false"
-	e.mustRun("install", "db", pg, "--set", pgPort, "--set", "database.password=first-secret")
-	e.mustRun("upgrade", "db", pg, "--set", pgPort, "--set", "database.password=second-secret")
-	out = e.mustRun("diff", "db", "1")
-	if strings.Contains(out, "first-secret") || strings.Contains(out, "second-secret") || !strings.Contains(out, "(changed)") {
-		t.Fatalf("secrets in diff:\n%s", out)
+	e.mustRun("gateway", "listener", "add", "pg", "--port", "5432", "--protocol", "tcp")
+	e.mustRun("gateway", "listener", "remove", "pg")
+	e.mustRun("gateway", "set", "listen", "10.0.0.5,127.0.0.1")
+	e.mustRun("gateway", "set", "access-log", "on")
+	if got := strings.Join(e.f.calls, ","); got != "add pg,remove pg,listen,access-log on" || len(e.f.settings.Listen) != 2 {
+		t.Fatalf("calls: %s %v", got, e.f.settings.Listen)
+	}
+	if _, err := e.run("gateway", "set", "access-log", "maybe"); err == nil {
+		t.Fatal("invalid value accepted")
 	}
 }
 
-func TestCreateLintInstallNotes(t *testing.T) {
+func TestReconcileCommands(t *testing.T) {
 	e := newCLIEnv(t)
-	dir := filepath.Join(t.TempDir(), "shop")
-	e.mustRun("create", dir)
-	if out := e.mustRun("lint", dir); !strings.Contains(out, "0 failed") {
-		t.Fatalf("lint of a created package:\n%s", out)
+	e.f.recon = &api.ReconcileResult{Release: "r", Actions: []release.Step{{Kind: "Workload", Name: "web", Action: "start", Status: "done"}}}
+	if out := e.mustRun("reconcile", "r"); !strings.Contains(out, "start workload web: done") {
+		t.Fatalf("reconcile:\n%s", out)
 	}
-	if _, err := e.run("create", dir); err == nil {
-		t.Fatal("create over an existing directory must fail")
+	e.f.recon = &api.ReconcileResult{Release: "r", Skipped: "paused"}
+	if out := e.mustRun("reconcile", "r"); !strings.Contains(out, "not reconciled: paused") {
+		t.Fatalf("skipped:\n%s", out)
 	}
-	// The fake runtime runs nothing: the container's address is 127.0.0.1 and, once it "exists",
-	// a server answers karga's http health check on the port the package listens on.
-	for _, f := range []string{"templates/web.yaml"} {
-		p := filepath.Join(dir, f)
-		b, err := os.ReadFile(p)
-		if err != nil {
-			t.Fatal(err)
-		}
-		b = []byte(strings.ReplaceAll(strings.ReplaceAll(string(b), "containerPort: 80", "containerPort: "+e.port), "port: 80", "port: "+e.port))
-		if err := os.WriteFile(p, b, 0o600); err != nil {
-			t.Fatal(err)
-		}
+	e.f.recon = &api.ReconcileResult{Release: "r"}
+	if out := e.mustRun("reconcile", "r"); !strings.Contains(out, "nothing to repair") {
+		t.Fatalf("nothing:\n%s", out)
 	}
-	e.rt.IPs = map[string]map[string]string{"s-web": {"s-net": "127.0.0.1"}}
-	srv := &http.Server{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), ReadHeaderTimeout: time.Second}
-	t.Cleanup(func() { _ = srv.Close() })
-	go func() {
-		for range 1000 {
-			if _, err := e.rt.GetWorkload(context.Background(), "s-web"); err == nil {
-				if l, err := net.Listen("tcp", "127.0.0.1:"+e.port); err == nil {
-					_ = srv.Serve(l)
-				}
-				return
-			}
-			time.Sleep(5 * time.Millisecond)
-		}
-	}()
-	out := e.mustRun("install", "s", dir, "--set", "expose.host=shop.local")
-	if !strings.Contains(out, "NOTES:") || !strings.Contains(out, "s (revision 1) runs nginx") {
-		t.Fatalf("notes after install:\n%s", out)
+	e.mustRun("pause", "r")
+	e.mustRun("resume", "r")
+	e.f.ops = []release.Operation{
+		{ID: 2, Release: "r", Type: "reconcile", Revision: 1, Status: release.OperationSucceeded, StartedAt: time.Now(),
+			Steps: []release.Step{{Kind: "Workload", Name: "web", Action: "start"}}},
+		{ID: 1, Release: "r", Type: "install", Revision: 1, Status: release.OperationSucceeded, StartedAt: time.Now().Add(-time.Minute)},
 	}
-	if out := e.mustRun("get", "notes", "s"); !strings.Contains(out, "karga logs s -f") {
-		t.Fatalf("get notes:\n%s", out)
+	out := e.mustRun("events", "r")
+	if !strings.Contains(out, "OPERATION") || strings.Index(out, "install") > strings.Index(out, "reconcile") || !strings.Contains(out, "start workload web") {
+		t.Fatalf("events, oldest first:\n%s", out)
 	}
-	if _, err := e.run("create", filepath.Join(t.TempDir(), "Bad_Name")); err == nil {
-		t.Fatal("a package name must be a DNS label")
-	}
-}
-
-func TestStatusWatchAndColor(t *testing.T) {
-	e := newCLIEnv(t)
-	e.mustRun("install", "w", "../../tests/integration/testdata/web")
-	out := e.mustRun("status", "w", "--watch", "--count", "2", "--interval", "10ms")
-	if strings.Count(out, "Every 10ms: karga status w") != 2 || strings.Contains(out, "\x1b[") {
-		t.Fatalf("watch without a terminal:\n%s", out)
-	}
-	out = e.mustRun("status", "w", "--color", "always")
-	if !strings.Contains(out, colorGreen+"deployed"+colorReset) || !strings.Contains(out, colorGreen+"running"+colorReset) {
-		t.Fatalf("colors:\n%q", out)
-	}
-	// Coloring never shifts columns: the plain and colored tables have the same layout.
-	plain := e.mustRun("status", "w", "--color", "never")
-	stripped := regexp.MustCompile(`\x1b\[[0-9;]*m`).ReplaceAllString(out, "")
-	if stripped != plain {
-		t.Fatalf("colored table misaligned:\n%s\n---\n%s", stripped, plain)
-	}
-}
-
-// complete runs shell completion for args (the last one is the word being completed).
-func (e *cliEnv) complete(args ...string) []string {
-	e.t.Helper()
-	var out bytes.Buffer
-	cmd := e.root(&out, &bytes.Buffer{})
-	cmd.SetArgs(append([]string{"__complete"}, args...))
-	if err := cmd.Execute(); err != nil {
-		e.t.Fatalf("complete %v: %v", args, err)
-	}
-	var vals []string
-	for _, l := range strings.Split(out.String(), "\n") {
-		if l != "" && !strings.HasPrefix(l, ":") && !strings.HasPrefix(l, "Completion ended") {
-			vals = append(vals, strings.SplitN(l, "\t", 2)[0])
-		}
-	}
-	return vals
 }
 
 func TestDynamicCompletion(t *testing.T) {
 	e := newCLIEnv(t)
-	if got := e.complete("status", ""); len(got) != 0 {
-		t.Fatalf("no state yet, nothing to offer: %v", got)
+	complete := func(args ...string) string {
+		t.Helper()
+		var out bytes.Buffer
+		cmd := e.root(&out, &bytes.Buffer{})
+		cmd.SetArgs(append([]string{"__complete"}, args...))
+		if err := cmd.Execute(); err != nil {
+			t.Fatal(err)
+		}
+		var vals []string
+		for _, l := range strings.Split(out.String(), "\n") {
+			if l != "" && !strings.HasPrefix(l, ":") && !strings.HasPrefix(l, "Completion ended") {
+				vals = append(vals, strings.SplitN(l, "\t", 2)[0])
+			}
+		}
+		return strings.Join(vals, " ")
 	}
-	e.mustRun("install", "web1", "../../tests/integration/testdata/web", "--set", "second=true")
-	e.mustRun("install", "redis1", redis, "--set", "service.enabled=false")
-	e.mustRun("upgrade", "web1", "../../tests/integration/testdata/web", "--set", "second=true", "--set", "content=v2")
+	e.f.releases = []release.Release{{Name: "redis1"}, {Name: "web1"}}
+	e.f.applied = []release.AppliedResource{{Kind: "Workload", Name: "api"}, {Kind: "Workload", Name: "web"}, {Kind: "Volume", Name: "data"}}
+	e.f.history = []release.Revision{{Number: 1, Status: release.RevisionDeployed}, {Number: 2, Status: release.RevisionDeployed}}
 	for _, tc := range []struct {
 		args []string
 		want string
@@ -511,44 +325,23 @@ func TestDynamicCompletion(t *testing.T) {
 		{[]string{"status", ""}, "redis1 web1"},
 		{[]string{"status", "w"}, "web1"},
 		{[]string{"logs", "web1", ""}, "api web"},
-		{[]string{"exec", "web1", "a"}, "api"},
+		{[]string{"volume", "backup", "web1", ""}, "data"},
 		{[]string{"rollback", "web1", ""}, "2 1"},
-		{[]string{"volume", "backup", "redis1", ""}, "redis-data"},
-		{[]string{"get", "notes", ""}, "redis1 web1"},
+		{[]string{"events", ""}, "redis1 web1"},
 	} {
-		if got := strings.Join(e.complete(tc.args...), " "); got != tc.want {
-			t.Errorf("complete %v: %q, want %q", tc.args, got, tc.want)
+		if got := complete(tc.args...); got != tc.want {
+			t.Errorf("complete %v: got %q, want %q", tc.args, got, tc.want)
 		}
 	}
 }
 
-func TestReconcileCommands(t *testing.T) {
-	e := newCLIEnv(t)
-	e.mustRun("install", "r", redis, "--set", "service.enabled=false")
-	if out := e.mustRun("reconcile", "r"); !strings.Contains(out, "nothing to repair") {
-		t.Fatalf("healthy release:\n%s", out)
+func TestServerNotRunning(t *testing.T) {
+	out, _, err := run(t, "--socket", filepath.Join(t.TempDir(), "none.sock"), "list")
+	if err == nil || !strings.Contains(err.Error(), "karga-server is not running") || !strings.Contains(err.Error(), "systemctl start karga-server") {
+		t.Fatalf("list without a server: %v\n%s", err, out)
 	}
-	if err := e.rt.StopWorkload(context.Background(), "r-redis", 0); err != nil {
-		t.Fatal(err)
-	}
-	if out := e.mustRun("reconcile", "r"); !strings.Contains(out, "start workload redis: done") {
-		t.Fatalf("repair:\n%s", out)
-	}
-	if out := e.mustRun("status", "r"); !strings.Contains(out, "Repaired: ") || !strings.Contains(out, "succeeded") {
-		t.Fatalf("status:\n%s", out)
-	}
-	e.mustRun("pause", "r")
-	if out := e.mustRun("status", "r"); !strings.Contains(out, "Repaired: paused (karga resume r)") {
-		t.Fatalf("paused status:\n%s", out)
-	}
-	if out := e.mustRun("reconcile", "r"); !strings.Contains(out, "not reconciled: paused") {
-		t.Fatalf("paused:\n%s", out)
-	}
-	e.mustRun("resume", "r")
-	out := e.mustRun("events", "r")
-	for _, want := range []string{"OPERATION", "install", "reconcile", "start workload redis"} {
-		if !strings.Contains(out, want) {
-			t.Fatalf("events miss %q:\n%s", want, out)
-		}
+	// Package commands need no server.
+	if _, _, err := run(t, "--socket", filepath.Join(t.TempDir(), "none.sock"), "lint", demo); err != nil {
+		t.Fatalf("lint without a server: %v", err)
 	}
 }

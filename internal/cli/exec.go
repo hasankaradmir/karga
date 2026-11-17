@@ -10,8 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/hasankaradmir/karga/internal/api"
-	"github.com/hasankaradmir/karga/internal/ports"
+	"github.com/hasankaradmir/karga-sdk/api"
 )
 
 // ExitCodeError makes karga exit with Code without printing anything (e.g. a command's own code).
@@ -33,7 +32,7 @@ func newExecCmd(a *app) *cobra.Command {
 			if len(command) == 0 {
 				command, interactive, tty = []string{"sh"}, true, true
 			}
-			opts := ports.ExecOptions{Cmd: command, TTY: tty, Stdout: a.stdout, Stderr: a.stderr}
+			opts := api.ExecOptions{Cmd: command, TTY: tty, Stdout: a.stdout, Stderr: a.stderr}
 			if interactive {
 				opts.Stdin = cmd.InOrStdin()
 			}

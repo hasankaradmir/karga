@@ -12,6 +12,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/hasankaradmir/karga-sdk/api"
 	"github.com/hasankaradmir/karga-sdk/resource"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
@@ -30,24 +31,11 @@ type BackupManifest struct {
 	Created   time.Time `json:"created"`
 }
 
-// VolumeBackupRequest copies a volume's files out through a workload that mounts it. Stop stops
-// the workloads mounting it for a consistent copy; otherwise the copy is taken live.
-type VolumeBackupRequest struct {
-	Release, Volume string
-	Stop            bool
-	// W receives the backup (a gzip-compressed tar). The caller owns the file it may write to.
-	W io.Writer `json:"-"`
-}
+// VolumeBackupRequest is shared with the CLI (karga-sdk/api).
+type VolumeBackupRequest = api.VolumeBackupRequest
 
-// VolumeRestoreRequest writes a backup into a volume, overwriting files with the same names; the
-// workloads mounting it are stopped meanwhile. Force restores a backup of another volume.
-type VolumeRestoreRequest struct {
-	Release, Volume string
-	Force           bool
-	// Name names the backup in messages (its file name); R reads it.
-	Name string
-	R    io.Reader `json:"-"`
-}
+// VolumeRestoreRequest is shared with the CLI (karga-sdk/api).
+type VolumeRestoreRequest = api.VolumeRestoreRequest
 
 type mounter struct {
 	name, runtime, path string

@@ -14,13 +14,13 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hasankaradmir/karga-sdk/api"
+	"github.com/hasankaradmir/karga-sdk/logger"
 	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
-	"github.com/hasankaradmir/karga/internal/api"
 	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/application/reconciler"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/infrastructure/config"
-	"github.com/hasankaradmir/karga-sdk/logger"
 	"github.com/hasankaradmir/karga/internal/ports"
 	"github.com/hasankaradmir/karga/internal/version"
 )
@@ -39,6 +39,22 @@ type Config struct {
 
 // DefaultReconcileInterval is how often every release is looked at besides runtime events.
 const DefaultReconcileInterval = 30 * time.Second
+
+var _ api.Backend = (*releases.Service)(nil)
+
+// status maps karga-server's errors to HTTP status codes; the CLI shows only their messages.
+func status(err error) int {
+	switch {
+	case errors.Is(err, ports.ErrNotFound):
+		return http.StatusNotFound
+	case errors.Is(err, releases.ErrLocked), errors.Is(err, releases.ErrInterrupted), errors.Is(err, releases.ErrExists),
+		errors.Is(err, ports.ErrPortInUse), errors.Is(err, ports.ErrConflict):
+		return http.StatusConflict
+	}
+	return http.StatusBadRequest
+}
+
+func init() { api.SetStatus(status) }
 
 // Server is a running karga-server.
 type Server struct {

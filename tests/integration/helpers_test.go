@@ -24,12 +24,12 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hasankaradmir/karga-sdk/release"
 	"github.com/hasankaradmir/karga/internal/adapters/docker"
 	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
 	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/application/releases"
-	"github.com/hasankaradmir/karga-sdk/release"
 	"github.com/hasankaradmir/karga/internal/ports"
 	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )

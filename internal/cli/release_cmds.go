@@ -14,13 +14,11 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hasankaradmir/karga/internal/api"
-	"github.com/hasankaradmir/karga/internal/application/deployment"
-	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
-	"github.com/hasankaradmir/karga/internal/application/releases"
+	"github.com/hasankaradmir/karga-sdk/api"
+	"github.com/hasankaradmir/karga-sdk/plan"
 	"github.com/hasankaradmir/karga-sdk/release"
-	"github.com/hasankaradmir/karga-sdk/resource"
 	"github.com/hasankaradmir/karga-sdk/renderer"
+	"github.com/hasankaradmir/karga-sdk/resource"
 )
 
 // withBackend connects to karga-server and runs fn against it.
@@ -48,17 +46,17 @@ func addCommonFlags(cmd *cobra.Command, c *commonFlags, dryRun bool) {
 		f.BoolVar(&c.dryRun, "dry-run", false, "show the deployment plan without changing anything")
 	}
 	f.BoolVarP(&c.verbose, "verbose", "v", false, "show every changed field of the plan")
-	f.DurationVar(&c.timeout, "timeout", deployment.DefaultTimeout, "how long to wait for workloads to become ready")
-	f.IntVar(&c.historyMax, "history-max", releases.DefaultHistoryMax, "revisions to keep per release (0 = unlimited)")
+	f.DurationVar(&c.timeout, "timeout", api.DefaultTimeout, "how long to wait for workloads to become ready")
+	f.IntVar(&c.historyMax, "history-max", api.DefaultHistoryMax, "revisions to keep per release (0 = unlimited)")
 	f.BoolVar(&c.force, "force", false, "continue after an interrupted operation whose process is gone")
 }
 
-func (c commonFlags) options() releases.CommonOptions {
-	return releases.CommonOptions{DryRun: c.dryRun, Timeout: c.timeout, HistoryMax: c.historyMax, Force: c.force, DeleteVolumes: c.deleteVolumes}
+func (c commonFlags) options() api.CommonOptions {
+	return api.CommonOptions{DryRun: c.dryRun, Timeout: c.timeout, HistoryMax: c.historyMax, Force: c.force, DeleteVolumes: c.deleteVolumes}
 }
 
 // optionsFor adds live progress on stderr, except for JSON output and dry runs.
-func (a *app) optionsFor(c commonFlags) (releases.CommonOptions, func()) {
+func (a *app) optionsFor(c commonFlags) (api.CommonOptions, func()) {
 	o := c.options()
 	if a.output == outputJSON || c.dryRun {
 		return o, func() {}
@@ -69,7 +67,7 @@ func (a *app) optionsFor(c commonFlags) (releases.CommonOptions, func()) {
 }
 
 // printResult reports a mutating command. A failed deployment still has a result worth showing.
-func (a *app) printResult(verb string, res *releases.Result, verbose bool) error {
+func (a *app) printResult(verb string, res *api.Result, verbose bool) error {
 	if a.output == outputJSON {
 		return writeJSON(a.stdout, res)
 	}
@@ -89,7 +87,7 @@ func (a *app) printResult(verb string, res *releases.Result, verbose bool) error
 	}
 	var changed []string
 	for _, c := range res.Plan.Changes {
-		if c.Action == deployment.ActionUnchanged {
+		if c.Action == plan.ActionUnchanged {
 			continue
 		}
 		line := fmt.Sprintf("  %s %s %s", c.Action, strings.ToLower(c.Kind), c.Name)
@@ -126,7 +124,7 @@ func newInstallCmd(a *app) *cobra.Command {
 		RunE: func(cmd *cobra.Command, args []string) error {
 			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				opts, done := a.optionsFor(common)
-				res, err := s.Install(cmd.Context(), releases.InstallRequest{
+				res, err := s.Install(cmd.Context(), api.InstallRequest{
 					CommonOptions: opts, Name: args[0], Package: args[1], Values: vals.options(args[0]),
 				})
 				done()
@@ -168,7 +166,7 @@ func newUpgradeCmd(a *app) *cobra.Command {
 			}
 			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				opts, done := a.optionsFor(common)
-				res, err := s.Upgrade(cmd.Context(), releases.UpgradeRequest{
+				res, err := s.Upgrade(cmd.Context(), api.UpgradeRequest{
 					CommonOptions: opts, Name: args[0], Package: args[1], Values: vals.options(args[0]),
 					ReuseValues: reuse, Install: install, Strategy: strategy,
 				})
@@ -210,7 +208,7 @@ func newRollbackCmd(a *app) *cobra.Command {
 			}
 			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				opts, done := a.optionsFor(common)
-				res, err := s.Rollback(cmd.Context(), releases.RollbackRequest{CommonOptions: opts, Name: args[0], Revision: rev, Strategy: strategy})
+				res, err := s.Rollback(cmd.Context(), api.RollbackRequest{CommonOptions: opts, Name: args[0], Revision: rev, Strategy: strategy})
 				done()
 				if err != nil {
 					return err
@@ -226,7 +224,7 @@ func newRollbackCmd(a *app) *cobra.Command {
 }
 
 func newUninstallCmd(a *app) *cobra.Command {
-	var req releases.UninstallRequest
+	var req api.UninstallRequest
 	cmd := &cobra.Command{
 		Use:   "uninstall <release>",
 		Short: "Remove a release (volumes are kept unless --delete-volumes)",
@@ -293,7 +291,7 @@ func changeSummary(revs []release.Revision, i int) string {
 	if i == 0 {
 		return "first"
 	}
-	res, err := deployment.CompareManifests(revs[i-1].Manifest, revs[i].Manifest)
+	res, err := plan.CompareManifests(revs[i-1].Manifest, revs[i].Manifest)
 	if err != nil {
 		return "?"
 	}
@@ -301,7 +299,7 @@ func changeSummary(revs []release.Revision, i int) string {
 	for _, r := range res {
 		n[r.Action]++
 	}
-	values := len(deployment.CompareValues(revs[i-1].ValuesAll, revs[i].ValuesAll))
+	values := len(plan.CompareValues(revs[i-1].ValuesAll, revs[i].ValuesAll))
 	return fmt.Sprintf("+%d ~%d -%d, %d values", n["create"], n["update"], n["delete"], values)
 }
 
@@ -409,7 +407,7 @@ func (a *app) printStatus(ctx context.Context, s api.Backend, name string) error
 			health = strings.TrimPrefix(health+", oom-killed", ", ")
 		}
 		restarts := ""
-		if x.Kind == resource.KindWorkload || x.Kind == deployment.KindProxy {
+		if x.Kind == resource.KindWorkload || x.Kind == api.KindProxy {
 			restarts = strconv.Itoa(x.Restarts)
 		}
 		rows = append(rows, []string{x.Kind, x.Name, x.RuntimeName, strconv.Itoa(x.Revision), x.Desired, x.Actual, restarts, health})
@@ -670,7 +668,7 @@ func newGatewayCmd(a *app) *cobra.Command {
 				}
 				if a.output == outputJSON {
 					if routes == nil {
-						routes = []gateway.Exposed{}
+						routes = []api.Exposed{}
 					}
 					return writeJSON(a.stdout, map[string]any{"gateway": health, "routes": routes})
 				}
@@ -761,7 +759,7 @@ func newListenerCmd(a *app) *cobra.Command {
 			})
 		},
 	})
-	var l gateway.Listener
+	var l api.Listener
 	add := &cobra.Command{
 		Use:   "add <name> --port <port> --protocol tcp|http|https",
 		Short: "Define a listener (a tcp listener belongs to one service; http and https are shared by host)",
@@ -827,7 +825,7 @@ func newStateCmd(a *app) *cobra.Command {
 }
 
 func newLogsCmd(a *app) *cobra.Command {
-	var req releases.LogsRequest
+	var req api.LogsRequest
 	cmd := &cobra.Command{
 		Use:   "logs <release> [workload...]",
 		Short: "Show the logs of a release's workloads, its proxy or the gateway",
@@ -859,7 +857,7 @@ func newLogsCmd(a *app) *cobra.Command {
 
 func newVolumeCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{Use: "volume", Short: "Back up and restore a release's volumes"}
-	var backup releases.VolumeBackupRequest
+	var backup api.VolumeBackupRequest
 	b := &cobra.Command{
 		Use:   "backup <release> <volume> <file.tar.gz>",
 		Short: "Copy a volume's files to a backup file (0600, must not exist)",
@@ -883,7 +881,7 @@ func newVolumeCmd(a *app) *cobra.Command {
 		},
 	}
 	b.Flags().BoolVar(&backup.Stop, "stop", false, "stop the workloads mounting the volume during the copy")
-	var restore releases.VolumeRestoreRequest
+	var restore api.VolumeRestoreRequest
 	r := &cobra.Command{
 		Use:   "restore <release> <volume> <file.tar.gz>",
 		Short: "Write a backup into a volume (its workloads are stopped meanwhile)",
@@ -938,7 +936,7 @@ func newDiffCmd(a *app) *cobra.Command {
 				}
 				var b strings.Builder
 				fmt.Fprintf(&b, "Release %s: revision %d -> %d\n", d.Release, d.From, d.To)
-				fields := func(fs []deployment.FieldChange, indent string) {
+				fields := func(fs []plan.FieldChange, indent string) {
 					for _, f := range fs {
 						switch {
 						case f.Old == "":

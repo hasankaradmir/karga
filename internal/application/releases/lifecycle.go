@@ -6,53 +6,26 @@ import (
 	"fmt"
 	"strings"
 
-	"github.com/hasankaradmir/karga/internal/application/deployment"
+	"github.com/hasankaradmir/karga-sdk/api"
 	"github.com/hasankaradmir/karga-sdk/packages"
 	"github.com/hasankaradmir/karga-sdk/pkg"
 	"github.com/hasankaradmir/karga-sdk/release"
 	"github.com/hasankaradmir/karga-sdk/values"
+	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
-// InstallRequest installs a package as a new release.
-type InstallRequest struct {
-	CommonOptions
-	Name    string
-	Package string
-	Values  packages.Options
-}
+// InstallRequest is shared with the CLI (karga-sdk/api).
+type InstallRequest = api.InstallRequest
 
-// UpgradeRequest moves a release to a new package version or new values.
-type UpgradeRequest struct {
-	CommonOptions
-	Name    string
-	Package string
-	Values  packages.Options
-	// ReuseValues starts from the current revision's overrides (A9).
-	ReuseValues bool
-	// Install installs the release if it does not exist.
-	Install bool
-	// Strategy overrides the workloads' updateStrategy (recreate or replace); empty uses the spec.
-	Strategy string
-}
+// UpgradeRequest is shared with the CLI (karga-sdk/api).
+type UpgradeRequest = api.UpgradeRequest
 
-// RollbackRequest re-applies an earlier revision as a new revision.
-type RollbackRequest struct {
-	CommonOptions
-	Name string
-	// Revision 0 selects the last deployed revision before the current state.
-	Revision int
-	// Strategy overrides the workloads' updateStrategy; empty uses the spec.
-	Strategy string
-}
+// RollbackRequest is shared with the CLI (karga-sdk/api).
+type RollbackRequest = api.RollbackRequest
 
-// UninstallRequest removes a release's runtime objects.
-type UninstallRequest struct {
-	Force         bool
-	Name          string
-	DeleteVolumes bool
-	KeepHistory   bool
-}
+// UninstallRequest is shared with the CLI (karga-sdk/api).
+type UninstallRequest = api.UninstallRequest
 
 func (s *Service) getRelease(ctx context.Context, name string) (*release.Release, error) {
 	rel, err := s.Store.GetRelease(ctx, name)

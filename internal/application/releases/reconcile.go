@@ -9,11 +9,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hasankaradmir/karga/internal/application/deployment"
-	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
+	"github.com/hasankaradmir/karga-sdk/api"
 	"github.com/hasankaradmir/karga-sdk/pkg"
 	"github.com/hasankaradmir/karga-sdk/release"
 	"github.com/hasankaradmir/karga-sdk/resource"
+	"github.com/hasankaradmir/karga/internal/application/deployment"
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
@@ -33,15 +34,8 @@ import (
 // ReconcileOperation is the operation type of reconciliation.
 const ReconcileOperation = "reconcile"
 
-// ReconcileResult is what one reconciliation of a release did.
-type ReconcileResult struct {
-	Release string `json:"release"`
-	// Skipped says why nothing was looked at.
-	Skipped string         `json:"skipped,omitempty"`
-	Actions []release.Step `json:"actions,omitempty"`
-	// GaveUp lists the resources karga stopped repairing, with their last error.
-	GaveUp map[string]string `json:"gaveUp,omitempty"`
-}
+// ReconcileResult is shared with the CLI (karga-sdk/api).
+type ReconcileResult = api.ReconcileResult
 
 // Repair backoff.
 const (

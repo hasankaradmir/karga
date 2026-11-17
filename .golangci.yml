@@ -11,19 +11,14 @@ linters:
   settings:
     depguard:
       rules:
-        # Domain layer must not know runtime, persistence or CLI details (tech design §16).
-        domain:
+        # The SDK (domain, package engine, API) is shared by the CLI and the server: it must not
+        # know the runtime or the state database.
+        sdk:
           files:
-            - "**/internal/domain/**"
+            - "**/sdk/**"
           deny:
-            - pkg: github.com/hasankaradmir/karga/internal/application
-              desc: domain must not depend on application
-            - pkg: github.com/hasankaradmir/karga/internal/adapters
-              desc: domain must not depend on adapters
-            - pkg: github.com/hasankaradmir/karga/internal/infrastructure
-              desc: domain must not depend on infrastructure
-            - pkg: github.com/hasankaradmir/karga/internal/cli
-              desc: domain must not depend on cli
+            - pkg: github.com/hasankaradmir/karga/
+              desc: the SDK must not depend on karga-server or the CLI
             - pkg: github.com/docker
               desc: domain must not depend on Docker
             - pkg: github.com/moby

@@ -16,11 +16,12 @@ import (
 	"syscall"
 	"time"
 
-	"github.com/hasankaradmir/karga/internal/application/deployment"
+	"github.com/hasankaradmir/karga-sdk/api"
 	"github.com/hasankaradmir/karga-sdk/pkg"
 	"github.com/hasankaradmir/karga-sdk/release"
 	"github.com/hasankaradmir/karga-sdk/resource"
 	"github.com/hasankaradmir/karga-sdk/values"
+	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
@@ -32,7 +33,7 @@ var (
 )
 
 // DefaultHistoryMax is how many revisions are kept per release (D13).
-const DefaultHistoryMax = 10
+const DefaultHistoryMax = api.DefaultHistoryMax
 
 // Service runs release use cases. Runtime is opened lazily so read-only commands never need Docker.
 type Service struct {
@@ -75,34 +76,11 @@ func New(store ports.StateStore, rt func(context.Context) (ports.Runtime, error)
 	return &Service{Store: store, Runtime: rt, Home: home, Redact: redact, Log: log, Now: time.Now, PID: os.Getpid(), Hostname: host}
 }
 
-// CommonOptions apply to every mutating command.
-type CommonOptions struct {
-	DryRun     bool
-	Timeout    time.Duration
-	HistoryMax int
-	// Force aborts an interrupted operation (whose process is gone) instead of refusing to run.
-	Force bool
-	// DeleteVolumes allows a plan to delete volumes with retention delete, and their data.
-	DeleteVolumes bool
-	// Progress, if set, receives what the deployment is doing as it happens.
-	Progress func(deployment.Event) `json:"-"`
-}
+// CommonOptions is shared with the CLI (karga-sdk/api).
+type CommonOptions = api.CommonOptions
 
-// Result describes what a mutating command did.
-type Result struct {
-	Release  string         `json:"release"`
-	Revision int            `json:"revision"`
-	From     int            `json:"from"`
-	Status   release.Status `json:"status"`
-	DryRun   bool           `json:"dryRun,omitempty"`
-	// NoOp is set when an install found the release already deployed with the same package and values.
-	NoOp bool            `json:"noop,omitempty"`
-	Plan deployment.Plan `json:"plan"`
-	// Warnings are problems that did not stop the operation.
-	Warnings []string `json:"warnings,omitempty"`
-	// Notes is the package's NOTES.txt for this revision, shown after a successful apply.
-	Notes string `json:"notes,omitempty"`
-}
+// Result is shared with the CLI (karga-sdk/api).
+type Result = api.Result
 
 // processAlive reports whether pid runs on this host (signal 0 only checks existence).
 func processAlive(pid int) bool {
@@ -364,7 +342,7 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	res := &Result{Release: in.Name, Revision: in.Revision, Plan: plan, DryRun: in.DryRun, Notes: in.Notes}
+	res := &Result{Release: in.Name, Revision: in.Revision, Plan: plan.Wire(), DryRun: in.DryRun, Notes: in.Notes}
 	if in.Existing != nil {
 		res.From = in.Existing.CurrentRevision
 	}
@@ -385,7 +363,7 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 		return nil, err
 	}
 	if plan, err = s.reconcile(ctx, rt, in, recorded, plan); err == nil {
-		res.Plan = plan
+		res.Plan = plan.Wire()
 		err = s.run(ctx, rt, &op, in, plan)
 	}
 	s.finish(ctx, op, err)

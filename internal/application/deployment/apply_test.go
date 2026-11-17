@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
 	"github.com/hasankaradmir/karga-sdk/release"
 	"github.com/hasankaradmir/karga-sdk/resource"
+	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 

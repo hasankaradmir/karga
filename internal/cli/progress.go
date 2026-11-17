@@ -10,7 +10,7 @@ import (
 
 	"golang.org/x/term"
 
-	"github.com/hasankaradmir/karga/internal/application/deployment"
+	"github.com/hasankaradmir/karga-sdk/plan"
 )
 
 // isTerminal reports whether w is an interactive terminal.
@@ -33,11 +33,11 @@ func newProgressPrinter(w io.Writer) *progressPrinter {
 	return &progressPrinter{w: w, tty: isTerminal(w), start: time.Now()}
 }
 
-func (p *progressPrinter) event(ev deployment.Event) {
+func (p *progressPrinter) event(ev plan.Event) {
 	p.mu.Lock()
 	defer p.mu.Unlock()
 	line := fmt.Sprintf("[%4s] %s %s: %s", time.Since(p.start).Round(time.Second), strings.ToLower(ev.Kind), ev.Name, ev.Detail)
-	if ev.Phase == deployment.PhaseDone {
+	if ev.Phase == plan.PhaseDone {
 		line = fmt.Sprintf("[%4s] %s %s: %s done", time.Since(p.start).Round(time.Second), strings.ToLower(ev.Kind), ev.Name, ev.Detail)
 	}
 	if !p.tty {
@@ -47,7 +47,7 @@ func (p *progressPrinter) event(ev deployment.Event) {
 	if p.pending {
 		_, _ = io.WriteString(p.w, "\r\033[K")
 	}
-	if ev.Phase == deployment.PhaseWait {
+	if ev.Phase == plan.PhaseWait {
 		_, _ = io.WriteString(p.w, line)
 		p.pending = true
 		return

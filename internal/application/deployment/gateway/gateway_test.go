@@ -10,9 +10,9 @@ import (
 	"testing"
 	"time"
 
+	"github.com/hasankaradmir/karga-sdk/resource"
 	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
 	"github.com/hasankaradmir/karga/internal/application/deployment/runtimeops"
-	"github.com/hasankaradmir/karga-sdk/resource"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
@@ -196,7 +196,7 @@ func TestSyncFollowsExposures(t *testing.T) {
 		t.Fatalf("gateway: %v, targets %+v", err, targets)
 	}
 	routes, err := Routes(ctx, rt, home)
-	if err != nil || len(routes) != 1 || routes[0] != (Exposed{"web:80", "b.example/", "b", "web:80", "127.0.0.1:4001"}) {
+	if err != nil || len(routes) != 1 || routes[0] != (Exposed{Listener: "web:80", Route: "b.example/", Release: "b", Service: "web:80", Upstream: "127.0.0.1:4001"}) {
 		t.Fatalf("routes: %+v %v", routes, err)
 	}
 }

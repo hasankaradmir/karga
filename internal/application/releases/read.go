@@ -10,12 +10,12 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
-	"time"
 
-	"github.com/hasankaradmir/karga/internal/application/deployment"
-	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
+	"github.com/hasankaradmir/karga-sdk/api"
 	"github.com/hasankaradmir/karga-sdk/release"
 	"github.com/hasankaradmir/karga-sdk/resource"
+	"github.com/hasankaradmir/karga/internal/application/deployment"
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
@@ -90,43 +90,14 @@ func (s *Service) GetManifest(ctx context.Context, name string, revision int) ([
 	return rs, nil
 }
 
-// ResourceStatus compares one applied resource with what the runtime reports.
-type ResourceStatus struct {
-	Kind        string `json:"kind"`
-	Name        string `json:"name"`
-	RuntimeName string `json:"runtimeName"`
-	Revision    int    `json:"revision"`
-	// Desired is "applied", or "failed" when the last attempt to apply it failed.
-	Desired string `json:"desired"`
-	// Actual is the runtime state: running/healthy, exited, present or missing.
-	Actual string `json:"actual"`
-	Health string `json:"health,omitempty"`
-	// Backend is the alias a proxy routes to.
-	Backend string `json:"backend,omitempty"`
-	// Restarts counts restarts by the runtime; OOMKilled says the last run hit the memory limit.
-	Restarts  int  `json:"restarts,omitempty"`
-	OOMKilled bool `json:"oomKilled,omitempty"`
-}
+// ResourceStatus is shared with the CLI (karga-sdk/api).
+type ResourceStatus = api.ResourceStatus
 
-// StatusReport is the desired vs actual state of a release (tech design §10.3).
-type StatusReport struct {
-	Release   release.Release  `json:"release"`
-	Resources []ResourceStatus `json:"resources"`
-	// Orphans are runtime objects labelled with the release that karga does not track.
-	Orphans []string `json:"orphans,omitempty"`
-	// Interrupted describes an operation that is still marked running.
-	Interrupted string `json:"interrupted,omitempty"`
-	// Reconcile is the last reconciliation and what karga gave up repairing.
-	Reconcile *ReconcileStatus `json:"reconcile,omitempty"`
-}
+// StatusReport is shared with the CLI (karga-sdk/api).
+type StatusReport = api.StatusReport
 
-// ReconcileStatus is the reconciliation part of a status report.
-type ReconcileStatus struct {
-	Last   time.Time         `json:"last,omitempty"`
-	Status string            `json:"status,omitempty"`
-	Error  string            `json:"error,omitempty"`
-	GaveUp map[string]string `json:"gaveUp,omitempty"`
-}
+// ReconcileStatus is shared with the CLI (karga-sdk/api).
+type ReconcileStatus = api.ReconcileStatus
 
 // Status reports the release and the live state of each of its resources.
 func (s *Service) Status(ctx context.Context, name string) (*StatusReport, error) {
@@ -380,15 +351,8 @@ func (s *Service) Exec(ctx context.Context, rel, workload string, opts ports.Exe
 	return -1, fmt.Errorf("release %s has no workload %q (workloads: %s)", rel, workload, strings.Join(names, ", "))
 }
 
-// RevisionDiff is how two revisions of a release differ.
-type RevisionDiff struct {
-	Release   string                    `json:"release"`
-	From      int                       `json:"from"`
-	To        int                       `json:"to"`
-	Package   []deployment.FieldChange  `json:"package,omitempty"`
-	Values    []deployment.FieldChange  `json:"values,omitempty"`
-	Resources []deployment.ResourceDiff `json:"resources"`
-}
+// RevisionDiff is shared with the CLI (karga-sdk/api).
+type RevisionDiff = api.RevisionDiff
 
 // Diff compares revision from with revision to of a release (to 0: the current one).
 func (s *Service) Diff(ctx context.Context, name string, from, to int) (*RevisionDiff, error) {

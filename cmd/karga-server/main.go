@@ -12,8 +12,8 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/hasankaradmir/karga-sdk/api"
 	"github.com/hasankaradmir/karga/internal/adapters/docker"
-	"github.com/hasankaradmir/karga/internal/api"
 	"github.com/hasankaradmir/karga/internal/infrastructure/config"
 	"github.com/hasankaradmir/karga/internal/server"
 	"github.com/hasankaradmir/karga/internal/version"

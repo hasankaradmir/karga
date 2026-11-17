@@ -7,7 +7,7 @@ import (
 )
 
 // demo is the application-layer fixture: Volume, Config, Workload and an optional Secret.
-const demo = "../application/packages/testdata/demo"
+const demo = "testdata/demo"
 
 func TestTemplateCmd(t *testing.T) {
 	out, _, err := run(t, "template", "web", demo, "--set", "image.tag=1.28", "--set", "password=hunter2")
