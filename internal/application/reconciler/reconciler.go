@@ -102,7 +102,8 @@ func (l *Loop) one(ctx context.Context, name string) {
 	if l.Only != nil && !l.Only(name) {
 		return
 	}
-	res, err := l.Svc.Reconcile(ctx, name, false)
+	// A repair that started finishes even when the server stops.
+	res, err := l.Svc.Reconcile(context.WithoutCancel(ctx), name, false)
 	switch {
 	case errors.Is(err, ports.ErrNotFound):
 		return // a container of another KARGA_HOME, or a release uninstalled meanwhile

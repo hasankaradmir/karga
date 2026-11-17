@@ -143,8 +143,11 @@ func (s *Server) Serve(ctx context.Context, l net.Listener, grace time.Duration)
 	hs := &http.Server{Handler: api.NewServer(s.Service, version.Current().Version), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- hs.Serve(l) }()
+	loopDone := make(chan struct{})
 	if s.Loop != nil {
-		go s.Loop.Run(ctx)
+		go func() { s.Loop.Run(ctx); close(loopDone) }()
+	} else {
+		close(loopDone)
 	}
 	s.cfg.Log.Info("karga-server listening", "socket", s.cfg.Socket, "home", s.cfg.Home, "version", version.Current().Version)
 	select {
@@ -154,7 +157,12 @@ func (s *Server) Serve(ctx context.Context, l net.Listener, grace time.Duration)
 	}
 	shutdown, cancel := context.WithTimeout(context.Background(), grace)
 	defer cancel()
+	// Operations in progress finish (they do not depend on their clients), at most grace.
 	err := hs.Shutdown(shutdown)
+	select {
+	case <-loopDone:
+	case <-shutdown.Done():
+	}
 	_ = os.Remove(s.cfg.Socket)
 	return err
 }
