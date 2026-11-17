@@ -2,7 +2,7 @@
 
 This guide walks through karga by task: what to run, what you will see, and what to do when
 something goes wrong. The command list is in the [README](README.md); how karga works inside is in
-[docs/design.md](docs/design.md). Outputs below are from real runs, shortened; client addresses are
+karga-server's [docs/design.md](https://github.com/hasankaradmir/karga-server/blob/main/docs/design.md). Outputs below are from real runs, shortened; client addresses are
 replaced by documentation addresses.
 
 - [1. Concepts in five minutes](#1-concepts-in-five-minutes)
@@ -49,21 +49,26 @@ Where things live:
 
 ### From a release
 
-The repository is private, so downloads need GitHub credentials: an authenticated GitHub CLI
-(`gh auth login`) or a `GITHUB_TOKEN` with read access. The install script checks the archive
-against the release checksums:
+karga-server and the CLI are released from their own repositories
+([karga-server](https://github.com/hasankaradmir/karga-server), [karga](https://github.com/hasankaradmir/karga)).
+Each install script checks the archive against the release checksums:
 
 ```console
-$ gh api repos/hasankaradmir/karga/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | KARGA_SYSTEMD=1 sh
-karga v0.1.0 installed to /usr/local/bin/karga
+$ curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga-server/main/scripts/install.sh | sh
 karga-server v0.1.0 installed to /usr/local/bin/karga-server
 karga-server is running; add users to the karga group to use karga: sudo usermod -aG karga $USER
+$ curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga/master/scripts/install.sh | sh
+karga v0.1.0 installed to /usr/local/bin/karga
 $ sudo usermod -aG karga $USER          # log in again afterwards
 ```
 
 `KARGA_VERSION=v0.1.0` picks a version, `KARGA_BIN_DIR=~/bin` another directory. Without the
-script: `gh release download v0.1.0 -R hasankaradmir/karga -p 'karga_*_linux_amd64.tar.gz'`, then
-install `karga`, `karga-server` and `deploy/systemd/karga-server.service` from the archive.
+scripts: download `karga-server_0.1.0_linux_amd64.tar.gz` and `karga_0.1.0_linux_amd64.tar.gz`
+from the releases pages, then install `karga-server`, `deploy/systemd/karga-server.service` and
+`karga` from the archives.
+
+The example packages used below (`examples/redis`, `examples/postgres`) are in
+[karga-sdk](https://github.com/hasankaradmir/karga-sdk/tree/main/examples).
 
 ### The server
 
@@ -106,8 +111,8 @@ the one that finished it as `resume`.
 ### From source
 
 ```console
-$ make build        # needs Go 1.27; produces bin/karga and bin/karga-server
-$ bin/karga-server --home /tmp/karga --socket /tmp/karga.sock &     # a server of your own, for development
+$ make build        # in each checkout, needs Go 1.27: bin/karga (here), bin/karga-server (karga-server)
+$ ../karga-server/bin/karga-server --home /tmp/karga --socket /tmp/karga.sock &     # a server of your own, for development
 $ KARGA_SOCKET=/tmp/karga.sock bin/karga list
 ```
 
@@ -855,4 +860,4 @@ db-postgres-data
 - Packages come from local directories or archives; there is no repository or dependency support.
 - There are no lifecycle tasks (e.g. running migrations before an upgrade) yet.
 
-The full list, with what is planned, is in [docs/roadmap.md](docs/roadmap.md).
+The full list, with what is planned, is in karga-server's [docs/roadmap.md](https://github.com/hasankaradmir/karga-server/blob/main/docs/roadmap.md).

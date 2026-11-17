@@ -7,6 +7,13 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 
 First release.
 
+### Repositories
+- karga is split into three repositories with their history: the karga CLI (this one),
+  karga-server (`github.com/hasankaradmir/karga-server`, the server, its install script and the
+  design documents) and karga-sdk (`github.com/hasankaradmir/karga-sdk`, the package engine, the
+  API and the example packages). Each installs with a public script, without credentials.
+- The CLI's tests run against a fake karga-server; the server's tests cover what it does.
+
 ### Breaking (compared with earlier builds)
 - Workloads no longer expose ports: `hostPort`, `hostIP` and `routes` are gone from the Workload
   (a clear error points to Services). Ports are named, and a `kind: Service` gives a workload a name
@@ -17,7 +24,7 @@ First release.
 - karga-server owns the state and the runtime; the karga CLI is its client on
   `/run/karga/karga.sock` and stops with `karga-server is not running` without it (`create`,
   `lint`, `template`, `show` work alone). The service runs as the `karga` user with its state in
-  `/var/lib/karga`; install with `KARGA_SYSTEMD=1`. The CLI's `--home` is gone (`--socket` instead).
+  `/var/lib/karga`; karga-server's install script sets up the service. The CLI's `--home` is gone (`--socket` instead).
 - `dependsOn` on a workload: it starts only once the Services it names are ready behind the release
   proxy; a failed dependency keeps it from starting.
 - karga-server repairs releases on its own (Docker events and every 30 seconds): removed or

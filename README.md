@@ -6,9 +6,11 @@ karga renders a versioned package (templates + values + schema) into its own sma
 (Workload, Service, Volume, Network, Config, Secret), applies it to Docker, and keeps every install,
 upgrade and rollback as an immutable revision in a local SQLite database.
 
-karga is two programs: **karga-server** owns the state, talks to Docker and keeps every release
-running as declared (it repairs removed, stopped, unhealthy or hand-changed containers); the **karga**
-CLI is its client on a local unix socket.
+karga is two programs: **[karga-server](https://github.com/hasankaradmir/karga-server)** owns the
+state, talks to Docker and keeps every release running as declared (it repairs removed, stopped,
+unhealthy or hand-changed containers); the **karga** CLI, in this repository, is its client on a
+local unix socket. Both use [karga-sdk](https://github.com/hasankaradmir/karga-sdk), which also
+holds the example packages used below.
 
 Nothing a package runs is reachable on its own. Workloads publish no port; a **Service** gives a
 workload a name inside its release, and only the host's administrator decides what is reachable from
@@ -32,30 +34,35 @@ only lints and renders packages).
 
 ## Requirements
 
-- Linux with a local Docker Engine and systemd. karga-server connects through `DOCKER_HOST` or the
-  default Docker socket.
-- Go 1.27 to build.
+- karga-server on a Linux host with a local Docker Engine and systemd.
+- The CLI runs on Linux and macOS (on macOS it writes, lints and renders packages, or talks to a
+  server through a forwarded socket). Go 1.27 to build.
 
 ## Install
 
-From a release (Linux, amd64 and arm64), checked against the release checksums. The
-repository is private, so the script downloads with an authenticated GitHub CLI (`gh auth login`) or
-`GITHUB_TOKEN`:
+karga-server first, on the Linux host it manages (a systemd service; see its
+[README](https://github.com/hasankaradmir/karga-server#install)):
 
 ```bash
-gh api repos/hasankaradmir/karga/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | KARGA_SYSTEMD=1 sh
+curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga-server/main/scripts/install.sh | sh
 sudo usermod -aG karga $USER      # then log in again: members of the karga group may use karga
+```
+
+Then the CLI (Linux or macOS, amd64 or arm64), checked against the release checksums:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga/master/scripts/install.sh | sh
 # KARGA_VERSION=v0.1.0 picks a version, KARGA_BIN_DIR another directory (default /usr/local/bin)
 ```
 
-`KARGA_SYSTEMD=1` installs `karga-server` as a systemd service: a `karga` system user in the
-`docker` group runs it, its state is `/var/lib/karga`, and it listens on `/run/karga/karga.sock`
-(mode 0660, group `karga`). The CLI finds the socket there, or at `--socket` / `KARGA_SOCKET`.
+The CLI finds the server's socket at `/run/karga/karga.sock`, or at `--socket` / `KARGA_SOCKET`.
 Without the server every command but `create`, `lint`, `template`, `show`, `completion` and
-`version` stops with `karga-server is not running`.
+`version` stops with `karga-server is not running`. The CLI and the server work together when they
+speak the same API version (`karga version` shows both).
 
-From source: `make build` produces `bin/karga` and `bin/karga-server`; the unit file is
-`deploy/systemd/karga-server.service`. Shell completion: `karga completion bash|zsh|fish`.
+From source: `make build` produces `bin/karga`. Shell completion: `karga completion
+bash|zsh|fish`. The examples below use the packages in karga-sdk's
+[`examples/`](https://github.com/hasankaradmir/karga-sdk/tree/main/examples).
 
 ## Quickstart
 
@@ -92,7 +99,7 @@ logs). The state lives in karga-server's `KARGA_HOME` (`/var/lib/karga` for the 
 | `lint <package>...` | Validate `Package.yaml`, values and schema, render and check every resource |
 | `template <release> <package>` | Render locally; Secret values are shown as `<redacted>` unless `--show-secrets` |
 | `show package\|values\|readme <package>` | Show package metadata, default values or README |
-| `version` | Versions of karga and karga-server (a warning if they differ) |
+| `version` | Versions of karga and karga-server and their API version (a warning if the API differs) |
 | `reconcile <release>` | Repair now: bring what runs back to the current revision (karga-server also does it on its own) |
 | `pause\|resume <release>` | Stop or restart karga-server's repairs of a release (maintenance) |
 | `events [release]` | Commands and repairs, newest last (`-f` follows, `-n` how many) |
@@ -244,127 +251,44 @@ Before any change karga pulls every image it needs, so a bad tag fails without t
   when the workload mounts volumes read-only and has a healthcheck; otherwise the plan falls back to
   recreate and says why.
 
-### Traffic through karga's Envoys
-
-karga runs two kinds of Envoy (Envoy 1.36.13 distroless, pinned by digest, about 150MB, one worker
-thread, about 15MB RAM each, limited to 128Mi, 0.5 CPU and 256 processes). Envoy updates ship with
-karga releases; a new image recreates the gateway and the release proxies on the next apply, a short
-interruption. `KARGA_PROXY_IMAGE` overrides the image.
-
-- **Release proxy** (`<release>-karga-proxy`, one per release with Services): answers to the release's
-  Service names on its networks and forwards each Service port to the current container of its
-  workload. Workloads carry only a per-revision alias meant for the proxy. It publishes the
-  exposed Service ports on loopback upstream ports (`127.0.0.1:<random>`) for the gateway.
-- **Gateway** (`karga-gateway`, one per host, host network): the host's only entry point. Its
-  settings belong to the host's administrator, not to packages: the addresses it listens on
-  (`karga gateway set listen`, default `127.0.0.1`) and its **listeners** (`karga gateway listener
-  add`): a name, a port and a protocol. A new host has `web` (80, http) and `websecure` (443,
-  https). A Service exposes a port on a listener by name; exposing on a listener that does not exist,
-  of another protocol, or that another release holds is refused before anything changes. HTTP and
-  HTTPS listeners select a Service by `Host` header and path prefix, so several releases share them;
-  the backend receives the client address in `x-forwarded-for`. A tcp listener belongs to one Service.
-  Listeners nobody uses are not opened. karga creates the gateway when a Service is exposed and
-  removes it with the last one. `karga gateway status` shows whether it is ready and what it serves.
-  `karga gateway set access-log on` logs every request (see `karga logs --gateway`).
-
-A replace switches the release proxy, which every client goes through: no request is lost, from
-outside or from other workloads. Notes:
-
-- Adding or removing a Service reconnects the release proxy to its networks, and exposing a new port
-  recreates it; both briefly interrupt proxied connections. The plan says so.
-- **TLS:** an exposure on an https listener names a Secret with the PEM certificate chain as
-  `tls.crt` and the key as `tls.key`. The certificate is chosen by SNI, so several hosts and releases
-  share the listener. Plain HTTP on the port-80 http listener redirects to HTTPS, unless it serves that
-  host itself. A new certificate is a new Secret value; the gateway serves it after the upgrade. One
-  host has one certificate. There is no automatic certificate (ACME) yet.
-- Services carry TCP only; there is no UDP.
-- The gateway runs as root with only `NET_BIND_SERVICE` and `DAC_OVERRIDE` (to bind low ports in the
-  host namespace) and `no-new-privileges`. It is a single point for outside traffic; it restarts
-  automatically.
-- Local users can reach the loopback upstream ports directly, bypassing the gateway.
-- A connection open during a replace stays on the old container until it closes or `drainTimeout`
-  passes. Configuration is validated before it is written; if Envoy still rejects it (for example a
-  port it cannot bind), the error shows Envoy's reason.
-- After a reboot or Docker restart the gateway, proxies and workloads come back on their own. If
-  another process took a proxy's loopback upstream port meanwhile, the proxy does not start until the
-  next upgrade.
+Traffic goes through karga's Envoys: a release proxy per release with Services, and the host
+gateway. How they route, switch a replace without losing requests, serve TLS and what they cost is
+in karga-server's [README](https://github.com/hasankaradmir/karga-server#traffic-through-kargas-envoys).
 
 If a recreate fails, the failed container is stopped (but kept for `docker logs`), the revision is
 marked failed and the previous revision stays current. Run `karga rollback <release>` to go back.
 Rollback re-applies the stored desired state; it cannot undo data changes such as database
 migrations. Changing a Network or Volume spec in an upgrade is refused.
 
-## State
+## State and security
 
-Everything karga knows is in `$KARGA_HOME/karga.db` (SQLite, `0600`), which only karga-server
-opens; proxy and gateway configuration are rebuilt from it and from Docker. `karga state backup
-<file>` writes a consistent copy at any time (the server streams it to the CLI). To restore, stop
-karga-server and copy the file over `karga.db`. Before upgrading
-the database schema karga keeps a copy as `karga.db.bak-v<schema>`, and it refuses a database written
-by a newer karga.
-
-`karga volume backup <release> <volume> <file.tar.gz>` copies a volume's files through a workload
-that mounts it (no helper container). It runs live by default; `--stop` stops the workloads
-mounting the volume for a consistent copy (for databases prefer it, or the database's own dump).
-`karga volume restore` stops them, writes the files back (overwriting files of the same name,
-keeping others) and starts them again.
-
-`$KARGA_HOME/state.key` keys the database's digests of secret values. Back it up with the database
-if you can keep both safe; restored without it, karga creates a new key and applies each release's
-Secrets (and what mounts them) once more on its next upgrade.
-
-## Security notes
-
-- Access to the Docker socket is root-equivalent on the host, and so is access to karga's socket:
-  add to the `karga` group only users you trust with it. The socket is local only; there is no
-  remote API. karga-server runs as the unprivileged `karga` user (in the `docker` group), with
-  `NoNewPrivileges`, a read-only system and no access to home directories (packages and values files
-  travel from the CLI over the socket).
-- Packages cannot open ports: workloads publish nothing, and only the gateway's listeners, which the
-  host's administrator defines, are reachable from outside, on `127.0.0.1` unless `karga gateway set
-  listen` says otherwise.
-- Containers are never privileged and never join the host PID, network or IPC namespaces, except the
-  gateway, which uses the host network (see above). Release proxies run as the karga user. Proxy and
-  gateway configuration and admin sockets are in `0700` directories under `$KARGA_HOME/proxies/` and
-  `$KARGA_HOME/gateway/`.
-- Config and Secret files live under `$KARGA_HOME/releases/<release>/<revision>/`. That directory is
-  `0700`; the files inside are `0644` so any user in the container can read them. The state database
-  is `0600`.
-- Secret values never appear in output, logs or the database. The database keeps HMAC-SHA256
-  digests of them (keyed by `$KARGA_HOME/state.key`, `0600`) to detect changes; without the key they
-  cannot be used to guess a password. Releases written by an older karga re-apply their Secrets once.
-- TLS keys are copied into `$KARGA_HOME/gateway/certs/` (`0600`, in a `0700` directory) for the
-  gateway.
-- Image pulls are anonymous; private registries are not supported yet.
+karga-server keeps the state (`$KARGA_HOME/karga.db`, SQLite) and runs as an unprivileged user;
+access to its socket is as powerful as access to Docker. Backups (`karga state backup`, `karga
+volume backup|restore`), the state key and the security model are described in karga-server's
+[README](https://github.com/hasankaradmir/karga-server#state).
 
 ## Development
 
 ```bash
-make test               # unit tests
-make lint               # golangci-lint
-make test-integration   # Linux with Docker: adapter contract and deployments
-make test-e2e           # Linux with Docker: builds both binaries, starts karga-server, runs the lifecycle
-make test-linux         # both in a Linux VM (OrbStack or Lima; KARGA_VM names it, default karga-linux)
+make test     # unit tests: the CLI against a fake karga-server behind karga-sdk's HTTP handler
+make lint     # golangci-lint
+make build    # bin/karga
 ```
 
-Integration and e2e tests run on Linux only (they stop with a message elsewhere). `make test-linux` creates
-and provisions the VM on first use (`KARGA_VM` names it) and runs `TARGETS` there (default
-`test-integration test-e2e`). Integration tests run in parallel and share one `KARGA_HOME`.
-`KARGA_TEST_DAEMON_RESTART=1 make test-integration` additionally restarts the Docker daemon (needs
-passwordless sudo).
+The CLI depends only on [karga-sdk](https://github.com/hasankaradmir/karga-sdk) (the API, the
+package engine, plans). What the server does with requests is tested in karga-server, whose e2e
+tests build this CLI.
 
 Releases: add the version to `CHANGELOG.md`, then `git tag vX.Y.Z && git push --tags`; the release
 workflow builds the binaries with GoReleaser and creates a draft GitHub release with the changelog
-section as notes; publish it to make it the latest release. `goreleaser release --snapshot --clean` builds the same locally.
+section as notes; publish it to make it the latest release.
 
 Documentation:
 
 - [USAGE.md](USAGE.md): how to use karga, scenario by scenario.
-- [docs/design.md](docs/design.md): how karga works.
-- [docs/roadmap.md](docs/roadmap.md): planned features, known limitations, risks, open questions.
-- [docs/adr/](docs/adr/): architecture decisions, and the implementation decisions in
-  [docs/adr/decisions.md](docs/adr/decisions.md).
+- karga-server's [docs/](https://github.com/hasankaradmir/karga-server/tree/main/docs): how karga
+  works, the roadmap and architecture decisions.
 
 ## License
 
-Apache License 2.0; see [LICENSE](LICENSE).
+Apache License 2.0; see [LICENSE](LICENSE). Security issues: see [SECURITY.md](SECURITY.md).

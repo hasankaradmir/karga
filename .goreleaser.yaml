@@ -16,17 +16,6 @@ builds:
       - -s -w -X github.com/hasankaradmir/karga/internal/version.Version={{ .Version }}
     goos: [linux, darwin]
     goarch: [amd64, arm64]
-  - id: karga-server
-    main: ./cmd/karga-server
-    binary: karga-server
-    env:
-      - CGO_ENABLED=0
-    flags:
-      - -trimpath
-    ldflags:
-      - -s -w -X github.com/hasankaradmir/karga/internal/version.Version={{ .Version }}
-    goos: [linux]
-    goarch: [amd64, arm64]
 
 archives:
   - formats: [tar.gz]
@@ -36,7 +25,6 @@ archives:
       - USAGE.md
       - CHANGELOG.md
       - LICENSE
-      - deploy/systemd/karga-server.service
 
 checksum:
   name_template: checksums.txt

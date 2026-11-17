@@ -1,30 +1,22 @@
 version: "2"
 
-run:
-  build-tags:
-    - integration
-    - e2e
-
 linters:
   enable:
     - depguard
   settings:
     depguard:
       rules:
-        # The SDK (domain, package engine, API) is shared by the CLI and the server: it must not
-        # know the runtime or the state database.
-        sdk:
+        # The CLI talks to karga-server only through karga-sdk's API.
+        cli:
           files:
-            - "**/sdk/**"
+            - "$all"
           deny:
-            - pkg: github.com/hasankaradmir/karga/
-              desc: the SDK must not depend on karga-server or the CLI
+            - pkg: github.com/hasankaradmir/karga-server
+              desc: the CLI must not depend on karga-server
             - pkg: github.com/docker
-              desc: domain must not depend on Docker
-            - pkg: github.com/moby
-              desc: domain must not depend on Docker
+              desc: the CLI never talks to Docker
             - pkg: modernc.org/sqlite
-              desc: domain must not depend on SQLite
+              desc: the CLI never opens the state database
 
 formatters:
   enable:

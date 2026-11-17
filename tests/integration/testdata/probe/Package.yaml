@@ -1,6 +1,0 @@
-apiVersion: karga.io/v1alpha1
-name: probe
-version: 0.1.0
-description: Test package whose health is controlled by a value
-runtime:
-  supported: [docker]
