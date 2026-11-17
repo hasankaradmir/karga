@@ -3,13 +3,13 @@
 # (gateway, release proxy). Uses OrbStack (orb) when installed, otherwise Lima (limactl).
 #
 #   scripts/linux-vm.sh [make targets...]     default: test-integration test-e2e
-#   KARGA_VM=name   machine name (default karga-dev)
+#   KARGA_VM=name   machine name (default karga-linux)
 #
 # The machine is created and provisioned on first use. The working tree (without .git, bin and
 # docs) is copied to ~/karga in the machine before every run.
 set -euo pipefail
 
-vm=${KARGA_VM:-karga-dev}
+vm=${KARGA_VM:-karga-linux}
 targets=("$@")
 [ ${#targets[@]} -eq 0 ] && targets=(test-integration test-e2e)
 root=$(cd "$(dirname "$0")/.." && pwd)
