@@ -3,7 +3,7 @@ module github.com/hasankaradmir/karga
 go 1.27.3
 
 require (
-	github.com/hasankaradmir/karga-sdk v0.0.0
+	github.com/hasankaradmir/karga-sdk v0.0.0-20261117202628-841339224217
 	github.com/spf13/cobra v1.10.2
 	golang.org/x/term v0.48.0
 )
@@ -30,5 +30,3 @@ require (
 	golang.org/x/sys v0.50.0 // indirect
 	golang.org/x/text v0.41.0 // indirect
 )
-
-replace github.com/hasankaradmir/karga-sdk => ../karga-sdk
