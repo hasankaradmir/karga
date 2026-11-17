@@ -11,7 +11,7 @@ What karga does not do yet, what it does with known limits, and the open questio
 | Automatic certificates | ACME for TLS routes; today certificates come from a Secret. |
 | `karga doctor` | One command checking the Docker version, gateway support, `KARGA_HOME` permissions, ports 80/443 and the Envoy image. |
 | `karga events` | The operation history (already in the state database) as a readable timeline. |
-| Drift repair (`karga reconcile`) | `status` reports missing containers; repairing them, and re-allocating a loopback upstream port taken by another process after a reboot, needs a command. |
+| Drift repair (`karga reconcile`) | Plans come from the recorded state: a container removed outside karga, or a host restored from a state backup, is not recreated by an upgrade (today: `uninstall --keep-history`, then `install`). Also re-allocating a loopback upstream port taken by another process after a reboot. |
 | Private registries | Image pulls are anonymous today; credentials from the Docker configuration. |
 | Encrypted secret store | Values that are not `writeOnly` are stored as written. |
 | Gateway: UDP and client IP for TCP | UDP host ports are published by Docker directly; TCP backends do not see the client address (HTTP routes pass `x-forwarded-for`). |
