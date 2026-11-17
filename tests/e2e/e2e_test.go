@@ -13,6 +13,7 @@ import (
 	"net"
 	"os"
 	"os/exec"
+	"os/user"
 	"path/filepath"
 	"runtime"
 	"strconv"
@@ -401,7 +402,13 @@ func TestServerRestartResumesAnUpgrade(t *testing.T) {
 	if err := json.Unmarshal([]byte(e.run("history", rel, "-o", "json")), &revs); err != nil || len(revs) != 2 || revs[1].Status != "deployed" {
 		t.Fatalf("history: %+v %v", revs, err)
 	}
-	if out := e.run("events", rel); !strings.Contains(out, "resume") || !strings.Contains(out, "aborted") {
+	// The CLI's user (SO_PEERCRED) started the install; karga-server resumed the upgrade.
+	me, err := user.Current()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out := e.run("events", rel); !strings.Contains(out, "resume") || !strings.Contains(out, "aborted") ||
+		!strings.Contains(out, " "+me.Username+" ") || !strings.Contains(out, " karga-server ") {
 		t.Fatalf("events:\n%s", out)
 	}
 	if img, _ := exec.Command("docker", "inspect", "-f", "{{.Config.Image}}", rel+"-redis").Output(); strings.TrimSpace(string(img)) != "redis:7.4-alpine" {

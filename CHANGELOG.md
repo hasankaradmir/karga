@@ -27,6 +27,8 @@ First release.
 - Operations go on when the CLI is interrupted (Ctrl-C, a lost connection); the CLI says how to
   follow them. A karga-server that is killed mid-operation finishes it when it starts again
   (`resume` in `karga events`).
+- The CLI and karga-server check that they speak the same API version (`karga version` shows
+  it). Operations record the user of the CLI that asked for them (`USER` in `karga events`).
 - Linux only: without karga's gateway and release proxy (macOS, a remote Docker host) a plan with
   Services is refused. Upgrading an installed release with its new package recreates its workloads
   once.

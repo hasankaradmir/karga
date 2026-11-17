@@ -388,12 +388,12 @@ func (s *Store) DeleteResource(ctx context.Context, rel, kind, name string) erro
 	return err
 }
 
-const operationColumns = `id, release, type, revision, status, pid, hostname, steps_json, error, started_at, finished_at`
+const operationColumns = `id, release, type, revision, status, pid, hostname, actor, steps_json, error, started_at, finished_at`
 
 func scanOperation(row scanner) (release.Operation, error) {
 	var op release.Operation
 	var status, steps, started, finished string
-	if err := row.Scan(&op.ID, &op.Release, &op.Type, &op.Revision, &status, &op.PID, &op.Hostname, &steps, &op.Error, &started, &finished); err != nil {
+	if err := row.Scan(&op.ID, &op.Release, &op.Type, &op.Revision, &status, &op.PID, &op.Hostname, &op.Actor, &steps, &op.Error, &started, &finished); err != nil {
 		return op, err
 	}
 	op.Status, op.StartedAt = release.OperationStatus(status), parseTS(started)
@@ -431,9 +431,9 @@ func (s *Store) BeginOperation(ctx context.Context, op release.Operation, onRunn
 		return 0, err
 	}
 
-	res, err := tx.ExecContext(ctx, `INSERT INTO operations (release, type, revision, status, pid, hostname, steps_json, error, started_at, finished_at)
-		VALUES (?, ?, ?, ?, ?, ?, '[]', '', ?, '')`,
-		op.Release, op.Type, op.Revision, string(release.OperationRunning), op.PID, op.Hostname, ts(op.StartedAt))
+	res, err := tx.ExecContext(ctx, `INSERT INTO operations (release, type, revision, status, pid, hostname, actor, steps_json, error, started_at, finished_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, '[]', '', ?, '')`,
+		op.Release, op.Type, op.Revision, string(release.OperationRunning), op.PID, op.Hostname, op.Actor, ts(op.StartedAt))
 	if err != nil {
 		return 0, err
 	}

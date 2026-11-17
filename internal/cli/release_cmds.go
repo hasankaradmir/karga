@@ -505,7 +505,7 @@ func newReconcileCmds(a *app) []*cobra.Command {
 					return writeJSON(a.stdout, ops)
 				}
 				slices.Reverse(ops)
-				if err := a.table("TIME\tRELEASE\tOPERATION\tREVISION\tSTATUS\tWHAT", eventRows(ops)); err != nil {
+				if err := a.table("TIME\tRELEASE\tOPERATION\tREVISION\tUSER\tSTATUS\tWHAT", eventRows(ops)); err != nil {
 					return err
 				}
 				var last int64
@@ -555,7 +555,11 @@ func eventRows(ops []release.Operation) [][]string {
 		if len(what) > 100 {
 			what = what[:97] + "..."
 		}
-		rows = append(rows, []string{op.StartedAt.Local().Format("2006-01-02 15:04:05"), op.Release, op.Type, strconv.Itoa(op.Revision), string(op.Status), what})
+		user := op.Actor
+		if user == "" {
+			user = "-" // recorded before karga-server knew its clients
+		}
+		rows = append(rows, []string{op.StartedAt.Local().Format("2006-01-02 15:04:05"), op.Release, op.Type, strconv.Itoa(op.Revision), user, string(op.Status), what})
 	}
 	return rows
 }

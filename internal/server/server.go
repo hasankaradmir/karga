@@ -140,7 +140,9 @@ func (s *Server) Listen() (net.Listener, error) {
 
 // Serve answers on l until ctx is done, then waits for running operations (at most grace).
 func (s *Server) Serve(ctx context.Context, l net.Listener, grace time.Duration) error {
-	hs := &http.Server{Handler: api.NewServer(s.Service, version.Current().Version), ReadHeaderTimeout: 10 * time.Second}
+	hs := &http.Server{Handler: api.NewServer(s.Service, version.Current().Version), ReadHeaderTimeout: 10 * time.Second,
+		// Operations record the user of the client process.
+		ConnContext: func(ctx context.Context, c net.Conn) context.Context { return releases.WithActor(ctx, peerUser(c)) }}
 	errc := make(chan error, 1)
 	go func() { errc <- hs.Serve(l) }()
 	// Operations a stopped karga-server left running are finished first; then the reconciler starts.

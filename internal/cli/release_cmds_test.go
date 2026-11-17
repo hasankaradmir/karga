@@ -289,10 +289,10 @@ func TestReconcileCommands(t *testing.T) {
 	e.f.ops = []release.Operation{
 		{ID: 2, Release: "r", Type: "reconcile", Revision: 1, Status: release.OperationSucceeded, StartedAt: time.Now(),
 			Steps: []release.Step{{Kind: "Workload", Name: "web", Action: "start"}}},
-		{ID: 1, Release: "r", Type: "install", Revision: 1, Status: release.OperationSucceeded, StartedAt: time.Now().Add(-time.Minute)},
+		{ID: 1, Release: "r", Type: "install", Revision: 1, Status: release.OperationSucceeded, StartedAt: time.Now().Add(-time.Minute), Actor: "alice"},
 	}
 	out := e.mustRun("events", "r")
-	if !strings.Contains(out, "OPERATION") || strings.Index(out, "install") > strings.Index(out, "reconcile") || !strings.Contains(out, "start workload web") {
+	if !strings.Contains(out, "USER") || !strings.Contains(out, "alice") || strings.Index(out, "install") > strings.Index(out, "reconcile") || !strings.Contains(out, "start workload web") {
 		t.Fatalf("events, oldest first:\n%s", out)
 	}
 }

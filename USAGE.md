@@ -70,8 +70,8 @@ install `karga`, `karga-server` and `deploy/systemd/karga-server.service` from t
 ```console
 $ systemctl status karga-server
 $ karga version
-karga v0.1.0 (commit ..., go1.27.4)
-karga-server v0.1.0
+karga v0.1.0 (commit ..., go1.27.4, API 1)
+karga-server v0.1.0 (API 1)
 $ journalctl -u karga-server -f          # the server's log
 ```
 
@@ -84,6 +84,12 @@ users. When the server is down, the CLI says so:
 $ karga list
 Error: karga-server is not running (no server on /run/karga/karga.sock): start it with 'sudo systemctl start karga-server'
 ```
+
+The CLI and the server work together when they speak the same API version (`karga version`
+shows both), whatever their release versions; otherwise every command stops with `karga speaks
+API N, karga-server API M: upgrade ...`. Every operation records the user of the CLI that asked
+for it, as the kernel reports it on the socket (`USER` in `karga events`; `karga-server` for its
+own repairs and resumes).
 
 `create`, `lint`, `template`, `show`, `completion` and `version` work without it. `--socket` or
 `KARGA_SOCKET` point the CLI at another socket.
@@ -670,6 +676,7 @@ machine-readable output for every read command.
 | `a previous operation on this release was interrupted` | An operation was left by a process that is gone (karga-server finishes its own when it starts); check `karga status`, then rerun with `--force`. |
 | `gateway: proxy does not route to ... : <reason>` | The gateway did not accept or reach the new backend; the reason (and Envoy's own message, if it refused the configuration) follows. |
 | `services ... need karga's gateway and release proxy (Linux with a local Docker)` | karga runs on Linux with a local Docker daemon. |
+| `karga speaks API N, karga-server API M` | The CLI and the server are of incompatible releases; upgrade the one named. |
 | `karga-server is not running` | Start it: `sudo systemctl start karga-server`; see `journalctl -u karga-server`. |
 | `permission denied` on `/run/karga/karga.sock` | Your user is not in the `karga` group (or has not logged in again since). |
 | `a Workload no longer exposes ports; a Service does` | The package uses the removed `hostPort`, `hostIP` or `routes`; move them to a Service. |
@@ -693,9 +700,9 @@ $ docker ps --filter name=demo-web --format "{{.Names}} {{.Status}}"
 demo-web Up 1 second
 
 $ karga events demo
-TIME                 RELEASE  OPERATION  REVISION  STATUS     WHAT
-2026-11-17 19:01:09  demo     install    1         succeeded  create network net, create workload web, create service web, create proxy proxy
-2026-11-17 19:01:17  demo     reconcile  1         succeeded  create workload web
+TIME                 RELEASE  OPERATION  REVISION  USER          STATUS     WHAT
+2026-11-17 19:01:09  demo     install    1         alice         succeeded  create network net, create workload web, create service web, create proxy proxy
+2026-11-17 19:01:17  demo     reconcile  1         karga-server  succeeded  create workload web
 
 $ karga status demo
 ...

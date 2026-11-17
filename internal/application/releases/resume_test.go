@@ -57,7 +57,8 @@ func TestResumeFinishesAnInterruptedUpgrade(t *testing.T) {
 		t.Fatalf("workload not recreated from revision 2: %q", e.image())
 	}
 	ops := e.lastOps(2)
-	if ops[0].Type != ResumeOperation || ops[0].Status != release.OperationSucceeded || ops[1].Status != release.OperationAborted {
+	if ops[0].Type != ResumeOperation || ops[0].Status != release.OperationSucceeded || ops[1].Status != release.OperationAborted ||
+		ops[0].Actor != ServerActor {
 		t.Fatalf("operations: %+v", ops)
 	}
 	if rev := must[release.Revision](t)(e.svc.Store.GetRevision(context.Background(), "cache", 2)); rev.Status != release.RevisionDeployed {
@@ -98,5 +99,14 @@ func TestResumeAbortsOtherOperationsAndUninstallsAgain(t *testing.T) {
 	}
 	if _, ok := e.rt.Workloads["cache-redis"]; ok {
 		t.Fatal("workload left after the resumed uninstall")
+	}
+}
+
+func TestOperationsRecordTheirUser(t *testing.T) {
+	e := newEnv(t)
+	ctx := WithActor(context.Background(), "alice")
+	must[*Result](t)(e.svc.Install(ctx, InstallRequest{CommonOptions: common(), Name: "cache", Package: redisPkg, Values: e.opts()}))
+	if op := e.lastOps(1)[0]; op.Actor != "alice" {
+		t.Fatalf("actor: %+v", op)
 	}
 }

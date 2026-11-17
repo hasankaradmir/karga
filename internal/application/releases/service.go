@@ -120,7 +120,7 @@ func (s *Service) begin(ctx context.Context, rel, typ string, revision int, forc
 
 func (s *Service) beginLocked(ctx context.Context, rel, typ string, revision int, force bool) (release.Operation, error) {
 	op := release.Operation{Release: rel, Type: typ, Revision: revision, Status: release.OperationRunning,
-		PID: s.PID, Hostname: s.Hostname, StartedAt: s.Now()}
+		PID: s.PID, Hostname: s.Hostname, Actor: actorOf(ctx), StartedAt: s.Now()}
 	id, err := s.Store.BeginOperation(ctx, op, func(running release.Operation) error {
 		// Under the release mutex no operation of this process runs: one with its PID is from an
 		// earlier process that got the same PID (a container's PID 1).
@@ -134,7 +134,27 @@ func (s *Service) beginLocked(ctx context.Context, rel, typ string, revision int
 		return nil
 	})
 	op.ID = id
+	if err == nil {
+		s.Log.Info("operation", "operation_id", id, "release", rel, "type", typ, "revision", revision, "user", op.Actor)
+	}
 	return op, err
+}
+
+type actorKey struct{}
+
+// WithActor tells the operations started with ctx who asked for them.
+func WithActor(ctx context.Context, user string) context.Context {
+	return context.WithValue(ctx, actorKey{}, user)
+}
+
+// ServerActor is the actor of what karga-server does on its own: repairs and resumed operations.
+const ServerActor = "karga-server"
+
+func actorOf(ctx context.Context) string {
+	if u, _ := ctx.Value(actorKey{}).(string); u != "" {
+		return u
+	}
+	return ServerActor
 }
 
 // finish records the end of an operation. It uses a context that survives cancellation (Ctrl-C) so
