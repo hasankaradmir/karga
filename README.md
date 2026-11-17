@@ -6,6 +6,9 @@ karga renders a versioned package (templates + values + schema) into its own sma
 (Workload, Service, Volume, Network, Config, Secret), applies it to Docker, and keeps every install,
 upgrade and rollback as an immutable revision in a local SQLite database.
 
+karga is two programs: **karga-server** owns the state and talks to Docker; the **karga** CLI is
+its client on a local unix socket.
+
 Nothing a package runs is reachable on its own. Workloads publish no port; a **Service** gives a
 workload a name inside its release, and only the host's administrator decides what is reachable from
 outside, by defining the listeners of the host **gateway** that Services can be exposed on.
@@ -22,14 +25,14 @@ karga uninstall cache          # the data volume is kept
 ## Status
 
 MVP, for one Linux host with Docker. Not available (yet): Podman, package repositories/registries,
-package dependencies, a daemon that reconciles drift. macOS and Windows are not supported: Services
+package dependencies, automatic certificates, lifecycle jobs. macOS and Windows are not supported: Services
 need karga's gateway and release proxy, which need Linux with a local Docker daemon (the macOS build
 only lints and renders packages).
 
 ## Requirements
 
-- Linux with a local Docker Engine. karga connects through `DOCKER_HOST` or, like the docker CLI,
-  the active `docker context`.
+- Linux with a local Docker Engine and systemd. karga-server connects through `DOCKER_HOST` or the
+  default Docker socket.
 - Go 1.27 to build.
 
 ## Install
@@ -39,11 +42,19 @@ repository is private, so the script downloads with an authenticated GitHub CLI 
 `GITHUB_TOKEN`:
 
 ```bash
-gh api repos/hasankaradmir/karga/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | sh
+gh api repos/hasankaradmir/karga/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | KARGA_SYSTEMD=1 sh
+sudo usermod -aG karga $USER      # then log in again: members of the karga group may use karga
 # KARGA_VERSION=v0.1.0 picks a version, KARGA_BIN_DIR another directory (default /usr/local/bin)
 ```
 
-From source: `make build` produces `bin/karga`. Shell completion: `karga completion bash|zsh|fish`.
+`KARGA_SYSTEMD=1` installs `karga-server` as a systemd service: a `karga` system user in the
+`docker` group runs it, its state is `/var/lib/karga`, and it listens on `/run/karga/karga.sock`
+(mode 0660, group `karga`). The CLI finds the socket there, or at `--socket` / `KARGA_SOCKET`.
+Without the server every command but `create`, `lint`, `template`, `show`, `completion` and
+`version` stops with `karga-server is not running`.
+
+From source: `make build` produces `bin/karga` and `bin/karga-server`; the unit file is
+`deploy/systemd/karga-server.service`. Shell completion: `karga completion bash|zsh|fish`.
 
 ## Quickstart
 
@@ -69,7 +80,8 @@ karga uninstall cache                    # keeps the volume; --delete-volumes re
 ```
 
 Every command accepts `-o json`. `--debug` writes logs to stderr (`--log-format json` for structured
-logs). State lives in `$KARGA_HOME` (default `$XDG_DATA_HOME/karga`, i.e. `~/.local/share/karga`).
+logs). The state lives in karga-server's `KARGA_HOME` (`/var/lib/karga` for the service; the server's
+`--home` or `KARGA_HOME`, else `~/.local/share/karga`). Below, `$KARGA_HOME` means that directory.
 
 ## Commands
 
@@ -79,6 +91,7 @@ logs). State lives in `$KARGA_HOME` (default `$XDG_DATA_HOME/karga`, i.e. `~/.lo
 | `lint <package>...` | Validate `Package.yaml`, values and schema, render and check every resource |
 | `template <release> <package>` | Render locally; Secret values are shown as `<redacted>` unless `--show-secrets` |
 | `show package\|values\|readme <package>` | Show package metadata, default values or README |
+| `version` | Versions of karga and karga-server (a warning if they differ) |
 | `install <release> <package>` | Install. Re-running with the same package and values does nothing |
 | `upgrade <release> <package>` | Apply new values or a new package version. `--reuse-values`, `--install`, `--strategy`, `--delete-volumes` |
 | `rollback <release> [revision]` | Re-apply an earlier revision as a new revision. `--strategy`, `--delete-volumes` |
@@ -278,9 +291,10 @@ migrations. Changing a Network or Volume spec in an upgrade is refused.
 
 ## State
 
-Everything karga knows is in `$KARGA_HOME/karga.db` (SQLite, `0600`); proxy and gateway
-configuration are rebuilt from it and from Docker. `karga state backup <file>` writes a consistent
-copy at any time. To restore, stop using karga and copy the file over `karga.db`. Before upgrading
+Everything karga knows is in `$KARGA_HOME/karga.db` (SQLite, `0600`), which only karga-server
+opens; proxy and gateway configuration are rebuilt from it and from Docker. `karga state backup
+<file>` writes a consistent copy at any time (the server streams it to the CLI). To restore, stop
+karga-server and copy the file over `karga.db`. Before upgrading
 the database schema karga keeps a copy as `karga.db.bak-v<schema>`, and it refuses a database written
 by a newer karga.
 
@@ -296,7 +310,11 @@ Secrets (and what mounts them) once more on its next upgrade.
 
 ## Security notes
 
-- Access to the Docker socket is root-equivalent on the host. Run karga as a user you trust with it.
+- Access to the Docker socket is root-equivalent on the host, and so is access to karga's socket:
+  add to the `karga` group only users you trust with it. The socket is local only; there is no
+  remote API. karga-server runs as the unprivileged `karga` user (in the `docker` group), with
+  `NoNewPrivileges`, a read-only system and no access to home directories (packages and values files
+  travel from the CLI over the socket).
 - Packages cannot open ports: workloads publish nothing, and only the gateway's listeners, which the
   host's administrator defines, are reachable from outside, on `127.0.0.1` unless `karga gateway set
   listen` says otherwise.
@@ -320,7 +338,7 @@ Secrets (and what mounts them) once more on its next upgrade.
 make test               # unit tests
 make lint               # golangci-lint
 make test-integration   # Linux with Docker: adapter contract and deployments
-make test-e2e           # Linux with Docker: builds the binary and runs the lifecycle end to end
+make test-e2e           # Linux with Docker: builds both binaries, starts karga-server, runs the lifecycle
 make test-linux         # both in a Linux VM (OrbStack or Lima; KARGA_VM names it, default karga-linux)
 ```
 

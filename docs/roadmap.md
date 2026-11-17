@@ -12,6 +12,7 @@ What karga does not do yet, what it does with known limits, and the open questio
 | `karga doctor` | One command checking the Docker version, gateway support, `KARGA_HOME` permissions, ports 80/443 and the Envoy image. |
 | `karga events` | The operation history (already in the state database) as a readable timeline. |
 | Drift repair (`karga reconcile`) | An upgrade recreates resources that are missing in Docker, but does not detect objects changed outside karga, and repairing needs an upgrade. Also re-allocating a loopback upstream port taken by another process after a reboot. |
+| Remote management | The API is on a local unix socket only; managing another host means logging in to it. |
 | Private registries | Image pulls are anonymous today; credentials from the Docker configuration. |
 | Encrypted secret store | Values that are not `writeOnly` are stored as written. |
 | UDP and client IP for TCP | Services carry TCP only; TCP backends do not see the client address (HTTP and HTTPS listeners pass `x-forwarded-for`). |

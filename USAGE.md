@@ -37,11 +37,13 @@ replaced by documentation addresses.
 
 Where things live:
 
-- Docker runs the containers. karga is a CLI: when it is not running, nothing of karga runs except
-  your containers, the gateway and the release proxies, all restarted by Docker.
-- `$KARGA_HOME` (default `~/.local/share/karga`) holds the state database `karga.db`, the key
-  `state.key`, rendered Config and Secret files, the gateway settings `gateway.json` and the Envoy
-  configuration. Keep it private; it is created with mode 0700.
+- **karga-server** (a systemd service) owns the state and talks to Docker. The **karga** CLI is its
+  client on `/run/karga/karga.sock`; it sends packages and values files over the socket and runs
+  nothing itself.
+- Docker runs the containers, the gateway and the release proxies, and restarts them.
+- The server's `KARGA_HOME` (`/var/lib/karga` for the service) holds the state database `karga.db`,
+  the key `state.key`, rendered Config and Secret files, the gateway settings `gateway.json` and the
+  Envoy configuration. Only the `karga` user can read it (mode 0700).
 
 ## 2. Install karga
 
@@ -52,25 +54,53 @@ The repository is private, so downloads need GitHub credentials: an authenticate
 against the release checksums:
 
 ```console
-$ gh api repos/hasankaradmir/karga/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | sh
+$ gh api repos/hasankaradmir/karga/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | KARGA_SYSTEMD=1 sh
 karga v0.1.0 installed to /usr/local/bin/karga
+karga-server v0.1.0 installed to /usr/local/bin/karga-server
+karga-server is running; add users to the karga group to use karga: sudo usermod -aG karga $USER
+$ sudo usermod -aG karga $USER          # log in again afterwards
 ```
 
 `KARGA_VERSION=v0.1.0` picks a version, `KARGA_BIN_DIR=~/bin` another directory. Without the
-script: `gh release download v0.1.0 -R hasankaradmir/karga -p 'karga_*_linux_amd64.tar.gz'`.
+script: `gh release download v0.1.0 -R hasankaradmir/karga -p 'karga_*_linux_amd64.tar.gz'`, then
+install `karga`, `karga-server` and `deploy/systemd/karga-server.service` from the archive.
+
+### The server
+
+```console
+$ systemctl status karga-server
+$ karga version
+karga v0.1.0 (commit ..., go1.27.4)
+karga-server v0.1.0
+$ journalctl -u karga-server -f          # the server's log
+```
+
+The service runs as the `karga` system user (in the `docker` group) with its state in
+`/var/lib/karga`, and listens on `/run/karga/karga.sock` (mode 0660, group `karga`). Anyone in the
+`karga` group can manage every release, which is as much as access to Docker: add only trusted
+users. When the server is down, the CLI says so:
+
+```console
+$ karga list
+Error: karga-server is not running (no server on /run/karga/karga.sock): start it with 'sudo systemctl start karga-server'
+```
+
+`create`, `lint`, `template`, `show`, `completion` and `version` work without it. `--socket` or
+`KARGA_SOCKET` point the CLI at another socket.
 
 ### From source
 
 ```console
-$ make build        # needs Go 1.27; produces bin/karga
+$ make build        # needs Go 1.27; produces bin/karga and bin/karga-server
+$ bin/karga-server --home /tmp/karga --socket /tmp/karga.sock &     # a server of your own, for development
+$ KARGA_SOCKET=/tmp/karga.sock bin/karga list
 ```
 
-### Connect to Docker
+### Docker
 
 karga needs Linux with a local Docker daemon: its Envoys share files, unix sockets and the host
-network with it. karga uses `DOCKER_HOST`, then `DOCKER_CONTEXT`, then the current Docker context.
-On macOS or with a remote Docker host, `lint` and `template` work, but a plan with Services is
-refused (`services ... need karga's gateway and release proxy (Linux with a local Docker)`).
+network with it. On macOS, `lint` and `template` work, but a plan with Services is refused
+(`services ... need karga's gateway and release proxy (Linux with a local Docker)`).
 
 ### Shell completion
 
@@ -630,6 +660,8 @@ machine-readable output for every read command.
 | `a previous operation on this release was interrupted` | A karga process died mid-operation; check `karga status`, then rerun with `--force`. |
 | `gateway: proxy does not route to ... : <reason>` | The gateway did not accept or reach the new backend; the reason (and Envoy's own message, if it refused the configuration) follows. |
 | `services ... need karga's gateway and release proxy (Linux with a local Docker)` | karga runs on Linux with a local Docker daemon. |
+| `karga-server is not running` | Start it: `sudo systemctl start karga-server`; see `journalctl -u karga-server`. |
+| `permission denied` on `/run/karga/karga.sock` | Your user is not in the `karga` group (or has not logged in again since). |
 | `a Workload no longer exposes ports; a Service does` | The package uses the removed `hostPort`, `hostIP` or `routes`; move them to a Service. |
 
 ### Things changed behind karga's back
@@ -658,16 +690,17 @@ A complete backup is the state, its key, the gateway settings and the volumes:
 ```console
 $ karga state backup ~/backup/karga.db
 state written to ~/backup/karga.db
-The backup does not hold ~/.local/share/karga/state.key, which keys the digests of secret values: copy it too (...)
-$ cp ~/.local/share/karga/state.key ~/.local/share/karga/gateway.json ~/backup/
+The backup does not hold state.key and gateway.json from the server's KARGA_HOME (default
+/var/lib/karga): copy them too and keep them safe. (...)
+$ sudo cp /var/lib/karga/state.key /var/lib/karga/gateway.json ~/backup/
 $ karga volume backup db postgres-data ~/backup/db-postgres-data.tar.gz --stop
 ```
 
 Restore on a new host, in this order:
 
 1. Install karga and Docker.
-2. Copy `karga.db` and `state.key` into the new `$KARGA_HOME` (mode 0600) before running any karga
-   command. `karga list` and `karga history` now show your releases.
+2. Stop karga-server, copy `karga.db`, `state.key` and `gateway.json` into `/var/lib/karga`
+   (owner `karga`, mode 0600) and start it again. `karga list` and `karga history` now show your releases.
 3. For each release, upgrade from its package; the plan creates everything missing on this host:
 
    ```console
@@ -676,8 +709,6 @@ Restore on a new host, in this order:
      create network net
      create workload web
    ```
-
-   Copy `gateway.json` too, so the new host has the same listeners and listen addresses.
 
 4. Restore the volumes with `karga volume restore`.
 

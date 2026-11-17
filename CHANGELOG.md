@@ -14,6 +14,10 @@ First release.
 - The gateway's listen addresses and listeners belong to the host's administrator: `karga gateway
   listener add|remove|list`, `karga gateway set listen` (default `127.0.0.1`). Whoever used
   `hostIP: 0.0.0.0` sets `karga gateway set listen 0.0.0.0`.
+- karga-server owns the state and the runtime; the karga CLI is its client on
+  `/run/karga/karga.sock` and stops with `karga-server is not running` without it (`create`,
+  `lint`, `template`, `show` work alone). The service runs as the `karga` user with its state in
+  `/var/lib/karga`; install with `KARGA_SYSTEMD=1`. The CLI's `--home` is gone (`--socket` instead).
 - Linux only: without karga's gateway and release proxy (macOS, a remote Docker host) a plan with
   Services is refused. Upgrading an installed release with its new package recreates its workloads
   once.

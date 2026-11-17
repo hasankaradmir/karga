@@ -25,9 +25,18 @@ package marketplace, automatic database migration rollback, platforms other than
 
 ## 2. Architecture
 
+karga is two programs (ADR-0012). **karga-server** owns the state database and the container
+runtime; it serves the release operations on a local unix socket (`/run/karga/karga.sock`, HTTP and
+JSON, no remote API). The **karga** CLI is its client: it packs packages and values files and sends
+them, and streams progress, logs, `exec` (an upgraded connection carrying frames) and backups. Only
+`create`, `lint`, `template` and `show` work without the server. The API is `internal/api`: a
+`Backend` interface that `*releases.Service` implements on the server and `api.Client` in the CLI.
+
 ```
-cmd/karga                       entry point (signals, exit codes)
+cmd/karga, cmd/karga-server     entry points
 internal/cli                    cobra commands, output (tables, JSON, progress, colors, completion)
+internal/api                    Backend interface, HTTP server and client over the unix socket
+internal/server                 karga-server: state, runtime, socket
 internal/application/packages   load, lint, render packages; create scaffolds
 internal/application/releases   release lifecycle: install, upgrade, rollback, uninstall, reads
 internal/application/deployment plan (diff, strategies), execute, release proxy, probes

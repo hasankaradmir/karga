@@ -3,6 +3,7 @@ package cli
 import (
 	"bytes"
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -31,7 +32,7 @@ func TestVersionJSON(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	var v versionInfo
+	var v versionReport
 	if err := json.Unmarshal([]byte(out), &v); err != nil {
 		t.Fatalf("invalid JSON %q: %v", out, err)
 	}
@@ -47,14 +48,14 @@ func TestInvalidLogFormat(t *testing.T) {
 }
 
 func TestDebugLogsToStderr(t *testing.T) {
-	out, errOut, err := run(t, "--debug", "--home", "/tmp/karga-test", "version", "-o", "json")
+	out, errOut, err := run(t, "--debug", "--socket", "/tmp/karga-test.sock", "version", "-o", "json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(errOut, "home=/tmp/karga-test") {
+	if !strings.Contains(errOut, "socket=/tmp/karga-test.sock") {
 		t.Fatalf("debug log missing on stderr: %q", errOut)
 	}
-	if strings.Contains(out, "config resolved") {
+	if strings.Contains(out, "karga-server") && strings.Contains(out, "socket=") {
 		t.Fatalf("log leaked to stdout: %q", out)
 	}
 }
@@ -62,5 +63,19 @@ func TestDebugLogsToStderr(t *testing.T) {
 func TestInvalidOutput(t *testing.T) {
 	if _, _, err := run(t, "version", "-o", "yaml"); err == nil {
 		t.Fatal("expected error for -o yaml")
+	}
+}
+
+func TestVersionAsksTheServer(t *testing.T) {
+	e := newCLIEnv(t)
+	if out := e.mustRun("version"); !strings.Contains(out, "karga-server dev") {
+		t.Fatalf("version:\n%s", out)
+	}
+	out, _, err := run(t, "--socket", filepath.Join(t.TempDir(), "none.sock"), "version")
+	if err != nil || !strings.Contains(out, "karga-server not running") {
+		t.Fatalf("without a server: %v\n%s", err, out)
+	}
+	if _, _, err := run(t, "--socket", filepath.Join(t.TempDir(), "none.sock"), "list"); err == nil || !strings.Contains(err.Error(), "karga-server is not running") {
+		t.Fatalf("list without a server: %v", err)
 	}
 }

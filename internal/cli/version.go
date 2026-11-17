@@ -1,41 +1,35 @@
 package cli
 
 import (
+	"context"
 	"fmt"
-	"runtime"
-	"runtime/debug"
+	"time"
 
 	"github.com/spf13/cobra"
+
+	"github.com/hasankaradmir/karga/internal/version"
 )
 
-// version is set at build time: -ldflags "-X github.com/hasankaradmir/karga/internal/cli.version=v0.1.0".
-var version = "dev"
-
-type versionInfo struct {
-	Version   string `json:"version"`
-	Commit    string `json:"commit"`
-	GoVersion string `json:"goVersion"`
-}
-
-func currentVersion() versionInfo {
-	v := versionInfo{Version: version, Commit: "unknown", GoVersion: runtime.Version()}
-	if bi, ok := debug.ReadBuildInfo(); ok {
-		for _, s := range bi.Settings {
-			if s.Key == "vcs.revision" {
-				v.Commit = s.Value
-			}
-		}
-	}
-	return v
+type versionReport struct {
+	version.Info
+	// Server is karga-server's version, empty when it does not answer.
+	Server string `json:"server,omitempty"`
 }
 
 func newVersionCmd(a *app) *cobra.Command {
 	return &cobra.Command{
 		Use:   "version",
-		Short: "Print karga version",
+		Short: "Print the versions of karga and karga-server",
 		Args:  cobra.NoArgs,
-		RunE: func(*cobra.Command, []string) error {
-			v := currentVersion()
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			v := versionReport{Info: version.Current()}
+			if c, ok := a.backend().(interface {
+				Version(context.Context) (string, error)
+			}); ok {
+				ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Second)
+				v.Server, _ = c.Version(ctx)
+				cancel()
+			}
 			if a.output == outputJSON {
 				return writeJSON(a.stdout, v)
 			}
@@ -43,8 +37,21 @@ func newVersionCmd(a *app) *cobra.Command {
 			if len(commit) > 12 {
 				commit = commit[:12]
 			}
-			_, err := fmt.Fprintf(a.stdout, "karga %s (commit %s, %s)\n", v.Version, commit, v.GoVersion)
-			return err
+			if _, err := fmt.Fprintf(a.stdout, "karga %s (commit %s, %s)\n", v.Version, commit, v.GoVersion); err != nil {
+				return err
+			}
+			server := v.Server
+			if server == "" {
+				server = "not running (" + a.socket + ")"
+			}
+			if _, err := fmt.Fprintf(a.stdout, "karga-server %s\n", server); err != nil {
+				return err
+			}
+			if v.Server != "" && v.Server != v.Version {
+				_, err := fmt.Fprintf(a.stderr, "Warning: karga %s and karga-server %s differ; use the same version of both\n", v.Version, v.Server)
+				return err
+			}
+			return nil
 		},
 	}
 }

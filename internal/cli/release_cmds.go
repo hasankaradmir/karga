@@ -5,52 +5,25 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"path/filepath"
+	"os"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
+	"github.com/hasankaradmir/karga/internal/api"
 	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
-	"github.com/hasankaradmir/karga/internal/infrastructure/config"
 	"github.com/hasankaradmir/karga/internal/infrastructure/renderer"
-	"github.com/hasankaradmir/karga/internal/ports"
 )
 
-// withService opens the state database and, only when a use case asks for it, the runtime.
-func (a *app) withService(ctx context.Context, fn func(*releases.Service) error) error {
-	if err := config.EnsureHome(a.cfg); err != nil {
-		return err
-	}
-	store, err := sqlite.Open(ctx, filepath.Join(a.cfg.Home, "karga.db"))
-	if err != nil {
-		return err
-	}
-	defer func() { _ = store.Close() }()
-
-	var rt ports.Runtime
-	var closeRT func()
-	defer func() {
-		if closeRT != nil {
-			closeRT()
-		}
-	}()
-	open := func(ctx context.Context) (ports.Runtime, error) {
-		if rt == nil {
-			var err error
-			if rt, closeRT, err = a.newRuntime(ctx); err != nil {
-				return nil, err
-			}
-		}
-		return rt, nil
-	}
-	return fn(releases.New(store, open, a.cfg.Home, a.redactor.Add, a.log))
+// withBackend connects to karga-server and runs fn against it.
+func (a *app) withBackend(ctx context.Context, fn func(api.Backend) error) error {
+	return fn(a.backend())
 }
 
 type commonFlags struct {
@@ -121,7 +94,7 @@ func (a *app) printResult(verb string, res *releases.Result, verbose bool) error
 		if c.Strategy != "" {
 			line += " (" + c.Label() + ")"
 		}
-		if n := c.Note(); n != "" {
+		if n := c.Notice; n != "" {
 			line += " (" + n + ")"
 		}
 		changed = append(changed, line)
@@ -149,7 +122,7 @@ func newInstallCmd(a *app) *cobra.Command {
 		Short: "Install a package as a new release",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				opts, done := a.optionsFor(common)
 				res, err := s.Install(cmd.Context(), releases.InstallRequest{
 					CommonOptions: opts, Name: args[0], Package: args[1], Values: vals.options(args[0]),
@@ -191,7 +164,7 @@ func newUpgradeCmd(a *app) *cobra.Command {
 			if err := validStrategy(strategy); err != nil {
 				return err
 			}
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				opts, done := a.optionsFor(common)
 				res, err := s.Upgrade(cmd.Context(), releases.UpgradeRequest{
 					CommonOptions: opts, Name: args[0], Package: args[1], Values: vals.options(args[0]),
@@ -233,7 +206,7 @@ func newRollbackCmd(a *app) *cobra.Command {
 				}
 				rev = n
 			}
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				opts, done := a.optionsFor(common)
 				res, err := s.Rollback(cmd.Context(), releases.RollbackRequest{CommonOptions: opts, Name: args[0], Revision: rev, Strategy: strategy})
 				done()
@@ -258,7 +231,7 @@ func newUninstallCmd(a *app) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Name = args[0]
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				if err := s.Uninstall(cmd.Context(), req); err != nil {
 					return err
 				}
@@ -285,7 +258,7 @@ func newHistoryCmd(a *app) *cobra.Command {
 		Short: "Show the revisions of a release",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				revs, err := s.History(cmd.Context(), args[0])
 				if err != nil {
 					return err
@@ -336,7 +309,7 @@ func newListCmd(a *app) *cobra.Command {
 		Short: "List releases",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				rels, err := s.List(cmd.Context())
 				if err != nil {
 					return err
@@ -366,7 +339,7 @@ func newStatusCmd(a *app) *cobra.Command {
 		Short: "Compare a release's desired state with the runtime",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				if !watch {
 					return a.printStatus(cmd.Context(), s, args[0])
 				}
@@ -399,7 +372,7 @@ func newStatusCmd(a *app) *cobra.Command {
 	return cmd
 }
 
-func (a *app) printStatus(ctx context.Context, s *releases.Service, name string) error {
+func (a *app) printStatus(ctx context.Context, s api.Backend, name string) error {
 	rep, err := s.Status(ctx, name)
 	if err != nil {
 		return err
@@ -446,7 +419,7 @@ func newGetCmd(a *app) *cobra.Command {
 		Short: "Show the values a revision was deployed with (user overrides unless --all)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				v, err := s.GetValues(cmd.Context(), args[0], revision, all)
 				if err != nil {
 					return err
@@ -472,7 +445,7 @@ func newGetCmd(a *app) *cobra.Command {
 		Short: "Show the resources a revision deployed (secret values redacted)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				rs, err := s.GetManifest(cmd.Context(), args[0], manifestRev)
 				if err != nil {
 					return err
@@ -500,7 +473,7 @@ func newGetCmd(a *app) *cobra.Command {
 		Short: "Show the package's notes (NOTES.txt) for a revision",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				n, err := s.GetNotes(cmd.Context(), args[0], notesRev)
 				if err != nil {
 					return err
@@ -534,7 +507,7 @@ func newGatewayCmd(a *app) *cobra.Command {
 		Short: "Show the gateway's health and the listeners and routes it serves",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				health, err := s.GatewayHealth(cmd.Context())
 				if err != nil {
 					return err
@@ -585,7 +558,7 @@ func newGatewayCmd(a *app) *cobra.Command {
 		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
 		ValidArgs: []string{"on", "off"},
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				if err := s.SetGatewayAccessLog(cmd.Context(), args[0] == "on"); err != nil {
 					return err
 				}
@@ -600,7 +573,7 @@ func newGatewayCmd(a *app) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			addrs := strings.Split(args[0], ",")
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				if err := s.SetGatewayListen(cmd.Context(), addrs); err != nil {
 					return err
 				}
@@ -620,7 +593,7 @@ func newListenerCmd(a *app) *cobra.Command {
 		Short: "List the listeners and the services using them",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				settings, users, err := s.GatewaySettings(cmd.Context())
 				if err != nil {
 					return err
@@ -643,7 +616,7 @@ func newListenerCmd(a *app) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			l.Name = args[0]
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				if err := s.AddGatewayListener(cmd.Context(), l); err != nil {
 					return err
 				}
@@ -661,7 +634,7 @@ func newListenerCmd(a *app) *cobra.Command {
 		Short: "Remove a listener no service uses",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				if err := s.RemoveGatewayListener(cmd.Context(), args[0]); err != nil {
 					return err
 				}
@@ -681,27 +654,21 @@ func newStateCmd(a *app) *cobra.Command {
 	cmd.AddCommand(&cobra.Command{
 		Use:   "backup <file>",
 		Short: "Write a consistent copy of the state database (safe while karga runs)",
-		Long: "Write a consistent copy of the state database to <file> (mode 0600, must not exist).\n" +
-			"To restore, stop using karga and copy the file over $KARGA_HOME/karga.db; proxy and gateway\n" +
-			"configuration is rebuilt from the state on the next upgrade.",
+		Long: "Write a consistent copy of the server's state database to <file> (mode 0600, must not exist).\n" +
+			"To restore, stop karga-server and copy the file over karga.db in its KARGA_HOME; proxy and\n" +
+			"gateway configuration is rebuilt from the state on the next upgrade.",
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := config.EnsureHome(a.cfg); err != nil {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
+				if err := writeNew(args[0], func(w io.Writer) error { return s.BackupState(cmd.Context(), w) }); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(a.stdout, "state written to %s\n"+
+					"The backup does not hold state.key and gateway.json from the server's KARGA_HOME (default\n"+
+					"/var/lib/karga): copy them too and keep them safe. Restored without state.key, each release\n"+
+					"applies its Secrets once more on its next upgrade.\n", args[0])
 				return err
-			}
-			store, err := sqlite.Open(cmd.Context(), filepath.Join(a.cfg.Home, "karga.db"))
-			if err != nil {
-				return err
-			}
-			defer func() { _ = store.Close() }()
-			if err := store.Backup(cmd.Context(), args[0]); err != nil {
-				return err
-			}
-			_, err = fmt.Fprintf(a.stdout, "state written to %s\n"+
-				"The backup does not hold %s, which keys the digests of secret values: copy it too (and keep\n"+
-				"both safe). Restored without it, each release applies its Secrets once more on its next upgrade.\n",
-				args[0], filepath.Join(a.cfg.Home, "state.key"))
-			return err
+			})
 		},
 	})
 	return cmd
@@ -726,7 +693,7 @@ func newLogsCmd(a *app) *cobra.Command {
 			if len(args) > 0 {
 				req.Release, req.Workloads = args[0], args[1:]
 			}
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				return s.Logs(cmd.Context(), req, a.stdout)
 			})
 		},
@@ -749,12 +716,16 @@ func newVolumeCmd(a *app) *cobra.Command {
 			"prefer --stop or the database's own dump tool.",
 		Args: cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			backup.Release, backup.Volume, backup.File = args[0], args[1], args[2]
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
-				if err := s.BackupVolume(cmd.Context(), backup); err != nil {
+			backup.Release, backup.Volume = args[0], args[1]
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
+				err := writeNew(args[2], func(w io.Writer) error {
+					backup.W = w
+					return s.BackupVolume(cmd.Context(), backup)
+				})
+				if err != nil {
 					return err
 				}
-				_, err := fmt.Fprintf(a.stdout, "volume %s of %s written to %s\n", backup.Volume, backup.Release, backup.File)
+				_, err = fmt.Fprintf(a.stdout, "volume %s of %s written to %s\n", backup.Volume, backup.Release, args[2])
 				return err
 			})
 		},
@@ -768,12 +739,18 @@ func newVolumeCmd(a *app) *cobra.Command {
 			"again. Files in the backup overwrite files of the same name; other files in the volume are kept.",
 		Args: cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			restore.Release, restore.Volume, restore.File = args[0], args[1], args[2]
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			restore.Release, restore.Volume, restore.Name = args[0], args[1], args[2]
+			f, err := os.Open(args[2])
+			if err != nil {
+				return err
+			}
+			defer func() { _ = f.Close() }()
+			restore.R = f
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				if err := s.RestoreVolume(cmd.Context(), restore); err != nil {
 					return err
 				}
-				_, err := fmt.Fprintf(a.stdout, "volume %s of %s restored from %s\n", restore.Volume, restore.Release, restore.File)
+				_, err := fmt.Fprintf(a.stdout, "volume %s of %s restored from %s\n", restore.Volume, restore.Release, args[2])
 				return err
 			})
 		},
@@ -799,7 +776,7 @@ func newDiffCmd(a *app) *cobra.Command {
 					return fmt.Errorf("revision %q is not a number", args[2])
 				}
 			}
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				d, err := s.Diff(cmd.Context(), args[0], from, to)
 				if err != nil {
 					return err
@@ -842,4 +819,21 @@ func newDiffCmd(a *app) *cobra.Command {
 			})
 		},
 	}
+}
+
+// writeNew creates path (0600, must not exist) and fills it with fn; on failure the file is removed.
+func writeNew(path string, fn func(io.Writer) error) (err error) {
+	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	if err != nil {
+		return err
+	}
+	defer func() {
+		if cerr := f.Close(); err == nil {
+			err = cerr
+		}
+		if err != nil {
+			_ = os.Remove(path)
+		}
+	}()
+	return fn(f)
 }

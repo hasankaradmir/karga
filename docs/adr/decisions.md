@@ -30,5 +30,6 @@ directory.
 | D24 | Production, round 3 | Swap and process limits, OOM reporting, log rotation, `tcp`/`http` health checks, `no-new-privileges` and the security block, volume backup and restore. |
 | D25 | Developer and user experience | Parallel integration tests, `make test-linux`, live progress, `exec`, `diff`, `create` and notes, `status --watch`, colors, completion, gateway package, release automation. |
 | D26 | Services and the host gateway | Workloads expose nothing; Services served by the release proxy; gateway listeners and listen addresses owned by the administrator; Linux only (ADR-0011). |
+| D27 | Server and CLI | karga-server owns state and runtime; the CLI is its client on a local unix socket (ADR-0012). |
 
 D23 was not used.

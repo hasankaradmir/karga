@@ -2,45 +2,30 @@ package cli
 
 import (
 	"context"
-	"os"
-	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/spf13/cobra"
 
-	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
+	"github.com/hasankaradmir/karga/internal/api"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
-	"github.com/hasankaradmir/karga/internal/infrastructure/config"
-	"github.com/hasankaradmir/karga/internal/ports"
 )
 
-// Dynamic shell completion reads the state database only (no container runtime) and never creates
-// it: on a host without karga state, completion just offers nothing.
+// Dynamic shell completion asks karga-server, briefly; without a server it offers nothing.
 
 // completer offers values for one argument position; args are the arguments before it.
 type completer func(a *app, args []string) ([]string, cobra.ShellCompDirective)
 
-func (a *app) withStore(fn func(ports.StateStore) []string) []string {
-	cfg, err := config.Resolve(a.home, os.Getenv)
-	if err != nil {
-		return nil
-	}
-	path := filepath.Join(cfg.Home, "karga.db")
-	if _, err := os.Stat(path); err != nil {
-		return nil
-	}
-	store, err := sqlite.Open(context.Background(), path)
-	if err != nil {
-		return nil
-	}
-	defer func() { _ = store.Close() }()
-	return fn(store)
+func (a *app) ask(fn func(context.Context, api.Backend) []string) []string {
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	return fn(ctx, a.backend())
 }
 
 func completeRelease(a *app, _ []string) ([]string, cobra.ShellCompDirective) {
-	return a.withStore(func(s ports.StateStore) []string {
-		rels, _ := s.ListReleases(context.Background())
+	return a.ask(func(ctx context.Context, b api.Backend) []string {
+		rels, _ := b.List(ctx)
 		var out []string
 		for _, r := range rels {
 			out = append(out, r.Name)
@@ -52,8 +37,8 @@ func completeRelease(a *app, _ []string) ([]string, cobra.ShellCompDirective) {
 // completeResource offers the applied resources of kind of the release in args[0].
 func completeResource(kind string) completer {
 	return func(a *app, args []string) ([]string, cobra.ShellCompDirective) {
-		return a.withStore(func(s ports.StateStore) []string {
-			applied, _ := s.ListResources(context.Background(), args[0])
+		return a.ask(func(ctx context.Context, b api.Backend) []string {
+			applied, _ := b.Resources(ctx, args[0])
 			var out []string
 			for _, r := range applied {
 				if r.Kind == kind {
@@ -66,8 +51,8 @@ func completeResource(kind string) completer {
 }
 
 func completeRevision(a *app, args []string) ([]string, cobra.ShellCompDirective) {
-	return a.withStore(func(s ports.StateStore) []string {
-		revs, _ := s.ListRevisions(context.Background(), args[0])
+	return a.ask(func(ctx context.Context, b api.Backend) []string {
+		revs, _ := b.History(ctx, args[0])
 		var out []string
 		for i := len(revs) - 1; i >= 0; i-- {
 			out = append(out, strconv.Itoa(revs[i].Number)+"\t"+string(revs[i].Status)+" "+revs[i].PackageVersion)

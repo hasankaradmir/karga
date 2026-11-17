@@ -55,7 +55,8 @@ func TestGatewayListenAddresses(t *testing.T) {
 	get := func(ip string) (int, error) {
 		req, _ := http.NewRequest(http.MethodGet, "http://"+net.JoinHostPort(ip, strconv.Itoa(port))+"/", nil)
 		req.Host = "listen.local"
-		resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
+		// A fresh connection each time: Envoy lets connections on a removed listener finish.
+		resp, err := (&http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}).Do(req)
 		if err != nil {
 			return 0, err
 		}

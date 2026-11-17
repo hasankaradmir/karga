@@ -33,6 +33,8 @@ type Change struct {
 	// a requested replace fell back to recreate.
 	Strategy       string `json:"strategy,omitempty"`
 	StrategyReason string `json:"strategyReason,omitempty"`
+	// Notice says what deleting a volume does to its data ("" for other changes).
+	Notice string `json:"notice,omitempty"`
 	// Resource is the desired resource (nil for delete).
 	Resource *resource.Resource `json:"-"`
 	// Spec and Digest describe the desired state to record once applied.
@@ -256,7 +258,9 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 	})
 	for _, a := range removed {
 		a := a
-		plan.Changes = append(plan.Changes, Change{Kind: a.Kind, Name: a.Name, Action: ActionDelete, Applied: &a, RuntimeName: a.RuntimeName})
+		c := Change{Kind: a.Kind, Name: a.Name, Action: ActionDelete, Applied: &a, RuntimeName: a.RuntimeName}
+		c.Notice = c.note()
+		plan.Changes = append(plan.Changes, c)
 	}
 	if len(errs) > 0 {
 		return plan, fmt.Errorf("release %s: %s", releaseName, strings.Join(errs, "; "))
@@ -394,8 +398,8 @@ func (c Change) deletesVolume() bool {
 	return c.Action == ActionDelete && c.Kind == resource.KindVolume && c.Applied != nil && volumeRetention(c.Applied.Spec) == "delete"
 }
 
-// Note explains what deleting a volume does to its data ("" for other changes).
-func (c Change) Note() string {
+// note explains what deleting a volume does to its data ("" for other changes).
+func (c Change) note() string {
 	switch {
 	case c.Action != ActionDelete || c.Kind != resource.KindVolume:
 		return ""
@@ -427,7 +431,7 @@ func (p Plan) Summary(w io.Writer, releaseName string, from, to int) error {
 		if c.Strategy != "" {
 			fmt.Fprintf(&b, " (%s)", c.Label())
 		}
-		if n := c.Note(); n != "" {
+		if n := c.Notice; n != "" {
 			fmt.Fprintf(&b, " (%s)", n)
 		}
 		b.WriteString("\n")
@@ -474,7 +478,7 @@ func (p Plan) Print(w io.Writer, releaseName string, from, to int) error {
 				}
 			}
 		default:
-			if n := c.Note(); n != "" {
+			if n := c.Notice; n != "" {
 				fmt.Fprintf(&b, "    %s (%s)\n", c.Action, n)
 			} else {
 				fmt.Fprintf(&b, "    %s\n", c.Action)

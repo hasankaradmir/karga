@@ -5,6 +5,7 @@
 #   KARGA_VERSION       tag to install (default: the latest published release)
 #   KARGA_BIN_DIR       where to put the binary
 #   KARGA_DOWNLOAD_URL  download from here instead of GitHub (a mirror, or file:// for a local build)
+#   KARGA_SYSTEMD=1     also install and start karga-server as a systemd service (Linux, needs root)
 #
 # The repository is private, so GitHub downloads need credentials: an authenticated GitHub CLI
 # (gh auth login) is used when present, otherwise GITHUB_TOKEN (a token with read access to it).
@@ -70,6 +71,25 @@ want=$(grep " $archive\$" "$tmp/checksums.txt" | cut -d' ' -f1)
 if command -v sha256sum >/dev/null; then got=$(sha256sum "$tmp/$archive" | cut -d' ' -f1); else got=$(shasum -a 256 "$tmp/$archive" | cut -d' ' -f1); fi
 [ -n "$want" ] && [ "$want" = "$got" ] || { echo "checksum mismatch for $archive" >&2; exit 1; }
 
-tar -xzf "$tmp/$archive" -C "$tmp" karga
-if [ -w "$bin_dir" ]; then mv "$tmp/karga" "$bin_dir/karga"; else sudo mv "$tmp/karga" "$bin_dir/karga"; fi
+as_root() { if [ "$(id -u)" = 0 ]; then "$@"; else sudo "$@"; fi; }
+put() { if [ -w "$bin_dir" ]; then mv "$tmp/$1" "$bin_dir/$1"; else as_root mv "$tmp/$1" "$bin_dir/$1"; fi; }
+
+tar -xzf "$tmp/$archive" -C "$tmp"
+put karga
 echo "karga $version installed to $bin_dir/karga"
+if [ -f "$tmp/karga-server" ]; then
+  put karga-server
+  echo "karga-server $version installed to $bin_dir/karga-server"
+fi
+
+# KARGA_SYSTEMD=1 runs karga-server as a service: a karga system user in the docker group owns
+# /var/lib/karga; members of the karga group may use the CLI.
+if [ "${KARGA_SYSTEMD:-}" = 1 ] && [ -f "$tmp/deploy/systemd/karga-server.service" ]; then
+  getent group karga >/dev/null || as_root groupadd --system karga
+  id karga >/dev/null 2>&1 || as_root useradd --system --gid karga --groups docker --home-dir /var/lib/karga --shell /usr/sbin/nologin karga
+  sed "s#/usr/local/bin/karga-server#$bin_dir/karga-server#" "$tmp/deploy/systemd/karga-server.service" > "$tmp/karga-server.service"
+  as_root install -m 0644 "$tmp/karga-server.service" /etc/systemd/system/karga-server.service
+  as_root systemctl daemon-reload
+  as_root systemctl enable --now karga-server
+  echo "karga-server is running; add users to the karga group to use karga: sudo usermod -aG karga \$USER"
+fi

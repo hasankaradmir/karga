@@ -4,7 +4,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
+	"os"
+	"path/filepath"
 	"slices"
 	"strings"
 
@@ -390,4 +393,35 @@ func (s *Service) Diff(ctx context.Context, name string, from, to int) (*Revisio
 		d.Package = []deployment.FieldChange{{Path: "package", Old: a.PackageName + " " + a.PackageVersion, New: b.PackageName + " " + b.PackageVersion}}
 	}
 	return d, nil
+}
+
+// Resources lists what is applied for a release (for completion and tools; no runtime is read).
+func (s *Service) Resources(ctx context.Context, name string) ([]release.AppliedResource, error) {
+	return s.Store.ListResources(ctx, name)
+}
+
+// BackupState writes a consistent copy of the state database to w.
+func (s *Service) BackupState(ctx context.Context, w io.Writer) error {
+	b, ok := s.Store.(interface {
+		Backup(ctx context.Context, dest string) error
+	})
+	if !ok {
+		return errors.New("this state store cannot be backed up")
+	}
+	dir, err := os.MkdirTemp(s.Home, ".backup-")
+	if err != nil {
+		return err
+	}
+	defer func() { _ = os.RemoveAll(dir) }()
+	tmp := filepath.Join(dir, "karga.db")
+	if err := b.Backup(ctx, tmp); err != nil {
+		return err
+	}
+	f, err := os.Open(tmp)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = f.Close() }()
+	_, err = io.Copy(w, f)
+	return err
 }

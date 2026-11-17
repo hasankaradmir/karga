@@ -17,11 +17,12 @@ import (
 	"runtime"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 )
 
-var karga string
+var karga, kargaServer string
 
 func TestMain(m *testing.M) {
 	dir, err := os.MkdirTemp("", "karga-e2e-")
@@ -34,12 +35,14 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, "e2e tests run on Linux with a local Docker: use make test-linux")
 		os.Exit(1)
 	}
-	karga = filepath.Join(dir, "karga")
-	build := exec.Command("go", "build", "-o", karga, "../../cmd/karga")
-	build.Stdout, build.Stderr = os.Stdout, os.Stderr
-	if err := build.Run(); err != nil {
-		fmt.Fprintln(os.Stderr, "build karga:", err)
-		os.Exit(1)
+	karga, kargaServer = filepath.Join(dir, "karga"), filepath.Join(dir, "karga-server")
+	for bin, pkg := range map[string]string{karga: "../../cmd/karga", kargaServer: "../../cmd/karga-server"} {
+		build := exec.Command("go", "build", "-o", bin, pkg)
+		build.Stdout, build.Stderr = os.Stdout, os.Stderr
+		if err := build.Run(); err != nil {
+			fmt.Fprintln(os.Stderr, "build", pkg+":", err)
+			os.Exit(1)
+		}
 	}
 	code := m.Run()
 	_ = os.RemoveAll(dir)
@@ -47,11 +50,50 @@ func TestMain(m *testing.M) {
 }
 
 type env struct {
-	t    *testing.T
-	home string
+	t      *testing.T
+	home   string
+	socket string
 }
 
-func newEnv(t *testing.T) *env { return &env{t: t, home: t.TempDir()} }
+// newEnv starts a karga-server with its own KARGA_HOME and socket; the CLI connects to it.
+func newEnv(t *testing.T) *env {
+	t.Helper()
+	dir, err := os.MkdirTemp("", "ke2e") // short: unix socket paths are limited
+	if err != nil {
+		t.Fatal(err)
+	}
+	e := &env{t: t, home: t.TempDir(), socket: filepath.Join(dir, "s.sock")}
+	srv := exec.Command(kargaServer, "--home", e.home, "--socket", e.socket)
+	log, err := os.Create(filepath.Join(e.home, "server.log"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.Stdout, srv.Stderr = log, log
+	if err := srv.Start(); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		_ = srv.Process.Signal(syscall.SIGTERM)
+		_ = srv.Wait()
+		_ = log.Close()
+		if t.Failed() {
+			b, _ := os.ReadFile(filepath.Join(e.home, "server.log"))
+			t.Logf("karga-server log:\n%s", b)
+		}
+		_ = os.RemoveAll(dir)
+	})
+	deadline := time.Now().Add(15 * time.Second)
+	for {
+		if out, err := e.try("version"); err == nil && !strings.Contains(out, "not running") {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("karga-server did not start")
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	return e
+}
 
 // run executes karga and fails the test on error.
 func (e *env) run(args ...string) string {
@@ -65,7 +107,7 @@ func (e *env) run(args ...string) string {
 
 func (e *env) try(args ...string) (string, error) {
 	cmd := exec.Command(karga, args...)
-	cmd.Env = append(os.Environ(), "KARGA_HOME="+e.home)
+	cmd.Env = append(os.Environ(), "KARGA_SOCKET="+e.socket)
 	out, err := cmd.CombinedOutput()
 	return string(out), err
 }

@@ -2,14 +2,11 @@ package cli
 
 import (
 	"bytes"
-	"context"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
-
-	"github.com/hasankaradmir/karga/internal/ports"
 )
 
 const leak = "hunter2-LEAK"
@@ -87,8 +84,8 @@ func TestSecretsDoNotLeak(t *testing.T) {
 func (e *cliEnv) runBoth(args ...string) (string, string, error) {
 	e.t.Helper()
 	var out, errOut bytes.Buffer
-	cmd := newRootCmd(&out, &errOut, func(context.Context) (ports.Runtime, func(), error) { return e.rt, func() {}, nil })
-	cmd.SetArgs(append(args, "--home", e.home))
+	cmd := e.root(&out, &errOut)
+	cmd.SetArgs(args)
 	err := cmd.Execute()
 	return out.String(), errOut.String(), err
 }

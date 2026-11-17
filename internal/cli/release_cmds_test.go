@@ -16,17 +16,23 @@ import (
 	"testing"
 	"time"
 
+	"github.com/spf13/cobra"
+
 	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
 	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
+	"github.com/hasankaradmir/karga/internal/api"
 	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/ports"
 	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
+	"github.com/hasankaradmir/karga/internal/server"
 )
 
-// cliEnv runs commands against a fake runtime and a temporary KARGA_HOME.
+// cliEnv runs commands against karga-server, started in the test with a fake runtime and a
+// temporary KARGA_HOME; the CLI reaches it on a unix socket like in production.
 type cliEnv struct {
 	t      *testing.T
 	home   string
+	socket string
 	rt     *fakeruntime.Runtime
 	port   string
 	stderr string // of the last run
@@ -35,14 +41,39 @@ type cliEnv struct {
 func (e *cliEnv) lastStderr() string { return e.stderr }
 
 func newCLIEnv(t *testing.T) *cliEnv {
-	return &cliEnv{t: t, home: t.TempDir(), rt: fakeruntime.New().WithGateway(), port: strconv.Itoa(runtimetest.FreePort(t))}
+	t.Helper()
+	e := &cliEnv{t: t, home: t.TempDir(), rt: fakeruntime.New().WithGateway(), port: strconv.Itoa(runtimetest.FreePort(t))}
+	// Unix socket paths are short (104 bytes on macOS): t.TempDir() can be too long.
+	dir, err := os.MkdirTemp("", "kcli")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.RemoveAll(dir) })
+	e.socket = filepath.Join(dir, "s.sock")
+	srv, err := server.New(context.Background(), server.Config{Home: e.home, Socket: e.socket}, e.rt)
+	if err != nil {
+		t.Fatal(err)
+	}
+	l, err := srv.Listen()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	go func() { _ = srv.Serve(ctx, l, time.Second); close(done) }()
+	t.Cleanup(func() { cancel(); <-done; _ = srv.Close() })
+	return e
+}
+
+func (e *cliEnv) root(stdout, stderr io.Writer) *cobra.Command {
+	return newRootCmd(stdout, stderr, func() api.Backend { return api.NewClient(e.socket) })
 }
 
 func (e *cliEnv) run(args ...string) (string, error) {
 	e.t.Helper()
 	var out, errOut bytes.Buffer
-	cmd := newRootCmd(&out, &errOut, func(context.Context) (ports.Runtime, func(), error) { return e.rt, func() {}, nil })
-	cmd.SetArgs(append([]string{"--home", e.home}, args...))
+	cmd := e.root(&out, &errOut)
+	cmd.SetArgs(args)
 	err := cmd.Execute()
 	e.stderr = errOut.String()
 	return out.String(), err
@@ -451,8 +482,8 @@ func TestStatusWatchAndColor(t *testing.T) {
 func (e *cliEnv) complete(args ...string) []string {
 	e.t.Helper()
 	var out bytes.Buffer
-	cmd := newRootCmd(&out, &bytes.Buffer{}, func(context.Context) (ports.Runtime, func(), error) { return e.rt, func() {}, nil })
-	cmd.SetArgs(append([]string{"__complete", "--home", e.home}, args...))
+	cmd := e.root(&out, &bytes.Buffer{})
+	cmd.SetArgs(append([]string{"__complete"}, args...))
 	if err := cmd.Execute(); err != nil {
 		e.t.Fatalf("complete %v: %v", args, err)
 	}
@@ -469,9 +500,6 @@ func TestDynamicCompletion(t *testing.T) {
 	e := newCLIEnv(t)
 	if got := e.complete("status", ""); len(got) != 0 {
 		t.Fatalf("no state yet, nothing to offer: %v", got)
-	}
-	if _, err := os.Stat(filepath.Join(e.home, "karga.db")); err == nil {
-		t.Fatal("completion created the state database")
 	}
 	e.mustRun("install", "web1", "../../tests/integration/testdata/web", "--set", "second=true")
 	e.mustRun("install", "redis1", redis, "--set", "service.enabled=false")

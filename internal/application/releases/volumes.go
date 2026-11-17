@@ -8,7 +8,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"os"
 	"path"
 	"strings"
 	"time"
@@ -34,15 +33,20 @@ type BackupManifest struct {
 // VolumeBackupRequest copies a volume's files out through a workload that mounts it. Stop stops
 // the workloads mounting it for a consistent copy; otherwise the copy is taken live.
 type VolumeBackupRequest struct {
-	Release, Volume, File string
-	Stop                  bool
+	Release, Volume string
+	Stop            bool
+	// W receives the backup (a gzip-compressed tar). The caller owns the file it may write to.
+	W io.Writer `json:"-"`
 }
 
 // VolumeRestoreRequest writes a backup into a volume, overwriting files with the same names; the
 // workloads mounting it are stopped meanwhile. Force restores a backup of another volume.
 type VolumeRestoreRequest struct {
-	Release, Volume, File string
-	Force                 bool
+	Release, Volume string
+	Force           bool
+	// Name names the backup in messages (its file name); R reads it.
+	Name string
+	R    io.Reader `json:"-"`
 }
 
 type mounter struct {
@@ -108,7 +112,7 @@ func pause(ctx context.Context, rt ports.Runtime, ms []mounter) (func() error, e
 	return resume, nil
 }
 
-// BackupVolume writes req.Volume to req.File (0600, must not exist).
+// BackupVolume writes req.Volume to req.W.
 func (s *Service) BackupVolume(ctx context.Context, req VolumeBackupRequest) (err error) {
 	ms, err := s.mounters(ctx, req.Release, req.Volume)
 	if err != nil {
@@ -127,18 +131,6 @@ func (s *Service) BackupVolume(ctx context.Context, req VolumeBackupRequest) (er
 	if err != nil {
 		return err
 	}
-	f, err := os.OpenFile(req.File, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
-	if err != nil {
-		return err
-	}
-	defer func() {
-		if cerr := f.Close(); err == nil {
-			err = cerr
-		}
-		if err != nil {
-			_ = os.Remove(req.File)
-		}
-	}()
 	if req.Stop {
 		resume, perr := pause(ctx, rt, ms)
 		defer func() { err = errors.Join(err, resume()) }()
@@ -147,7 +139,7 @@ func (s *Service) BackupVolume(ctx context.Context, req VolumeBackupRequest) (er
 		}
 	}
 	src := ms[0]
-	gz := gzip.NewWriter(f)
+	gz := gzip.NewWriter(req.W)
 	tw := tar.NewWriter(gz)
 	man, _ := json.Marshal(BackupManifest{Release: req.Release, Volume: req.Volume, MountPath: src.path, Created: s.Now().UTC()})
 	if err := tw.WriteHeader(&tar.Header{Name: backupManifest, Mode: 0o600, Size: int64(len(man)), ModTime: s.Now()}); err != nil {
@@ -168,7 +160,7 @@ func (s *Service) BackupVolume(ctx context.Context, req VolumeBackupRequest) (er
 	return gz.Close()
 }
 
-// RestoreVolume writes the backup in req.File into req.Volume.
+// RestoreVolume writes the backup read from req.R into req.Volume.
 func (s *Service) RestoreVolume(ctx context.Context, req VolumeRestoreRequest) (err error) {
 	ms, err := s.mounters(ctx, req.Release, req.Volume)
 	if err != nil {
@@ -184,27 +176,22 @@ func (s *Service) RestoreVolume(ctx context.Context, req VolumeRestoreRequest) (
 	if dst < 0 {
 		return fmt.Errorf("every workload mounts volume %q read-only; nothing can write to it", req.Volume)
 	}
-	f, err := os.Open(req.File)
+	gz, err := gzip.NewReader(req.R)
 	if err != nil {
-		return err
-	}
-	defer func() { _ = f.Close() }()
-	gz, err := gzip.NewReader(f)
-	if err != nil {
-		return fmt.Errorf("%s is not a karga volume backup: %w", req.File, err)
+		return fmt.Errorf("%s is not a karga volume backup: %w", req.Name, err)
 	}
 	tr := tar.NewReader(gz)
 	h, err := tr.Next()
 	if err != nil || h.Name != backupManifest {
-		return fmt.Errorf("%s is not a karga volume backup", req.File)
+		return fmt.Errorf("%s is not a karga volume backup", req.Name)
 	}
 	var man BackupManifest
 	if err := json.NewDecoder(tr).Decode(&man); err != nil {
-		return fmt.Errorf("%s: manifest: %w", req.File, err)
+		return fmt.Errorf("%s: manifest: %w", req.Name, err)
 	}
 	if (man.Release != req.Release || man.Volume != req.Volume) && !req.Force {
 		return fmt.Errorf("%s is a backup of volume %q of release %s; use --force to restore it into %q of %s",
-			req.File, man.Volume, man.Release, req.Volume, req.Release)
+			req.Name, man.Volume, man.Release, req.Volume, req.Release)
 	}
 
 	rel, err := s.Store.GetRelease(ctx, req.Release)

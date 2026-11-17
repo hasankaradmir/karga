@@ -1,10 +1,11 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
-LDFLAGS := -X github.com/hasankaradmir/karga/internal/cli.version=$(VERSION)
+LDFLAGS := -X github.com/hasankaradmir/karga/internal/version.Version=$(VERSION)
 
 .PHONY: build test test-integration test-e2e test-linux lint fmt
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/karga ./cmd/karga
+	go build -ldflags "$(LDFLAGS)" -o bin/karga-server ./cmd/karga-server
 
 test:
 	go test -race ./...

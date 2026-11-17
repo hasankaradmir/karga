@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 	"golang.org/x/term"
 
-	"github.com/hasankaradmir/karga/internal/application/releases"
+	"github.com/hasankaradmir/karga/internal/api"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
@@ -70,7 +70,7 @@ func newExecCmd(a *app) *cobra.Command {
 				}()
 				opts.Resize = resize
 			}
-			return a.withService(cmd.Context(), func(s *releases.Service) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
 				code, err := s.Exec(cmd.Context(), args[0], args[1], opts)
 				if err != nil {
 					return err

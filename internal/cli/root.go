@@ -2,7 +2,6 @@
 package cli
 
 import (
-	"context"
 	"fmt"
 	"io"
 	"log/slog"
@@ -10,10 +9,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hasankaradmir/karga/internal/adapters/docker"
-	"github.com/hasankaradmir/karga/internal/infrastructure/config"
+	"github.com/hasankaradmir/karga/internal/api"
 	"github.com/hasankaradmir/karga/internal/infrastructure/logger"
-	"github.com/hasankaradmir/karga/internal/ports"
 )
 
 const (
@@ -26,34 +23,27 @@ type app struct {
 	stdout    io.Writer
 	stderr    io.Writer
 	output    string
-	home      string
+	socket    string
 	debug     bool
 	logFormat string
 	color     string // auto, always or never
 
-	cfg      config.Config
-	log      *slog.Logger
-	redactor *logger.Redactor
+	log *slog.Logger
 
-	// newRuntime opens the container runtime; tests replace it with a fake.
-	newRuntime func(context.Context) (ports.Runtime, func(), error)
+	// backend returns karga-server's client; tests replace it.
+	backend func() api.Backend
 }
 
 // NewRootCmd builds the karga command tree.
 func NewRootCmd(stdout, stderr io.Writer) *cobra.Command {
-	return newRootCmd(stdout, stderr, dockerRuntime)
+	return newRootCmd(stdout, stderr, nil)
 }
 
-func dockerRuntime(ctx context.Context) (ports.Runtime, func(), error) {
-	rt, err := docker.New(ctx)
-	if err != nil {
-		return nil, nil, err
+func newRootCmd(stdout, stderr io.Writer, backend func() api.Backend) *cobra.Command {
+	a := &app{stdout: stdout, stderr: stderr, backend: backend}
+	if a.backend == nil {
+		a.backend = func() api.Backend { return api.NewClient(a.socket) }
 	}
-	return rt, func() { _ = rt.Close() }, nil
-}
-
-func newRootCmd(stdout, stderr io.Writer, newRuntime func(context.Context) (ports.Runtime, func(), error)) *cobra.Command {
-	a := &app{stdout: stdout, stderr: stderr, redactor: logger.NewRedactor(), newRuntime: newRuntime}
 
 	root := &cobra.Command{
 		Use:           "karga",
@@ -64,17 +54,18 @@ func newRootCmd(stdout, stderr io.Writer, newRuntime func(context.Context) (port
 			if a.output != outputTable && a.output != outputJSON {
 				return fmt.Errorf("invalid --output %q: must be %q or %q", a.output, outputTable, outputJSON)
 			}
-			log, err := logger.New(a.stderr, a.logFormat, a.debug, a.redactor)
+			log, err := logger.New(a.stderr, a.logFormat, a.debug, logger.NewRedactor())
 			if err != nil {
 				return err
 			}
 			a.log = log
-			cfg, err := config.Resolve(a.home, os.Getenv)
-			if err != nil {
-				return err
+			if a.socket == "" {
+				a.socket = api.DefaultSocket
+				if s := os.Getenv("KARGA_SOCKET"); s != "" {
+					a.socket = s
+				}
 			}
-			a.cfg = cfg
-			a.log.Debug("config resolved", "home", cfg.Home)
+			a.log.Debug("karga-server", "socket", a.socket)
 			return nil
 		},
 	}
@@ -82,7 +73,7 @@ func newRootCmd(stdout, stderr io.Writer, newRuntime func(context.Context) (port
 	root.SetErr(stderr)
 
 	root.PersistentFlags().StringVarP(&a.output, "output", "o", outputTable, "output format: table|json")
-	root.PersistentFlags().StringVar(&a.home, "home", "", "karga state directory (default $KARGA_HOME, $XDG_DATA_HOME/karga or ~/.local/share/karga)")
+	root.PersistentFlags().StringVar(&a.socket, "socket", "", "karga-server's socket (default $KARGA_SOCKET or "+api.DefaultSocket+")")
 	root.PersistentFlags().BoolVar(&a.debug, "debug", false, "enable debug logging")
 	root.PersistentFlags().StringVar(&a.logFormat, "log-format", "text", "log format on stderr: text|json")
 	root.PersistentFlags().StringVar(&a.color, "color", "auto", "color tables: auto (a terminal without NO_COLOR), always or never")
