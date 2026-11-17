@@ -29,6 +29,7 @@ type app struct {
 	home      string
 	debug     bool
 	logFormat string
+	color     string // auto, always or never
 
 	cfg      config.Config
 	log      *slog.Logger
@@ -84,6 +85,7 @@ func newRootCmd(stdout, stderr io.Writer, newRuntime func(context.Context) (port
 	root.PersistentFlags().StringVar(&a.home, "home", "", "karga state directory (default $KARGA_HOME, $XDG_DATA_HOME/karga or ~/.local/share/karga)")
 	root.PersistentFlags().BoolVar(&a.debug, "debug", false, "enable debug logging")
 	root.PersistentFlags().StringVar(&a.logFormat, "log-format", "text", "log format on stderr: text|json")
+	root.PersistentFlags().StringVar(&a.color, "color", "auto", "color tables: auto (a terminal without NO_COLOR), always or never")
 
 	root.AddCommand(newVersionCmd(a), newCreateCmd(a), newTemplateCmd(a), newLintCmd(a), newShowCmd(a),
 		newInstallCmd(a), newUpgradeCmd(a), newRollbackCmd(a), newUninstallCmd(a),

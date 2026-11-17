@@ -8,7 +8,6 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
-	"text/tabwriter"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -258,15 +257,6 @@ func newUninstallCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&req.KeepHistory, "keep-history", false, "keep revision history; the release is marked uninstalled")
 	cmd.Flags().BoolVar(&req.Force, "force", false, "continue after an interrupted operation whose process is gone")
 	return cmd
-}
-
-func (a *app) table(header string, rows [][]string) error {
-	w := tabwriter.NewWriter(a.stdout, 0, 0, 2, ' ', 0)
-	_, _ = fmt.Fprintln(w, header)
-	for _, r := range rows {
-		_, _ = fmt.Fprintln(w, strings.Join(r, "\t"))
-	}
-	return w.Flush()
 }
 
 func ago(t time.Time) string { return t.Local().Format("2006-01-02 15:04:05") }
