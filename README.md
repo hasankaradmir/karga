@@ -297,7 +297,7 @@ make test               # unit tests
 make lint               # golangci-lint
 make test-integration   # needs Docker: adapter contract and deployments
 make test-e2e           # needs Docker: builds the binary and runs the lifecycle end to end
-make test-linux         # the same in a Linux VM (OrbStack or Lima), where the gateway runs
+make test-linux         # the same in a Linux VM (OrbStack or Lima; KARGA_VM names it, default karga-linux)
 ```
 
 On Linux the integration tests also cover the gateway and release proxy. `make test-linux` creates
@@ -310,8 +310,13 @@ Releases: add the version to `CHANGELOG.md`, then `git tag vX.Y.Z && git push --
 workflow builds the binaries with GoReleaser and creates a draft GitHub release with the changelog
 section as notes; publish it to make it the latest release. `goreleaser release --snapshot --clean` builds the same locally.
 
-Architecture decisions are in [`docs/adr/`](docs/adr/), with the implementation decisions in
-[`docs/adr/decisions.md`](docs/adr/decisions.md).
+Documentation:
+
+- [USAGE.md](USAGE.md): how to use karga, scenario by scenario.
+- [docs/design.md](docs/design.md): how karga works.
+- [docs/roadmap.md](docs/roadmap.md): planned features, known limitations, risks, open questions.
+- [docs/adr/](docs/adr/): architecture decisions, and the implementation decisions in
+  [docs/adr/decisions.md](docs/adr/decisions.md).
 
 ## License
 

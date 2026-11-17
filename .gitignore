@@ -33,9 +33,6 @@ go.work.sum
 .idea/
 .vscode/
 
-# Doc files: the design notes stay local; architecture decisions are versioned in docs/adr.
-docs/*
-!docs/adr/
 graphify-out/
 
 # Build output

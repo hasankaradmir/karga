@@ -10,7 +10,7 @@ directory.
 | D3 | Failed upgrades | The previous revision's state, files and history stay intact; a running container is not guaranteed. Narrowed by D18. |
 | D4 | Dependencies | Deferred; one package is one release. |
 | D5 | Stack | cobra, modernc.org/sqlite, moby client, Sprig, santhosh-tekuri/jsonschema, Masterminds/semver, go.yaml.in/yaml, log/slog. |
-| D6 | Secrets | Files with mode 0600 mounted read-only; stored manifests keep only keyed digests (D22). |
+| D6 | Secrets | Secret values become files mounted read-only from a 0700 directory; stored manifests keep only keyed digests (D22). |
 | D7 | Naming | Template context `.Values`, `.Release`, `.Package`, `.Files`; values flags `-f`, `--set`, `--set-string`. |
 | D8 | Determinism | Non-deterministic template functions are removed; `keys`/`values` are sorted. |
 | D9 | Host ports | `hostIP` defaults to 127.0.0.1. |
