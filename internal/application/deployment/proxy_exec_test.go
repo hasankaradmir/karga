@@ -125,6 +125,14 @@ func TestProxyAndGatewayInstall(t *testing.T) {
 		len(pr.Ports) != 0 || pr.Sysctls["net.ipv4.ip_unprivileged_port_start"] != "0" || pr.Mounts[0].Target != envoy.MountPath {
 		t.Fatalf("proxy request: %+v", pr)
 	}
+	for _, req := range []ports.WorkloadRequest{pr, r.rt.Workloads[GatewayName].Request} {
+		if req.MemoryBytes != 128<<20 || req.MilliCPU != 500 || req.PidsLimit != 256 {
+			t.Fatalf("%s limits: mem %d cpu %d pids %d", req.Name, req.MemoryBytes, req.MilliCPU, req.PidsLimit)
+		}
+	}
+	if w.Request.PidsLimit != 1024 {
+		t.Fatalf("workload default pids: %d", w.Request.PidsLimit)
+	}
 	gw := r.rt.Workloads[GatewayName].Request
 	if !gw.HostNetwork || gw.User != "0:0" || !slices.Equal(gw.CapDrop, []string{"ALL"}) || !gw.NoNewPrivileges || gw.Labels[ports.LabelRelease] != "" {
 		t.Fatalf("gateway request: %+v", gw)

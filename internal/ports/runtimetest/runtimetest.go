@@ -113,6 +113,7 @@ func Run(t *testing.T, rt ports.Runtime, cfg Config) {
 			},
 			MemoryBytes:     64 << 20,
 			MilliCPU:        500,
+			PidsLimit:       100,
 			Sysctls:         map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"},
 			RestartPolicy:   "never",
 			CapDrop:         []string{"ALL"},
@@ -129,6 +130,10 @@ func Run(t *testing.T, rt ports.Runtime, cfg Config) {
 		must(t, err)
 		if st.State != ports.StateCreated {
 			t.Fatalf("state after create: %q", st.State)
+		}
+		// The runtime enforces what was asked: memory without extra swap, CPU and processes.
+		if want := (ports.Limits{MemoryBytes: 64 << 20, MemorySwapBytes: 64 << 20, NanoCPUs: 500_000_000, Pids: 100}); st.Limits != want {
+			t.Fatalf("limits: %+v, want %+v", st.Limits, want)
 		}
 
 		must(t, rt.StartWorkload(ctx, req.Name))

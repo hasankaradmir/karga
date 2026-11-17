@@ -50,7 +50,8 @@ func ProxyDir(home, release string) string {
 // ProxySpec is the desired proxy container: what forces a recreate or a network reconnect when it
 // changes. Listeners and backends are not part of it; they only rewrite the proxy's files.
 type ProxySpec struct {
-	Image string `json:"image"`
+	Image  string `json:"image"`
+	Limits string `json:"limits"`
 	// Networks maps each network to the aliases the proxy answers to on it.
 	Networks map[string][]string `json:"networks"`
 }
@@ -114,7 +115,7 @@ func proxyReason(w *resource.WorkloadSpec, taken map[int]string) string {
 }
 
 func proxySpecFor(set map[string]*resource.WorkloadSpec) ProxySpec {
-	spec := ProxySpec{Image: envoy.Image(), Networks: map[string][]string{}}
+	spec := ProxySpec{Image: envoy.Image(), Limits: envoyLimits, Networks: map[string][]string{}}
 	for name, w := range set {
 		for _, n := range w.Networks {
 			spec.Networks[n] = append(spec.Networks[n], name)
@@ -185,8 +186,8 @@ func proxyChange(releaseName string, set map[string]*resource.WorkloadSpec, curr
 		c.Fields = fieldChanges(KindProxy, have.Spec, want.Spec)
 		var old ProxySpec
 		_ = json.Unmarshal(have.Spec, &old)
-		if old.Image != spec.Image {
-			c.Strategy, c.StrategyReason = proxyRecreate, "image changed: brief interruption"
+		if old.Image != spec.Image || old.Limits != spec.Limits {
+			c.Strategy, c.StrategyReason = proxyRecreate, "image or limits changed: brief interruption"
 		} else {
 			c.Strategy, c.StrategyReason = proxyReconnect, strings.Join(changedNetworks(old, spec), ", ")+": brief interruption"
 		}

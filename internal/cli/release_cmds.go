@@ -311,9 +311,16 @@ func newStatusCmd(a *app) *cobra.Command {
 					if x.Backend != "" {
 						health = "-> " + x.Backend
 					}
-					rows = append(rows, []string{x.Kind, x.Name, x.RuntimeName, strconv.Itoa(x.Revision), x.Desired, x.Actual, health})
+					if x.OOMKilled {
+						health = strings.TrimPrefix(health+", oom-killed", ", ")
+					}
+					restarts := ""
+					if x.Kind == resource.KindWorkload || x.Kind == deployment.KindProxy {
+						restarts = strconv.Itoa(x.Restarts)
+					}
+					rows = append(rows, []string{x.Kind, x.Name, x.RuntimeName, strconv.Itoa(x.Revision), x.Desired, x.Actual, restarts, health})
 				}
-				if err := a.table("KIND\tNAME\tRUNTIME NAME\tREVISION\tDESIRED\tACTUAL\tHEALTH/BACKEND", rows); err != nil {
+				if err := a.table("KIND\tNAME\tRUNTIME NAME\tREVISION\tDESIRED\tACTUAL\tRESTARTS\tHEALTH/BACKEND", rows); err != nil {
 					return err
 				}
 				if len(rep.Orphans) > 0 {

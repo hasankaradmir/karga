@@ -299,11 +299,21 @@ func lockGateway(home string) (func(), error) {
 	return func() { _ = f.Close() }, nil // closing releases the lock
 }
 
+// Limits of karga's Envoys: one worker uses about 15MB; the rest is headroom for connections.
+const (
+	envoyMemory   = 128 << 20
+	envoyMilliCPU = 500
+	envoyPids     = 256
+)
+
 // labelGatewaySource records what a gateway container was created from; another KARGA_HOME or image
 // means it must be recreated.
 const labelGatewaySource = "io.karga.gateway-source"
 
-func gatewaySource(dir string) string { return dir + " " + envoy.Image() }
+func gatewaySource(dir string) string { return dir + " " + envoyLimits + " " + envoy.Image() }
+
+// envoyLimits names the limits in what decides whether an Envoy container must be recreated.
+var envoyLimits = fmt.Sprintf("mem=%d,cpu=%dm,pids=%d", envoyMemory, envoyMilliCPU, envoyPids)
 
 func gatewayRequest(dir string) ports.WorkloadRequest {
 	return ports.WorkloadRequest{
@@ -321,6 +331,9 @@ func gatewayRequest(dir string) ports.WorkloadRequest {
 		NoNewPrivileges: true,
 		RestartPolicy:   "always",
 		Mounts:          []ports.Mount{{Type: ports.MountBind, Source: dir, Target: envoy.MountPath}},
+		MemoryBytes:     envoyMemory,
+		MilliCPU:        envoyMilliCPU,
+		PidsLimit:       envoyPids,
 	}
 }
 

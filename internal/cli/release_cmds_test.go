@@ -214,3 +214,13 @@ func TestGatewayStatusAndSettings(t *testing.T) {
 		t.Fatalf("json:\n%s", out)
 	}
 }
+
+func TestStatusShowsRestartsAndOOM(t *testing.T) {
+	e := newCLIEnv(t)
+	e.mustRun("install", "w", "../../tests/integration/testdata/web")
+	e.rt.Workloads["w-web"].Restarts, e.rt.Workloads["w-web"].OOMKilled = 3, true
+	out := e.mustRun("status", "w")
+	if !strings.Contains(out, "RESTARTS") || !strings.Contains(out, "3") || !strings.Contains(out, "oom-killed") {
+		t.Fatalf("status:\n%s", out)
+	}
+}

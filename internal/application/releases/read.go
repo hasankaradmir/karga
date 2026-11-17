@@ -89,6 +89,9 @@ type ResourceStatus struct {
 	Health string `json:"health,omitempty"`
 	// Backend is the alias a proxy routes to.
 	Backend string `json:"backend,omitempty"`
+	// Restarts counts restarts by the runtime; OOMKilled says the last run hit the memory limit.
+	Restarts  int  `json:"restarts,omitempty"`
+	OOMKilled bool `json:"oomKilled,omitempty"`
 }
 
 // StatusReport is the desired vs actual state of a release (tech design §10.3).
@@ -148,7 +151,7 @@ func (s *Service) Status(ctx context.Context, name string) (*StatusReport, error
 			case err != nil:
 				return nil, err
 			default:
-				st.Actual, st.Health = ws.State, ws.Health
+				st.Actual, st.Health, st.Restarts, st.OOMKilled = ws.State, ws.Health, ws.RestartCount, ws.OOMKilled
 			}
 			if a.Kind == deployment.KindProxy {
 				st.Backend = backends(deployment.ProxyDir(s.Home, name))

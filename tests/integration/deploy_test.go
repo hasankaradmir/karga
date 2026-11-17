@@ -189,3 +189,42 @@ func TestSecretReadableByNonRoot(t *testing.T) {
 	}
 	t.Fatal("reader did not finish")
 }
+
+// TestMemoryLimitIsEnforced: a workload going over its memory limit is killed and reported so.
+func TestMemoryLimitIsEnforced(t *testing.T) {
+	ctx := context.Background()
+	rt := newRuntime(t)
+	name := releaseName("it-oom")
+	if err := rt.EnsureImage(ctx, "busybox:1.37", "if-not-present"); err != nil {
+		t.Fatal(err)
+	}
+	req := ports.WorkloadRequest{
+		Name: name, Image: "busybox:1.37", RestartPolicy: "never", MemoryBytes: 32 << 20, PidsLimit: 64,
+		Labels:  map[string]string{ports.LabelManaged: "true", ports.LabelRelease: name},
+		Command: []string{"sh", "-c", `a=$(head -c 200000000 /dev/zero | tr '\0' x); echo ${#a}`},
+	}
+	if err := rt.CreateWorkload(ctx, req); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rt.DeleteWorkload(context.Background(), name) })
+	if err := rt.StartWorkload(ctx, name); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(60 * time.Second)
+	for {
+		st, err := rt.GetWorkload(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.State == ports.StateExited {
+			if !st.OOMKilled || st.Limits.MemorySwapBytes != 32<<20 {
+				t.Fatalf("expected an OOM kill at 32Mi without swap: %+v", st)
+			}
+			return
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("still %s after 60s", st.State)
+		}
+		time.Sleep(500 * time.Millisecond)
+	}
+}

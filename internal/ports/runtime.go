@@ -139,7 +139,9 @@ type WorkloadRequest struct {
 	HealthCheck     *HealthCheck
 	MemoryBytes     int64
 	MilliCPU        int64
-	RestartPolicy   string
+	// PidsLimit caps processes (0: no limit). With MemoryBytes, no swap is allowed beyond it.
+	PidsLimit     int64
+	RestartPolicy string
 }
 
 // PortBinding publishes ContainerPort. HostPort 0 means the port is not published.
@@ -192,6 +194,16 @@ type WorkloadStatus struct {
 	Health   string
 	ExitCode int
 	Labels   map[string]string
+	// OOMKilled is true when the last run ended by exceeding its memory limit.
+	OOMKilled    bool
+	RestartCount int
+	// Limits is what the runtime enforces, as it reports it.
+	Limits Limits
+}
+
+// Limits are the enforced resource and logging limits of a workload.
+type Limits struct {
+	MemoryBytes, MemorySwapBytes, NanoCPUs, Pids int64
 }
 
 // Object is a managed runtime object.

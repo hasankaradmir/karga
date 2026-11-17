@@ -120,6 +120,9 @@ func proxyRequest(rel string, revision int, spec ProxySpec, dir, user string) po
 		Sysctls:       map[string]string{"net.ipv4.ip_unprivileged_port_start": "0"},
 		RestartPolicy: "always",
 		Mounts:        []ports.Mount{{Type: ports.MountBind, Source: dir, Target: envoy.MountPath}},
+		MemoryBytes:   envoyMemory,
+		MilliCPU:      envoyMilliCPU,
+		PidsLimit:     envoyPids,
 	}
 	if nets := sortedNetworks(spec); len(nets) > 0 {
 		wr.Networks, wr.Aliases = []string{RuntimeName(rel, nets[0])}, spec.Networks[nets[0]]

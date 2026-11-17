@@ -614,6 +614,10 @@ func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[str
 		start, _ := time.ParseDuration(hc.StartPeriod)
 		wr.HealthCheck = &ports.HealthCheck{Command: hc.Command, Interval: interval, Timeout: timeout, Retries: hc.Retries, StartPeriod: start}
 	}
+	wr.PidsLimit = resource.DefaultPids
+	if r := s.Resources; r != nil && r.Pids != nil {
+		wr.PidsLimit = *r.Pids
+	}
 	if r := s.Resources; r != nil {
 		if r.Memory != "" {
 			wr.MemoryBytes, _ = resource.ParseMemory(string(r.Memory))
@@ -621,6 +625,7 @@ func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[str
 		if r.CPU != "" {
 			wr.MilliCPU, _ = resource.ParseCPU(string(r.CPU))
 		}
+
 	}
 	return wr, nil
 }

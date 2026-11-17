@@ -39,6 +39,9 @@ type Workload struct {
 	Request ports.WorkloadRequest
 	State   string
 	Aliases map[string][]string
+	// OOMKilled and Restarts are reported by GetWorkload; tests set them.
+	OOMKilled bool
+	Restarts  int
 }
 
 // New returns an empty runtime. Images listed in pulled are present locally.
@@ -253,7 +256,12 @@ func (r *Runtime) GetWorkload(_ context.Context, name string) (ports.WorkloadSta
 			health = r.Health
 		}
 	}
-	return ports.WorkloadStatus{Name: name, State: w.State, Health: health, Labels: maps.Clone(w.Request.Labels)}, nil
+	lim := ports.Limits{MemoryBytes: w.Request.MemoryBytes, NanoCPUs: w.Request.MilliCPU * 1_000_000, Pids: w.Request.PidsLimit}
+	if lim.MemoryBytes > 0 {
+		lim.MemorySwapBytes = lim.MemoryBytes
+	}
+	return ports.WorkloadStatus{Name: name, State: w.State, Health: health, Labels: maps.Clone(w.Request.Labels), Limits: lim,
+		OOMKilled: w.OOMKilled, RestartCount: w.Restarts}, nil
 }
 
 // ListManaged implements ports.Runtime.

@@ -110,6 +110,12 @@ func (r *Runtime) CreateWorkload(ctx context.Context, req ports.WorkloadRequest)
 		}
 		host.Mounts = append(host.Mounts, mount.Mount{Type: t, Source: m.Source, Target: m.Target, ReadOnly: m.ReadOnly})
 	}
+	if req.MemoryBytes > 0 {
+		host.MemorySwap = req.MemoryBytes // no swap beyond the memory limit
+	}
+	if req.PidsLimit > 0 {
+		host.PidsLimit = &req.PidsLimit
+	}
 	if req.NoNewPrivileges {
 		host.SecurityOpt = []string{"no-new-privileges"}
 	}
@@ -179,12 +185,19 @@ func (r *Runtime) GetWorkload(ctx context.Context, name string) (ports.WorkloadS
 	if err != nil {
 		return ports.WorkloadStatus{}, wrap(err, "inspect workload "+name)
 	}
-	st := ports.WorkloadStatus{Name: name, Health: ports.HealthNone}
+	st := ports.WorkloadStatus{Name: name, Health: ports.HealthNone, RestartCount: res.Container.RestartCount}
 	if s := res.Container.State; s != nil {
 		st.State = string(s.Status)
 		st.ExitCode = s.ExitCode
+		st.OOMKilled = s.OOMKilled
 		if s.Health != nil && s.Health.Status != "" {
 			st.Health = string(s.Health.Status)
+		}
+	}
+	if h := res.Container.HostConfig; h != nil {
+		st.Limits = ports.Limits{MemoryBytes: h.Memory, MemorySwapBytes: h.MemorySwap, NanoCPUs: h.NanoCPUs}
+		if h.PidsLimit != nil {
+			st.Limits.Pids = *h.PidsLimit
 		}
 	}
 	if res.Container.Config != nil {
