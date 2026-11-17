@@ -189,6 +189,7 @@ spec:
     capAdd: [NET_BIND_SERVICE]
     user: "1000:1000"
   updateStrategy: {type: recreate, drainTimeout: 10s}   # recreate | replace
+  dependsOn: [postgres]                           # Services of the release to wait for before starting
   stopTimeout: 10s                                # default; time to shut down after SIGTERM before a kill (1s-1h)
 ```
 

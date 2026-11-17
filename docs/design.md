@@ -99,7 +99,7 @@ rejects undeclared keys). The package format is alpha (`v1alpha1`): it may still
 
 | Kind | Purpose |
 |------|---------|
-| Workload | One container: image, command, environment, networks, named ports it listens on, mounts, health check, resources, logging, security, update and stop timeouts. It publishes nothing; its name is not a DNS name (Docker still resolves the container name on the release's networks). |
+| Workload | One container: image, command, environment, networks, named ports it listens on, mounts, health check, resources, logging, security, update and stop timeouts, the Services it depends on. It publishes nothing; its name is not a DNS name (Docker still resolves the container name on the release's networks). |
 | Service | A stable name for one workload in the release: ports mapped to the workload's ports, and exposures on gateway listeners (tcp, or HTTP(S) by host and path). |
 | Volume | A named Docker volume; `retention: retain` (default) keeps it across uninstalls. |
 | Network | A bridge network; Services of the workloads on it are reachable by name on it. |
@@ -159,7 +159,9 @@ shows every changed field.
 1. Pre-flight: runtime support, capabilities, host ports and routes (against other releases and
    other processes); pulls every image before touching anything running.
 2. Materializes Config and Secret files under `$KARGA_HOME/releases/<release>/<revision>/`.
-3. Deletes removed workloads, then creates and updates resources in dependency order.
+3. Deletes removed workloads, then creates and updates resources in dependency order. Before a
+   workload with `dependsOn`, the workloads changed so far are waited for, the release proxy is
+   started early, and karga waits until it routes to the Services the workload depends on.
 4. Waits for recreated workloads; ones that do not become ready are stopped, not removed, so their
    logs can be read. A recreated workload's new container mounts the same named volumes, and the
    anonymous volumes Docker made for image `VOLUME` paths no mount covers are moved to it (as

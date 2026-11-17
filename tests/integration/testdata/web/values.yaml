@@ -17,6 +17,8 @@ listenPort: 8080
 servicePort: 0
 # second=true adds workload and Service api, serving the same content on listenPort+1.
 second: false
+# apiDependsOn=true makes api start only once Service web is ready.
+apiDependsOn: false
 # echo=true adds a tcp echo server on containerPort 9000 (Service web port 9000); echoListener=<name>
 # exposes it on that tcp gateway listener.
 echo: false

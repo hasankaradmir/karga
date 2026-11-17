@@ -19,7 +19,7 @@ What karga does not do yet, what it does with known limits, and the open questio
 | Services across releases | A Service is reachable only inside its release; other releases go through the gateway. |
 | Podman adapter | REST API or Quadlet; the runtime contract suite defines what it must do. It also needs the gateway and release proxy to work with it. |
 | Package distribution | OCI artifacts or a repository index, signing and provenance. |
-| Package dependencies | One package is one release today. |
+| Package dependencies | One package is one release today (inside a release, `dependsOn` orders workloads). |
 | Runtime-specific extensions | A namespaced block for settings outside the portable model. |
 | Parallel apply | Independent resources are applied one after the other today. |
 

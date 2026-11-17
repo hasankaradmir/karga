@@ -105,11 +105,12 @@ func Redacted(r resource.Resource) resource.Resource {
 	return r
 }
 
-// withoutStrategy drops updateStrategy: it decides how a change is applied, not what runs.
+// withoutStrategy drops updateStrategy and dependsOn: they decide how and when a change is applied,
+// not what runs.
 func withoutStrategy(r resource.Resource) resource.Resource {
-	if w, ok := r.Spec.(*resource.WorkloadSpec); ok && w.UpdateStrategy != nil {
+	if w, ok := r.Spec.(*resource.WorkloadSpec); ok && (w.UpdateStrategy != nil || w.DependsOn != nil) {
 		c := *w
-		c.UpdateStrategy = nil
+		c.UpdateStrategy, c.DependsOn = nil, nil
 		r.Spec = &c
 	}
 	return r

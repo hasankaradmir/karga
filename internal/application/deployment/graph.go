@@ -36,6 +36,9 @@ func dependencies(r resource.Resource) []Key {
 		kind, name := m.Target()
 		deps = append(deps, Key{kind, name})
 	}
+	for _, s := range w.DependsOn {
+		deps = append(deps, Key{resource.KindService, s}) // which depends on its workload
+	}
 	return deps
 }
 

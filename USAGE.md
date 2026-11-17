@@ -789,6 +789,26 @@ $ karga install demo shop --dry-run    # what it would do
 A resource that does not decode names its file, document and line in the rendered output; look at
 that line with `karga template`. The package format is `karga.io/v1alpha1` and may still change.
 
+A workload that needs another one at start (an application and its database) waits for its
+Service with `dependsOn`:
+
+```yaml
+kind: Workload
+metadata: {name: app}
+spec:
+  image: shop:1.4
+  networks: [backend]
+  dependsOn: [postgres]          # Services of the release
+  environment:
+    DATABASE_URL: postgres://app@postgres:5432/app
+```
+
+karga starts `app` only once the `postgres` workload is ready (its health check passes) and the
+release proxy routes to it; if `postgres` never gets ready, `app` is not started. Upgrades and
+repairs follow the same order. Changing `dependsOn` alone changes no container, and a cycle is
+refused (`circular dependency between ...`). Your application should still retry its connections:
+`dependsOn` orders the start, it cannot keep a database up later.
+
 Give every workload other workloads or users talk to a Service, and expose it through a values
 setting (a listener name, a host) rather than a fixed one: the listeners are the host's, and the
 person installing the package knows them (`karga gateway listener list`).

@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strconv"
+	"strings"
 	"time"
 
 	"encoding/json"
@@ -200,9 +201,76 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 	}
 
 	var changed []Change
+	waited := 0 // changed[:waited] are ready
+	waitPending := func() error {
+		if waited == len(changed) {
+			return nil
+		}
+		err := waitChanged(ctx, rt, req.Release, changed[waited:], req.Timeout, report)
+		waited = len(changed)
+		return err
+	}
+	// The proxy starts or changes once the workloads before it are ready, pointing at what runs now:
+	// at the end, or before the first workload that depends on a Service.
+	proxyDone, waitAll := false, false
+	proxyUp := func() error {
+		if proxyDone {
+			return nil
+		}
+		proxyDone = true
+		for _, c := range req.Plan.Changes {
+			if c.Kind != KindProxy || (c.Action != ActionCreate && c.Action != ActionUpdate) {
+				continue
+			}
+			*disrupted, waitAll = true, true
+			var err error
+			if c.Action == ActionCreate || c.Strategy == proxyRecreate {
+				err = createProxy(ctx, rt, req.Proxies, req, c, svcs)
+			} else {
+				err = reconnectProxy(ctx, rt, req.Release, c)
+			}
+			if err := report(c, c.Action, err); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+	// dependencies waits until the Services a workload depends on are ready behind the proxy.
+	dependencies := func(c Change, w *resource.WorkloadSpec) error {
+		if len(w.DependsOn) == 0 {
+			return nil
+		}
+		if err := waitPending(); err != nil {
+			return err
+		}
+		if err := proxyUp(); err != nil {
+			return err
+		}
+		if err := writeProxy(ctx, rt, req.Proxies, req, svcs, nil); err != nil {
+			return err
+		}
+		progress(ctx, c.Kind, c.Name, PhaseWait, "waiting for %s", strings.Join(w.DependsOn, ", "))
+		want := map[string]string{}
+		for _, d := range w.DependsOn {
+			if dep := svcs.svc[d]; dep != nil {
+				rev, err := revisionOf(ctx, rt, RuntimeName(req.Release, dep.Workload))
+				if err != nil {
+					return fmt.Errorf("%s %q depends on service %s, whose workload %s does not run: %w", c.Kind, c.Name, d, dep.Workload, err)
+				}
+				maps.Copy(want, proxyWant(svcs, dep.Workload, BackendAlias(dep.Workload, rev)))
+			}
+		}
+		return envoyErr(ctx, rt, ProxyName(req.Release), req.Proxies.WaitReady(ctx, ProxyDir(req.Home, req.Release), want, req.Timeout))
+	}
+
 	for _, c := range req.Plan.Changes {
 		if c.Kind == KindProxy || (c.Action != ActionCreate && c.Action != ActionUpdate) {
 			continue
+		}
+		if w, ok := workloadOf(c); ok {
+			if err := dependencies(c, w); err != nil {
+				return fmt.Errorf("%s %q: %w", c.Kind, c.Name, err)
+			}
 		}
 		name := RuntimeName(req.Release, c.Name)
 		lbl := labels(req.Release, req.Revision, c.Kind, c.Name)
@@ -227,9 +295,7 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 					err := fmt.Errorf("%s %q: %w (the previous container is still running)", c.Kind, c.Name, rerr)
 					// Workloads recreated earlier in this plan are waited for like on success: ones that do not
 					// become ready are stopped and reported failed, so the next plan recreates them.
-					if len(changed) > 0 {
-						err = errors.Join(err, waitChanged(ctx, rt, req.Release, changed, req.Timeout, report))
-					}
+					err = errors.Join(err, waitPending())
 					return err
 				}
 				err = rerr
@@ -245,26 +311,11 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 		}
 	}
 
-	if err := waitChanged(ctx, rt, req.Release, changed, req.Timeout, report); err != nil {
+	if err := waitPending(); err != nil {
 		return err
 	}
-
-	// The proxy starts or changes once its workloads are ready, pointing at what runs now.
-	waitAll := false
-	for _, c := range req.Plan.Changes {
-		if c.Kind != KindProxy || (c.Action != ActionCreate && c.Action != ActionUpdate) {
-			continue
-		}
-		*disrupted, waitAll = true, true
-		var err error
-		if c.Action == ActionCreate || c.Strategy == proxyRecreate {
-			err = createProxy(ctx, rt, req.Proxies, req, c, svcs)
-		} else {
-			err = reconnectProxy(ctx, rt, req.Release, c)
-		}
-		if err := report(c, c.Action, err); err != nil {
-			return err
-		}
+	if err := proxyUp(); err != nil {
+		return err
 	}
 	if len(svcs.svc) > 0 {
 		if err := writeProxy(ctx, rt, req.Proxies, req, svcs, nil); err != nil {

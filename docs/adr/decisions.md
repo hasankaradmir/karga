@@ -32,5 +32,6 @@ directory.
 | D26 | Services and the host gateway | Workloads expose nothing; Services served by the release proxy; gateway listeners and listen addresses owned by the administrator; Linux only (ADR-0011). |
 | D27 | Server and CLI | karga-server owns state and runtime; the CLI is its client on a local unix socket (ADR-0012). |
 | D28 | Reconciliation | karga-server repairs deployed, unpaused releases toward their current revision (missing or changed objects, stopped or unhealthy containers), never creating revisions; backoff, then give up. |
+| D29 | Start order | `dependsOn` names Services; the executor waits for them (ready and routed by the release proxy) before the dependent workload; not part of the workload's digest. |
 
 D23 was not used.
