@@ -11,7 +11,6 @@ What karga does not do yet, what it does with known limits, and the open questio
 | Automatic certificates | ACME for TLS routes; today certificates come from a Secret. |
 | `karga doctor` | One command checking the Docker version, gateway support, `KARGA_HOME` permissions, ports 80/443 and the Envoy image. |
 | `karga events` | The operation history (already in the state database) as a readable timeline. |
-| Drift repair (`karga reconcile`) | An upgrade recreates resources that are missing in Docker, but does not detect objects changed outside karga, and repairing needs an upgrade. Also re-allocating a loopback upstream port taken by another process after a reboot. |
 | Remote management | The API is on a local unix socket only; managing another host means logging in to it. |
 | Private registries | Image pulls are anonymous today; credentials from the Docker configuration. |
 | Encrypted secret store | Values that are not `writeOnly` are stored as written. |
@@ -26,6 +25,10 @@ What karga does not do yet, what it does with known limits, and the open questio
 
 ## Known limitations
 
+- **One karga-server per host.** The gateway is shared by the host; two servers with different
+  `KARGA_HOME`s would fight over it.
+- **Repairs** recreate a removed volume empty; settings changed inside a running container (not in
+  its spec) are not detected.
 - **Linux only.** Services need the gateway and the release proxy, which need Linux with a local
   Docker daemon; elsewhere a plan with Services is refused.
 - **Gateway.** One container serves every release's outside traffic; it restarts automatically but
@@ -60,6 +63,5 @@ What karga does not do yet, what it does with known limits, and the open questio
 ## Open questions
 
 - How lifecycle tasks run: as one-off workloads, inside an existing container, or on the host.
-- Whether drift repair becomes a command or a daemon (karga has no daemon today, ADR-0007).
 - Podman through its API or through Quadlet units.
 - How packages are distributed and signed.

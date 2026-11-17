@@ -6,8 +6,9 @@ karga renders a versioned package (templates + values + schema) into its own sma
 (Workload, Service, Volume, Network, Config, Secret), applies it to Docker, and keeps every install,
 upgrade and rollback as an immutable revision in a local SQLite database.
 
-karga is two programs: **karga-server** owns the state and talks to Docker; the **karga** CLI is
-its client on a local unix socket.
+karga is two programs: **karga-server** owns the state, talks to Docker and keeps every release
+running as declared (it repairs removed, stopped, unhealthy or hand-changed containers); the **karga**
+CLI is its client on a local unix socket.
 
 Nothing a package runs is reachable on its own. Workloads publish no port; a **Service** gives a
 workload a name inside its release, and only the host's administrator decides what is reachable from
@@ -92,6 +93,9 @@ logs). The state lives in karga-server's `KARGA_HOME` (`/var/lib/karga` for the 
 | `template <release> <package>` | Render locally; Secret values are shown as `<redacted>` unless `--show-secrets` |
 | `show package\|values\|readme <package>` | Show package metadata, default values or README |
 | `version` | Versions of karga and karga-server (a warning if they differ) |
+| `reconcile <release>` | Repair now: bring what runs back to the current revision (karga-server also does it on its own) |
+| `pause\|resume <release>` | Stop or restart karga-server's repairs of a release (maintenance) |
+| `events [release]` | Commands and repairs, newest last (`-f` follows, `-n` how many) |
 | `install <release> <package>` | Install. Re-running with the same package and values does nothing |
 | `upgrade <release> <package>` | Apply new values or a new package version. `--reuse-values`, `--install`, `--strategy`, `--delete-volumes` |
 | `rollback <release> [revision]` | Re-apply an earlier revision as a new revision. `--strategy`, `--delete-volumes` |

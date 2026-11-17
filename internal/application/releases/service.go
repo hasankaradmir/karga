@@ -46,9 +46,21 @@ type Service struct {
 	PID      int
 	Hostname string
 
+	// AfterChange, if set, is told the name of a release an install, upgrade or rollback changed.
+	AfterChange func(name string)
+
 	keyOnce sync.Once
 	key     []byte
 	keyErr  error
+	repairs repairs
+	// busy serializes the operations of a release inside this process: a user's command waits for
+	// a reconciliation in progress instead of failing; a reconciliation skips a busy release.
+	busy sync.Map // release -> *sync.Mutex
+}
+
+func (s *Service) mutex(rel string) *sync.Mutex {
+	m, _ := s.busy.LoadOrStore(rel, &sync.Mutex{})
+	return m.(*sync.Mutex)
 }
 
 // New returns a Service with process defaults filled in.
@@ -113,6 +125,22 @@ func describe(op release.Operation) string {
 // begin records a running operation. A live process holding the release always wins; a dead one is
 // only overridden with force (D15).
 func (s *Service) begin(ctx context.Context, rel, typ string, revision int, force bool) (release.Operation, error) {
+	mu := s.mutex(rel)
+	if typ == ReconcileOperation {
+		if !mu.TryLock() {
+			return release.Operation{}, fmt.Errorf("%w: a command is working on %s", ErrLocked, rel)
+		}
+	} else {
+		mu.Lock()
+	}
+	op, err := s.beginLocked(ctx, rel, typ, revision, force)
+	if err != nil {
+		mu.Unlock()
+	}
+	return op, err
+}
+
+func (s *Service) beginLocked(ctx context.Context, rel, typ string, revision int, force bool) (release.Operation, error) {
 	op := release.Operation{Release: rel, Type: typ, Revision: revision, Status: release.OperationRunning,
 		PID: s.PID, Hostname: s.Hostname, StartedAt: s.Now()}
 	id, err := s.Store.BeginOperation(ctx, op, func(running release.Operation) error {
@@ -132,6 +160,7 @@ func (s *Service) begin(ctx context.Context, rel, typ string, revision int, forc
 // finish records the end of an operation. It uses a context that survives cancellation (Ctrl-C) so
 // the operation is not left running.
 func (s *Service) finish(ctx context.Context, op release.Operation, err error) {
+	defer s.mutex(op.Release).Unlock()
 	ctx = context.WithoutCancel(ctx)
 	op.Status = release.OperationSucceeded
 	if err != nil {
@@ -378,6 +407,10 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 		return res, fmt.Errorf("%w\n%s", err, hint)
 	}
 	res.Status = release.StatusDeployed
+	s.repairs.reset(in.Name)
+	if s.AfterChange != nil {
+		s.AfterChange(in.Name)
+	}
 	if err := anonymousVolumes(ctx, rt, in.Name, in.Resources); err == nil {
 		res.Warnings = anonymousWarnings(in.Resources)
 	}
@@ -437,21 +470,29 @@ func anonymousWarnings(rs []resource.Resource) []string {
 	return out
 }
 
-// existing drops the recorded workloads, networks and volumes that no longer exist in the runtime
-// (removed outside karga, or a state restored on another host), so the plan creates them again.
+// existing drops the recorded workloads, proxies, networks and volumes that no longer exist in the
+// runtime (removed outside karga, or a state restored on another host), and the workloads whose
+// container was created from another spec (changed outside karga), so the plan creates them again.
 func existing(ctx context.Context, rt ports.Runtime, name string, applied []release.AppliedResource) ([]release.AppliedResource, error) {
 	objs, err := rt.ListManaged(ctx, name)
 	if err != nil {
 		return nil, err
 	}
-	have := map[string]bool{}
+	have := map[string]map[string]string{}
 	for _, o := range objs {
-		have[o.Kind+"/"+o.Name] = true
+		have[o.Kind+"/"+o.Name] = o.Labels
 	}
-	kinds := map[string]string{resource.KindWorkload: ports.ObjectWorkload, resource.KindNetwork: ports.ObjectNetwork, resource.KindVolume: ports.ObjectVolume}
+	kinds := map[string]string{resource.KindWorkload: ports.ObjectWorkload, deployment.KindProxy: ports.ObjectWorkload,
+		resource.KindNetwork: ports.ObjectNetwork, resource.KindVolume: ports.ObjectVolume}
 	var out []release.AppliedResource
 	for _, a := range applied {
-		if k, ok := kinds[a.Kind]; ok && !have[k+"/"+a.RuntimeName] {
+		k, ok := kinds[a.Kind]
+		lbl, present := have[k+"/"+a.RuntimeName]
+		if ok && !present {
+			continue
+		}
+		// Containers of an earlier karga have no digest label: they are not drift.
+		if d := lbl[ports.LabelDigest]; a.Kind == resource.KindWorkload && d != "" && a.Digest != "" && d != a.Digest {
 			continue
 		}
 		out = append(out, a)

@@ -110,7 +110,7 @@ func addCompletion(a *app, root *cobra.Command) {
 	set("create", false, completeDir)
 	set("rollback", false, completeRelease, completeRevision)
 	set("diff", false, completeRelease, completeRevision, completeRevision)
-	for _, c := range []string{"uninstall", "history", "status", "get values", "get manifest", "get notes"} {
+	for _, c := range []string{"uninstall", "history", "status", "get values", "get manifest", "get notes", "reconcile", "pause", "resume", "events"} {
 		set(c, false, completeRelease)
 	}
 	set("logs", true, completeRelease, workload)

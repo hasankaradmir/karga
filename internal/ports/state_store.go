@@ -38,4 +38,7 @@ type StateStore interface {
 	SaveOperationSteps(ctx context.Context, id int64, steps []release.Step) error
 	// RunningOperation returns the running operation of a release, or ErrNotFound.
 	RunningOperation(ctx context.Context, rel string) (release.Operation, error)
+	// ListOperations returns the operations of a release (all releases for ""), newest first: at most
+	// limit, and only those with an ID above afterID.
+	ListOperations(ctx context.Context, rel string, afterID int64, limit int) ([]release.Operation, error)
 }

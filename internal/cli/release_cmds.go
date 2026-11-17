@@ -5,7 +5,9 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"maps"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -381,8 +383,22 @@ func (a *app) printStatus(ctx context.Context, s api.Backend, name string) error
 		return writeJSON(a.stdout, rep)
 	}
 	r := rep.Release
-	_, _ = fmt.Fprintf(a.stdout, "Release:  %s\nStatus:   %s\nRevision: %d\nPackage:  %s %s\nUpdated:  %s\n\n",
+	_, _ = fmt.Fprintf(a.stdout, "Release:  %s\nStatus:   %s\nRevision: %d\nPackage:  %s %s\nUpdated:  %s\n",
 		r.Name, a.paint(string(r.Status)), r.CurrentRevision, r.PackageName, r.PackageVersion, ago(r.UpdatedAt))
+	if rc := rep.Reconcile; rc != nil {
+		line := "never needed"
+		if !rc.Last.IsZero() {
+			line = ago(rc.Last) + ", " + rc.Status
+			if rc.Error != "" {
+				line += ": " + rc.Error
+			}
+		}
+		if r.Paused {
+			line = "paused (karga resume " + r.Name + ")"
+		}
+		_, _ = fmt.Fprintf(a.stdout, "Repaired: %s\n", line)
+	}
+	_, _ = fmt.Fprintln(a.stdout)
 	var rows [][]string
 	for _, x := range rep.Resources {
 		health := x.Health
@@ -407,7 +423,143 @@ func (a *app) printStatus(ctx context.Context, s api.Backend, name string) error
 	if rep.Interrupted != "" {
 		_, _ = fmt.Fprintf(a.stdout, "\nWARNING: operation still marked running: %s\n", rep.Interrupted)
 	}
+	if rc := rep.Reconcile; rc != nil && len(rc.GaveUp) > 0 {
+		_, _ = fmt.Fprintf(a.stdout, "\nkarga-server gave up repairing (karga reconcile %s retries):\n", r.Name)
+		for _, what := range slices.Sorted(maps.Keys(rc.GaveUp)) {
+			_, _ = fmt.Fprintf(a.stdout, "  %s: %s\n", what, rc.GaveUp[what])
+		}
+	}
 	return nil
+}
+
+func newReconcileCmds(a *app) []*cobra.Command {
+	reconcile := &cobra.Command{
+		Use:   "reconcile <release>",
+		Short: "Repair a release now: bring what runs back to its current revision",
+		Long: "karga-server does this on its own after container events and every 30 seconds. This runs it now\n" +
+			"and forgets earlier failed repairs. It never changes the revision or the values.",
+		Args: cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
+				res, err := s.Reconcile(cmd.Context(), args[0], true)
+				if err != nil {
+					return err
+				}
+				if a.output == outputJSON {
+					return writeJSON(a.stdout, res)
+				}
+				switch {
+				case res.Skipped != "":
+					_, err = fmt.Fprintf(a.stdout, "Release %q not reconciled: %s\n", res.Release, res.Skipped)
+				case len(res.Actions) == 0:
+					_, err = fmt.Fprintf(a.stdout, "Release %q runs as its revision; nothing to repair.\n", res.Release)
+				default:
+					_, err = fmt.Fprintf(a.stdout, "Release %q repaired:\n", res.Release)
+					for _, st := range res.Actions {
+						line := fmt.Sprintf("  %s %s %s: %s", st.Action, strings.ToLower(st.Kind), st.Name, st.Status)
+						if st.Error != "" {
+							line += " (" + st.Error + ")"
+						}
+						_, _ = fmt.Fprintln(a.stdout, line)
+					}
+				}
+				return err
+			})
+		},
+	}
+	pause := func(use, short string, paused bool) *cobra.Command {
+		return &cobra.Command{
+			Use:   use + " <release>",
+			Short: short,
+			Args:  cobra.ExactArgs(1),
+			RunE: func(cmd *cobra.Command, args []string) error {
+				return a.withBackend(cmd.Context(), func(s api.Backend) error {
+					if err := s.Pause(cmd.Context(), args[0], paused); err != nil {
+						return err
+					}
+					_, err := fmt.Fprintf(a.stdout, "Release %q %sd: karga-server %s repair it.\n", args[0], use,
+						map[bool]string{true: "does not", false: "will"}[paused])
+					return err
+				})
+			},
+		}
+	}
+	var limit int
+	var follow bool
+	events := &cobra.Command{
+		Use:   "events [release]",
+		Short: "Show what was done to releases, newest first: commands and karga-server's repairs",
+		Args:  cobra.MaximumNArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			name := ""
+			if len(args) == 1 {
+				name = args[0]
+			}
+			return a.withBackend(cmd.Context(), func(s api.Backend) error {
+				ops, err := s.Events(cmd.Context(), name, 0, limit)
+				if err != nil {
+					return err
+				}
+				if a.output == outputJSON && !follow {
+					if ops == nil {
+						ops = []release.Operation{}
+					}
+					return writeJSON(a.stdout, ops)
+				}
+				slices.Reverse(ops)
+				if err := a.table("TIME\tRELEASE\tOPERATION\tREVISION\tSTATUS\tWHAT", eventRows(ops)); err != nil {
+					return err
+				}
+				var last int64
+				if len(ops) > 0 {
+					last = ops[len(ops)-1].ID
+				}
+				for follow {
+					select {
+					case <-cmd.Context().Done():
+						return nil
+					case <-time.After(2 * time.Second):
+					}
+					more, err := s.Events(cmd.Context(), name, last, 100)
+					if err != nil {
+						return err
+					}
+					slices.Reverse(more)
+					for _, row := range eventRows(more) {
+						_, _ = fmt.Fprintln(a.stdout, strings.Join(row, "  "))
+					}
+					if len(more) > 0 {
+						last = more[len(more)-1].ID
+					}
+				}
+				return nil
+			})
+		},
+	}
+	events.Flags().IntVarP(&limit, "limit", "n", 20, "how many events")
+	events.Flags().BoolVarP(&follow, "follow", "f", false, "keep printing new events")
+	return []*cobra.Command{reconcile, pause("pause", "Stop karga-server from repairing a release (for maintenance)", true),
+		pause("resume", "Let karga-server repair a release again", false), events}
+}
+
+// eventRows renders operations for karga events; running ones show as such.
+func eventRows(ops []release.Operation) [][]string {
+	var rows [][]string
+	for _, op := range ops {
+		what := op.Error
+		if what == "" {
+			var parts []string
+			for _, st := range op.Steps {
+				parts = append(parts, st.Action+" "+strings.ToLower(st.Kind)+" "+st.Name)
+			}
+			what = strings.Join(parts, ", ")
+		}
+		if len(what) > 100 {
+			what = what[:97] + "..."
+		}
+		rows = append(rows, []string{op.StartedAt.Local().Format("2006-01-02 15:04:05"), op.Release, op.Type, strconv.Itoa(op.Revision), string(op.Status), what})
+	}
+	return rows
 }
 
 func newGetCmd(a *app) *cobra.Command {

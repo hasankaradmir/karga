@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
 	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
@@ -115,6 +116,16 @@ type StatusReport struct {
 	Orphans []string `json:"orphans,omitempty"`
 	// Interrupted describes an operation that is still marked running.
 	Interrupted string `json:"interrupted,omitempty"`
+	// Reconcile is the last reconciliation and what karga gave up repairing.
+	Reconcile *ReconcileStatus `json:"reconcile,omitempty"`
+}
+
+// ReconcileStatus is the reconciliation part of a status report.
+type ReconcileStatus struct {
+	Last   time.Time         `json:"last,omitempty"`
+	Status string            `json:"status,omitempty"`
+	Error  string            `json:"error,omitempty"`
+	GaveUp map[string]string `json:"gaveUp,omitempty"`
 }
 
 // Status reports the release and the live state of each of its resources.
@@ -131,6 +142,15 @@ func (s *Service) Status(ctx context.Context, name string) (*StatusReport, error
 		}
 	} else if !errors.Is(err, ports.ErrNotFound) {
 		return nil, err
+	}
+	rep.Reconcile = &ReconcileStatus{GaveUp: s.repairs.gaveUp(name, s.Now())}
+	if ops, err := s.Store.ListOperations(ctx, name, 0, 50); err == nil {
+		for _, op := range ops {
+			if op.Type == ReconcileOperation && op.Status != release.OperationRunning {
+				rep.Reconcile.Last, rep.Reconcile.Status, rep.Reconcile.Error = op.FinishedAt, string(op.Status), op.Error
+				break
+			}
+		}
 	}
 	applied, err := s.Store.ListResources(ctx, name)
 	if err != nil {

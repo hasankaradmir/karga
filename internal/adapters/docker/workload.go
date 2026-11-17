@@ -447,3 +447,41 @@ func (r *Runtime) DisconnectNetwork(ctx context.Context, workload, net string) e
 	}
 	return wrap(err, fmt.Sprintf("disconnect workload %s from network %s", workload, net))
 }
+
+// Events implements ports.Runtime.
+func (r *Runtime) Events(ctx context.Context) (<-chan ports.RuntimeEvent, error) {
+	res := r.c.Events(ctx, client.EventsListOptions{Filters: client.Filters{}.
+		Add("type", "container").Add("label", ports.LabelManaged+"=true")})
+	out := make(chan ports.RuntimeEvent)
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case err := <-res.Err:
+				_ = err // the stream broke; the caller reconnects
+				return
+			case m, ok := <-res.Messages:
+				if !ok {
+					return
+				}
+				action := string(m.Action)
+				switch action {
+				case "health_status: unhealthy":
+					action = "unhealthy"
+				case "die", "oom", "destroy", "stop", "start":
+				default:
+					continue
+				}
+				e := ports.RuntimeEvent{Release: m.Actor.Attributes[ports.LabelRelease], Container: m.Actor.Attributes["name"], Action: action}
+				select {
+				case out <- e:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
+}

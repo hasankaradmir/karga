@@ -18,6 +18,10 @@ First release.
   `/run/karga/karga.sock` and stops with `karga-server is not running` without it (`create`,
   `lint`, `template`, `show` work alone). The service runs as the `karga` user with its state in
   `/var/lib/karga`; install with `KARGA_SYSTEMD=1`. The CLI's `--home` is gone (`--socket` instead).
+- karga-server repairs releases on its own (Docker events and every 30 seconds): removed or
+  hand-changed containers are recreated, stopped ones started, unhealthy ones restarted, without a
+  new revision. `karga reconcile`, `karga pause|resume` and `karga events`; `karga status` shows the
+  last repair and what it gave up on.
 - Linux only: without karga's gateway and release proxy (macOS, a remote Docker host) a plan with
   Services is refused. Upgrading an installed release with its new package recreates its workloads
   once.

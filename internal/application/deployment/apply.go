@@ -216,6 +216,7 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 			err = ownedOK(owned, ports.ObjectVolume, name,
 				rt.CreateVolume(ctx, ports.VolumeRequest{Name: name, Labels: lbl, Driver: s.Driver}))
 		case *resource.WorkloadSpec:
+			lbl[ports.LabelDigest] = c.Digest
 			if c.Action == ActionUpdate && c.Strategy == resource.StrategyReplace {
 				var touched bool
 				var rerr error

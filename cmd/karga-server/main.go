@@ -29,6 +29,7 @@ func main() {
 func run() error {
 	home := flag.String("home", "", "state directory (default $KARGA_HOME, $XDG_DATA_HOME/karga or ~/.local/share/karga)")
 	socket := flag.String("socket", envOr("KARGA_SOCKET", api.DefaultSocket), "unix socket the CLI connects to")
+	interval := flag.Duration("reconcile-interval", server.DefaultReconcileInterval, "time between reconciliations of every release (0: only on container events)")
 	showVersion := flag.Bool("version", false, "print the version and exit")
 	flag.Parse()
 	if *showVersion {
@@ -49,7 +50,7 @@ func run() error {
 		return err
 	}
 	defer func() { _ = rt.Close() }()
-	srv, err := server.New(ctx, server.Config{Home: cfg.Home, Socket: *socket, Log: log}, rt)
+	srv, err := server.New(ctx, server.Config{Home: cfg.Home, Socket: *socket, Log: log, ReconcileInterval: *interval}, rt)
 	if err != nil {
 		return err
 	}

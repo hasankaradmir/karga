@@ -640,6 +640,7 @@ lists the new fields.
 | Logs | `karga logs <release> [workload...] [-f] [--tail N]`, `--proxy`, `--gateway` |
 | A shell or a command inside | `karga exec <release> <workload> [-- command]` |
 | What changed | `karga history <release> --diff`, `karga diff <release> <rev>` |
+| What karga and karga-server did | `karga events [release] [-f]` |
 | The gateway | `karga gateway status` |
 
 Tables are colored on a terminal (`--color never` or `NO_COLOR=1` turns it off); `-o json` gives
@@ -664,24 +665,64 @@ machine-readable output for every read command.
 | `permission denied` on `/run/karga/karga.sock` | Your user is not in the `karga` group (or has not logged in again since). |
 | `a Workload no longer exposes ports; a Service does` | The package uses the removed `hostPort`, `hostIP` or `routes`; move them to a Service. |
 
-### Things changed behind karga's back
+### Repairs: karga-server keeps releases as declared
 
-If a container, network or volume of a release was removed outside karga, `karga status` shows it
-as `missing` and the next upgrade creates it again:
+karga-server brings what runs back to each release's current revision, on its own: after Docker
+reports a container died, was stopped, removed or became unhealthy, and every 30 seconds.
+
+| It sees | It does |
+|---------|---------|
+| A container, network, volume or release proxy is gone | Creates it again from the current revision (a volume comes back empty) |
+| A container was recreated by hand from other settings | Recreates it from the current revision |
+| A container is stopped | Starts it |
+| A container is unhealthy (Docker's check, or karga's tcp/http check failing `retries` times) | Restarts it |
+| Something is exposed and the gateway is down | Starts the gateway |
 
 ```console
 $ docker rm -f demo-web
-$ karga status demo
-Workload  web   demo-web      1         applied  missing  0
-$ karga upgrade demo shop --reuse-values --dry-run
-  + WORKLOAD web
+$ docker ps --filter name=demo-web --format "{{.Names}} {{.Status}}"
+demo-web Up 1 second
 
-1 to create, 0 to update, 0 to delete, 1 unchanged.
+$ karga events demo
+TIME                 RELEASE  OPERATION  REVISION  STATUS     WHAT
+2026-11-17 19:01:09  demo     install    1         succeeded  create network net, create workload web, create service web, create proxy proxy
+2026-11-17 19:01:17  demo     reconcile  1         succeeded  create workload web
+
+$ karga status demo
+...
+Repaired: 2026-11-17 19:01:17, succeeded
 ```
 
-Other changes made behind karga's back (a container recreated by hand with other settings) are not
-detected; the plan compares with what karga applied. Containers of the release that karga does not
-know are listed under "Not tracked by karga".
+What it never does:
+
+- It does not change the revision, the values or the package: an upgrade or rollback is yours.
+- It leaves a **failed** release alone (after a failed recreate the release waits for your
+  rollback or upgrade, D2), and a release an operation is working on.
+- It does not delete containers it does not know (`karga status` lists them under "Not tracked by
+  karga").
+
+A repair that fails is retried with growing pauses (10 seconds doubling to 5 minutes). After 5
+failures in 10 minutes karga-server gives up on it; `karga status` says so and why. `karga reconcile
+<release>` repairs now and forgets the failures:
+
+```console
+$ karga reconcile demo
+Release "demo" repaired:
+  start workload web: done
+```
+
+For maintenance, stop the repairs of a release, and start them again afterwards:
+
+```console
+$ karga pause demo
+Release "demo" paused: karga-server does not repair it.
+$ docker stop demo-web                    # stays stopped
+$ karga resume demo
+Release "demo" resumed: karga-server will repair it.
+```
+
+`karga events [release] [-f]` lists every command and repair, newest last; `journalctl -u
+karga-server` shows the server's side.
 
 ## 12. Back up and move a host
 

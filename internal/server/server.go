@@ -17,6 +17,7 @@ import (
 	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
 	"github.com/hasankaradmir/karga/internal/api"
 	"github.com/hasankaradmir/karga/internal/application/deployment"
+	"github.com/hasankaradmir/karga/internal/application/reconciler"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/infrastructure/config"
 	"github.com/hasankaradmir/karga/internal/infrastructure/logger"
@@ -31,12 +32,19 @@ type Config struct {
 	// SocketMode is the socket's permission (default 0660: the server's user and group).
 	SocketMode os.FileMode
 	Log        *slog.Logger
+	// ReconcileInterval is the time between full reconciliation passes (0: events only); a
+	// negative value turns reconciliation off (tests).
+	ReconcileInterval time.Duration
 }
+
+// DefaultReconcileInterval is how often every release is looked at besides runtime events.
+const DefaultReconcileInterval = 30 * time.Second
 
 // Server is a running karga-server.
 type Server struct {
 	cfg     Config
 	Service *releases.Service
+	Loop    *reconciler.Loop
 	store   *sqlite.Store
 	unlock  func()
 }
@@ -70,7 +78,12 @@ func New(ctx context.Context, cfg Config, rt ports.Runtime) (*Server, error) {
 		return nil, err
 	}
 	deployment.UseProxies(info)
-	return &Server{cfg: cfg, Service: svc, store: store, unlock: unlock}, nil
+	s := &Server{cfg: cfg, Service: svc, store: store, unlock: unlock}
+	if cfg.ReconcileInterval >= 0 {
+		s.Loop = reconciler.New(svc, cfg.ReconcileInterval, cfg.Log)
+		svc.AfterChange = s.Loop.Notify
+	}
+	return s, nil
 }
 
 // lockHome makes sure only one server uses a KARGA_HOME.
@@ -114,6 +127,9 @@ func (s *Server) Serve(ctx context.Context, l net.Listener, grace time.Duration)
 	hs := &http.Server{Handler: api.NewServer(s.Service, version.Current().Version), ReadHeaderTimeout: 10 * time.Second}
 	errc := make(chan error, 1)
 	go func() { errc <- hs.Serve(l) }()
+	if s.Loop != nil {
+		go s.Loop.Run(ctx)
+	}
 	s.cfg.Log.Info("karga-server listening", "socket", s.cfg.Socket, "home", s.cfg.Home, "version", version.Current().Version)
 	select {
 	case err := <-errc:

@@ -50,7 +50,7 @@ func newCLIEnv(t *testing.T) *cliEnv {
 	}
 	t.Cleanup(func() { _ = os.RemoveAll(dir) })
 	e.socket = filepath.Join(dir, "s.sock")
-	srv, err := server.New(context.Background(), server.Config{Home: e.home, Socket: e.socket}, e.rt)
+	srv, err := server.New(context.Background(), server.Config{Home: e.home, Socket: e.socket, ReconcileInterval: -1}, e.rt)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -518,6 +518,37 @@ func TestDynamicCompletion(t *testing.T) {
 	} {
 		if got := strings.Join(e.complete(tc.args...), " "); got != tc.want {
 			t.Errorf("complete %v: %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
+
+func TestReconcileCommands(t *testing.T) {
+	e := newCLIEnv(t)
+	e.mustRun("install", "r", redis, "--set", "service.enabled=false")
+	if out := e.mustRun("reconcile", "r"); !strings.Contains(out, "nothing to repair") {
+		t.Fatalf("healthy release:\n%s", out)
+	}
+	if err := e.rt.StopWorkload(context.Background(), "r-redis", 0); err != nil {
+		t.Fatal(err)
+	}
+	if out := e.mustRun("reconcile", "r"); !strings.Contains(out, "start workload redis: done") {
+		t.Fatalf("repair:\n%s", out)
+	}
+	if out := e.mustRun("status", "r"); !strings.Contains(out, "Repaired: ") || !strings.Contains(out, "succeeded") {
+		t.Fatalf("status:\n%s", out)
+	}
+	e.mustRun("pause", "r")
+	if out := e.mustRun("status", "r"); !strings.Contains(out, "Repaired: paused (karga resume r)") {
+		t.Fatalf("paused status:\n%s", out)
+	}
+	if out := e.mustRun("reconcile", "r"); !strings.Contains(out, "not reconciled: paused") {
+		t.Fatalf("paused:\n%s", out)
+	}
+	e.mustRun("resume", "r")
+	out := e.mustRun("events", "r")
+	for _, want := range []string{"OPERATION", "install", "reconcile", "start workload redis"} {
+		if !strings.Contains(out, want) {
+			t.Fatalf("events miss %q:\n%s", want, out)
 		}
 	}
 }

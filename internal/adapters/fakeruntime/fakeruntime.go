@@ -46,6 +46,8 @@ type Runtime struct {
 	anonymous    int
 	// IPs are the network addresses GetWorkload reports for a workload (network -> address).
 	IPs map[string]map[string]string
+	// EventsC, if set, is what Events streams; tests send to it.
+	EventsC chan ports.RuntimeEvent
 }
 
 // Workload is a fake container. Aliases maps each attached network to the workload's DNS aliases.
@@ -540,4 +542,31 @@ func (r *Runtime) DisconnectNetwork(_ context.Context, workload, network string)
 	}
 	delete(w.Aliases, network)
 	return nil
+}
+
+// Events implements ports.Runtime: it streams EventsC (nothing when nil) until ctx is done.
+func (r *Runtime) Events(ctx context.Context) (<-chan ports.RuntimeEvent, error) {
+	out := make(chan ports.RuntimeEvent)
+	r.mu.Lock()
+	in := r.EventsC
+	r.mu.Unlock()
+	go func() {
+		defer close(out)
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case e, ok := <-in:
+				if !ok {
+					return
+				}
+				select {
+				case out <- e:
+				case <-ctx.Done():
+					return
+				}
+			}
+		}
+	}()
+	return out, nil
 }

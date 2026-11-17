@@ -32,6 +32,25 @@ them, and streams progress, logs, `exec` (an upgraded connection carrying frames
 `create`, `lint`, `template` and `show` work without the server. The API is `internal/api`: a
 `Backend` interface that `*releases.Service` implements on the server and `api.Client` in the CLI.
 
+**Reconciliation.** Desired state is each release's current revision and its applied resources;
+only install, upgrade and rollback change it. karga-server's reconciler (`internal/application/
+reconciler`, the loop; `releases.Service.Reconcile`, the repairs) brings the runtime back to it:
+
+- *Triggers:* Docker events of karga's containers (die, stop, destroy, oom, unhealthy; 2 s debounce),
+  a pass over every release every 30 s (`--reconcile-interval`), the server's start, and every
+  install, upgrade or rollback. One release at a time.
+- *Scope:* deployed releases that are not paused and have no operation running. A failed release is
+  the user's (D2). Within the server a per-release mutex serializes commands and repairs: a command
+  waits for a repair; a repair skips a busy release.
+- *Repairs:* missing workloads, proxies, networks and volumes and containers whose `io.karga.digest`
+  label differs from the applied digest (changed outside karga) are created from the current revision
+  through the usual plan and executor, creates only, without a new revision; stopped containers are
+  started; unhealthy ones (Docker's check, or karga's tcp/http check failing `retries` times) are
+  restarted; the gateway is synced if something is exposed.
+- *Backoff:* per resource, 10 s doubling to 5 min; after 5 failures in 10 minutes it gives up until
+  the user acts on the release or runs `karga reconcile`.
+- Every repair is an operation of type `reconcile`; `karga events` lists them.
+
 ```
 cmd/karga, cmd/karga-server     entry points
 internal/cli                    cobra commands, output (tables, JSON, progress, colors, completion)

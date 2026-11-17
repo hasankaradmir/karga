@@ -15,11 +15,17 @@
 - Access is local only: the socket is mode 0660, group `karga`. There is no remote API and no
   authentication beyond file permissions.
 
+- **Reconciliation.** The server brings the runtime back to each release's current revision after
+  Docker events and every 30 seconds: missing or hand-changed objects are created again, stopped
+  containers started, unhealthy ones restarted. It never creates a revision or touches a failed or
+  paused release; repairs back off and give up after 5 failures in 10 minutes.
+
 **Reason:** A process that is always there can keep the runtime as declared between commands
 (reconciliation) and is the single owner of the state, instead of every CLI invocation opening it.
 Keeping the API on a unix socket keeps the security model of the Docker socket and needs no
 authentication, certificates or API versioning across hosts.
 
-**Constraints:** The server is always running (about 45 MB resident). Access to the karga socket is
+**Constraints:** The server is always running (about 50 MB resident, mostly the binary; it does
+nothing between events and the 30-second passes). One karga-server per host: the gateway is host-wide. Access to the karga socket is
 as powerful as access to Docker. The CLI and the server should be the same version (`karga version`
 warns otherwise).

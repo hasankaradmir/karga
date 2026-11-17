@@ -168,7 +168,7 @@ func notFound(err error, what string) error {
 
 // GetRelease implements ports.StateStore.
 func (s *Store) GetRelease(ctx context.Context, name string) (release.Release, error) {
-	row := s.db.QueryRowContext(ctx, `SELECT name, package_name, package_version, current_revision, status, created_at, updated_at
+	row := s.db.QueryRowContext(ctx, `SELECT name, package_name, package_version, current_revision, status, created_at, updated_at, paused
 		FROM releases WHERE name = ?`, name)
 	r, err := scanRelease(row)
 	return r, notFound(err, "release "+name)
@@ -179,7 +179,7 @@ type scanner interface{ Scan(...any) error }
 func scanRelease(row scanner) (release.Release, error) {
 	var r release.Release
 	var status, created, updated string
-	if err := row.Scan(&r.Name, &r.PackageName, &r.PackageVersion, &r.CurrentRevision, &status, &created, &updated); err != nil {
+	if err := row.Scan(&r.Name, &r.PackageName, &r.PackageVersion, &r.CurrentRevision, &status, &created, &updated, &r.Paused); err != nil {
 		return r, err
 	}
 	r.Status, r.CreatedAt, r.UpdatedAt = release.Status(status), parseTS(created), parseTS(updated)
@@ -188,7 +188,7 @@ func scanRelease(row scanner) (release.Release, error) {
 
 // ListReleases implements ports.StateStore.
 func (s *Store) ListReleases(ctx context.Context) ([]release.Release, error) {
-	rows, err := s.db.QueryContext(ctx, `SELECT name, package_name, package_version, current_revision, status, created_at, updated_at
+	rows, err := s.db.QueryContext(ctx, `SELECT name, package_name, package_version, current_revision, status, created_at, updated_at, paused
 		FROM releases ORDER BY name`)
 	if err != nil {
 		return nil, err
@@ -207,11 +207,12 @@ func (s *Store) ListReleases(ctx context.Context) ([]release.Release, error) {
 
 // SaveRelease implements ports.StateStore.
 func (s *Store) SaveRelease(ctx context.Context, r release.Release) error {
-	_, err := s.db.ExecContext(ctx, `INSERT INTO releases (name, package_name, package_version, current_revision, status, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?)
+	_, err := s.db.ExecContext(ctx, `INSERT INTO releases (name, package_name, package_version, current_revision, status, created_at, updated_at, paused)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT (name) DO UPDATE SET package_name = excluded.package_name, package_version = excluded.package_version,
-			current_revision = excluded.current_revision, status = excluded.status, updated_at = excluded.updated_at`,
-		r.Name, r.PackageName, r.PackageVersion, r.CurrentRevision, string(r.Status), ts(r.CreatedAt), ts(r.UpdatedAt))
+			current_revision = excluded.current_revision, status = excluded.status, updated_at = excluded.updated_at,
+			paused = excluded.paused`,
+		r.Name, r.PackageName, r.PackageVersion, r.CurrentRevision, string(r.Status), ts(r.CreatedAt), ts(r.UpdatedAt), r.Paused)
 	return err
 }
 
@@ -479,4 +480,26 @@ func (s *Store) RunningOperation(ctx context.Context, rel string) (release.Opera
 		rel, string(release.OperationRunning))
 	op, err := scanOperation(row)
 	return op, notFound(err, "running operation of "+rel)
+}
+
+// ListOperations implements ports.StateStore.
+func (s *Store) ListOperations(ctx context.Context, rel string, afterID int64, limit int) ([]release.Operation, error) {
+	if limit <= 0 {
+		limit = 100
+	}
+	rows, err := s.db.QueryContext(ctx, `SELECT `+operationColumns+` FROM operations
+		WHERE (? = '' OR release = ?) AND id > ? ORDER BY id DESC LIMIT ?`, rel, rel, afterID, limit)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+	var out []release.Operation
+	for rows.Next() {
+		op, err := scanOperation(rows)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, op)
+	}
+	return out, rows.Err()
 }

@@ -43,6 +43,9 @@ const (
 	LabelName      = "io.karga.name"
 	LabelRevision  = "io.karga.revision"
 	LabelRetention = "io.karga.retention"
+	// LabelDigest on a workload container is the digest of the spec it was created from, so a
+	// container changed outside karga is told apart.
+	LabelDigest = "io.karga.digest"
 )
 
 // Kinds returned by ListManaged.
@@ -97,6 +100,17 @@ type Runtime interface {
 	ListLabeled(ctx context.Context, key string) ([]Object, error)
 	// PublishedPorts returns host ports published by any container.
 	PublishedPorts(ctx context.Context) ([]PublishedPort, error)
+	// Events streams what happens to karga-managed containers until ctx is done or the stream
+	// breaks; then the channel is closed.
+	Events(ctx context.Context) (<-chan RuntimeEvent, error)
+}
+
+// RuntimeEvent is something that happened to a karga-managed container: Action is die, oom,
+// destroy, stop, start or unhealthy.
+type RuntimeEvent struct {
+	Release   string
+	Container string
+	Action    string
 }
 
 // RuntimeInfo describes the runtime and what it supports.
