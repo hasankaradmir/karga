@@ -279,7 +279,9 @@ Revision: 2 -> 4
 
 `karga rollback demo` returns to the last good revision before the current one; `karga rollback
 demo 1` to a given one. A rollback is a new revision. It re-applies configuration; it cannot undo
-changes your application made to its data (database migrations, for example).
+changes your application made to its data (database migrations, for example). A rollback that
+would delete a volume's data needs `--delete-volumes` (see
+[section 8](#8-databases-and-other-stateful-services)).
 
 ## 6. Expose services through the gateway (Linux)
 
@@ -451,7 +453,23 @@ $ karga install db examples/postgres --set network.port=15432 --set database.pas
 ```
 
 Volumes have `retention: retain` by default: `uninstall` keeps them and a later install of the same
-release name reuses them. `retention: delete` removes a volume when the release no longer has it.
+release name reuses them, and a volume removed from the package stays in Docker. `retention: delete`
+removes the volume when the release no longer has it, after a renamed volume, a removed one, or a
+rollback to a revision without it. Such an upgrade or rollback stops before changing anything
+unless you confirm with `--delete-volumes`:
+
+```console
+$ karga rollback s 1 --dry-run
+Warning: this rollback deletes volume cache and its data; it needs --delete-volumes
+  - VOLUME cache (its data is deleted)
+
+$ karga rollback s 1
+Error: this rollback deletes volume cache and its data (retention: delete); nothing was changed. Rerun with --delete-volumes to go ahead
+
+$ karga rollback s 1 --delete-volumes
+Release "s" rolled back (revision 3).
+  delete volume cache (its data is deleted)
+```
 
 ### What happens to data on an upgrade
 

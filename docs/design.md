@@ -130,7 +130,9 @@ shows every changed field.
    docker compose does); they are deleted only with the workload for good (removed from the
    package or uninstalled). A workload with such volumes is never replaced.
 5. Updates the release proxy and the gateway, then deletes removed networks and volumes (a removed
-   volume only with `retention: delete`; `uninstall --delete-volumes` removes them all).
+   volume only with `retention: delete`, and only when the upgrade or rollback was given
+   `--delete-volumes`: without it the command stops before changing anything;
+   `uninstall --delete-volumes` removes them all).
 
 Progress events (pull, create, wait, switch, drain, stop, done) are reported as they happen.
 

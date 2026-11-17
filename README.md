@@ -71,8 +71,8 @@ logs). State lives in `$KARGA_HOME` (default `$XDG_DATA_HOME/karga`, i.e. `~/.lo
 | `template <release> <package>` | Render locally; Secret values are shown as `<redacted>` unless `--show-secrets` |
 | `show package\|values\|readme <package>` | Show package metadata, default values or README |
 | `install <release> <package>` | Install. Re-running with the same package and values does nothing |
-| `upgrade <release> <package>` | Apply new values or a new package version. `--reuse-values`, `--install`, `--strategy` |
-| `rollback <release> [revision]` | Re-apply an earlier revision as a new revision |
+| `upgrade <release> <package>` | Apply new values or a new package version. `--reuse-values`, `--install`, `--strategy`, `--delete-volumes` |
+| `rollback <release> [revision]` | Re-apply an earlier revision as a new revision. `--strategy`, `--delete-volumes` |
 | `uninstall <release>` | Remove workloads and networks. `--delete-volumes`, `--keep-history` |
 | `history`, `list`, `status <release>` | Revisions (`--diff` adds what changed), releases, and desired vs actual state (`--watch`) |
 | `diff <release> <rev> [rev]` | What differs between two revisions (values, package, resource fields; secrets only as changed) |
@@ -182,7 +182,8 @@ Releases installed by an earlier karga apply their workloads once more for these
 lists the new fields.
 
 **Volume**: `driver` (default `local`) and `retention: retain | delete` (default `retain`). A retained
-volume survives uninstall and is reused by the next install of the same release.
+volume survives uninstall and is reused by the next install of the same release. An upgrade or
+rollback that would delete a `retention: delete` volume stops unless given `--delete-volumes`.
 **Network**: `driver` (default `bridge`) and `internal`.
 **Config**: `files: {name: content}`, mounted read-only.
 **Secret**: `values: {name: content}`, mounted read-only as files.

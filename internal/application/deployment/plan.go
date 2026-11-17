@@ -379,6 +379,33 @@ func (p Plan) Counts() (create, update, del, unchanged int) {
 	return
 }
 
+// DeletedVolumes lists the volumes the plan deletes with their data (retention delete).
+func (p Plan) DeletedVolumes() []string {
+	var out []string
+	for _, c := range p.Changes {
+		if c.deletesVolume() {
+			out = append(out, c.Name)
+		}
+	}
+	return out
+}
+
+func (c Change) deletesVolume() bool {
+	return c.Action == ActionDelete && c.Kind == resource.KindVolume && c.Applied != nil && volumeRetention(c.Applied.Spec) == "delete"
+}
+
+// Note explains what deleting a volume does to its data ("" for other changes).
+func (c Change) Note() string {
+	switch {
+	case c.Action != ActionDelete || c.Kind != resource.KindVolume:
+		return ""
+	case c.deletesVolume():
+		return "its data is deleted"
+	default:
+		return "kept in the runtime: retention retain"
+	}
+}
+
 var actionSymbol = map[string]string{ActionCreate: "+", ActionUpdate: "~", ActionDelete: "-"}
 
 // Summary writes one line per change (+ create, ~ update, - delete; unchanged resources are left
@@ -399,6 +426,9 @@ func (p Plan) Summary(w io.Writer, releaseName string, from, to int) error {
 		fmt.Fprintf(&b, "  %s %s %s", sym, strings.ToUpper(c.Kind), c.Name)
 		if c.Strategy != "" {
 			fmt.Fprintf(&b, " (%s)", c.Label())
+		}
+		if n := c.Note(); n != "" {
+			fmt.Fprintf(&b, " (%s)", n)
 		}
 		b.WriteString("\n")
 	}
@@ -444,7 +474,11 @@ func (p Plan) Print(w io.Writer, releaseName string, from, to int) error {
 				}
 			}
 		default:
-			fmt.Fprintf(&b, "    %s\n", c.Action)
+			if n := c.Note(); n != "" {
+				fmt.Fprintf(&b, "    %s (%s)\n", c.Action, n)
+			} else {
+				fmt.Fprintf(&b, "    %s\n", c.Action)
+			}
 		}
 	}
 	if !p.HasChanges() {

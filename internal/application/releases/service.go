@@ -70,6 +70,8 @@ type CommonOptions struct {
 	HistoryMax int
 	// Force aborts an interrupted operation (whose process is gone) instead of refusing to run.
 	Force bool
+	// DeleteVolumes allows a plan to delete volumes with retention delete, and their data.
+	DeleteVolumes bool
 	// Progress, if set, receives what the deployment is doing as it happens.
 	Progress func(deployment.Event) `json:"-"`
 }
@@ -339,7 +341,14 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 	}
 	if in.DryRun {
 		res.Warnings = anonymousWarnings(in.Resources)
+		if gone := plan.DeletedVolumes(); len(gone) > 0 && !in.DeleteVolumes {
+			res.Warnings = append(res.Warnings, fmt.Sprintf("this %s deletes volume %s and its data; it needs --delete-volumes", in.Type, strings.Join(gone, ", ")))
+		}
 		return res, nil
+	}
+	if gone := plan.DeletedVolumes(); len(gone) > 0 && !in.DeleteVolumes {
+		return nil, fmt.Errorf("this %s deletes volume %s and its data (retention: delete); nothing was changed. Rerun with --delete-volumes to go ahead",
+			in.Type, strings.Join(gone, ", "))
 	}
 
 	op, err := s.begin(ctx, in.Name, in.Type, in.Revision, in.Force)

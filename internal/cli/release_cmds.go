@@ -59,6 +59,12 @@ type commonFlags struct {
 	timeout    time.Duration
 	historyMax int
 	force      bool
+	// deleteVolumes allows an upgrade or rollback to delete volumes with retention delete.
+	deleteVolumes bool
+}
+
+func addDeleteVolumesFlag(cmd *cobra.Command, c *commonFlags) {
+	cmd.Flags().BoolVar(&c.deleteVolumes, "delete-volumes", false, "allow deleting volumes the new revision no longer has and that have retention: delete (their data is lost)")
 }
 
 func addCommonFlags(cmd *cobra.Command, c *commonFlags, dryRun bool) {
@@ -73,7 +79,7 @@ func addCommonFlags(cmd *cobra.Command, c *commonFlags, dryRun bool) {
 }
 
 func (c commonFlags) options() releases.CommonOptions {
-	return releases.CommonOptions{DryRun: c.dryRun, Timeout: c.timeout, HistoryMax: c.historyMax, Force: c.force}
+	return releases.CommonOptions{DryRun: c.dryRun, Timeout: c.timeout, HistoryMax: c.historyMax, Force: c.force, DeleteVolumes: c.deleteVolumes}
 }
 
 // optionsFor adds live progress on stderr, except for JSON output and dry runs.
@@ -114,6 +120,9 @@ func (a *app) printResult(verb string, res *releases.Result, verbose bool) error
 		line := fmt.Sprintf("  %s %s %s", c.Action, strings.ToLower(c.Kind), c.Name)
 		if c.Strategy != "" {
 			line += " (" + c.Label() + ")"
+		}
+		if n := c.Note(); n != "" {
+			line += " (" + n + ")"
 		}
 		changed = append(changed, line)
 	}
@@ -201,6 +210,7 @@ func newUpgradeCmd(a *app) *cobra.Command {
 	cmd.Flags().BoolVar(&reuse, "reuse-values", false, "start from the current revision's values")
 	cmd.Flags().BoolVarP(&install, "install", "i", false, "install the release if it does not exist")
 	addStrategyFlag(cmd, &strategy)
+	addDeleteVolumesFlag(cmd, &common)
 	return cmd
 }
 
@@ -236,6 +246,7 @@ func newRollbackCmd(a *app) *cobra.Command {
 	}
 	addCommonFlags(cmd, &common, true)
 	addStrategyFlag(cmd, &strategy)
+	addDeleteVolumesFlag(cmd, &common)
 	return cmd
 }
 

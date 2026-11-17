@@ -556,3 +556,69 @@ func TestAnonymousVolumesSurviveUpgrades(t *testing.T) {
 		t.Fatal("uninstall kept the anonymous volume")
 	}
 }
+
+// scratchPkg writes a package whose volume "scratch" (retention delete) exists while .Values.scratch is true.
+func scratchPkg(t *testing.T) string {
+	t.Helper()
+	dir := t.TempDir()
+	files := map[string]string{
+		"Package.yaml": "apiVersion: karga.io/v1alpha1\nname: scratch\nversion: 0.1.0\nruntime:\n  supported: [docker]\n",
+		"values.yaml":  "scratch: true\n",
+		"templates/r.yaml": `{{- if .Values.scratch }}
+apiVersion: karga.io/v1alpha1
+kind: Volume
+metadata: {name: scratch}
+spec: {retention: delete}
+---
+{{- end }}
+apiVersion: karga.io/v1alpha1
+kind: Workload
+metadata: {name: app}
+spec:
+  image: busybox:1.37
+  command: [sleep, "300"]
+`,
+	}
+	for name, body := range files {
+		p := filepath.Join(dir, name)
+		if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(p, []byte(body), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return dir
+}
+
+func TestUpgradeDeletingVolumeNeedsFlag(t *testing.T) {
+	e := newEnv(t)
+	ctx := context.Background()
+	pkgDir := scratchPkg(t)
+	must[*Result](t)(e.svc.Install(ctx, InstallRequest{CommonOptions: common(), Name: "s", Package: pkgDir}))
+	without := UpgradeRequest{CommonOptions: common(), Name: "s", Package: pkgDir, Values: packages.Options{Sets: []string{"scratch=false"}}}
+
+	dry := without
+	dry.DryRun = true
+	res := must[*Result](t)(e.svc.Upgrade(ctx, dry))
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "needs --delete-volumes") {
+		t.Fatalf("dry-run warnings: %v", res.Warnings)
+	}
+
+	if _, err := e.svc.Upgrade(ctx, without); err == nil || !strings.Contains(err.Error(), "deletes volume scratch and its data") {
+		t.Fatalf("upgrade without --delete-volumes: %v", err)
+	}
+	if rel := must[release.Release](t)(e.svc.Store.GetRelease(ctx, "s")); rel.CurrentRevision != 1 {
+		t.Fatalf("refused upgrade changed the release: %+v", rel)
+	}
+	if _, ok := e.rt.Volumes["s-scratch"]; !ok {
+		t.Fatal("refused upgrade changed something")
+	}
+
+	with := without
+	with.DeleteVolumes = true
+	must[*Result](t)(e.svc.Upgrade(ctx, with))
+	if _, ok := e.rt.Volumes["s-scratch"]; ok {
+		t.Fatal("volume kept with --delete-volumes")
+	}
+}
