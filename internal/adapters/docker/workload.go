@@ -116,6 +116,12 @@ func (r *Runtime) CreateWorkload(ctx context.Context, req ports.WorkloadRequest)
 	if req.PidsLimit > 0 {
 		host.PidsLimit = &req.PidsLimit
 	}
+	if req.LogMaxSize != "" {
+		// json-file regardless of the daemon default: it is what rotation and `karga logs` rely on.
+		host.LogConfig = container.LogConfig{Type: "json-file", Config: map[string]string{
+			"max-size": req.LogMaxSize, "max-file": strconv.Itoa(max(1, req.LogMaxFiles)),
+		}}
+	}
 	if req.NoNewPrivileges {
 		host.SecurityOpt = []string{"no-new-privileges"}
 	}
@@ -199,6 +205,8 @@ func (r *Runtime) GetWorkload(ctx context.Context, name string) (ports.WorkloadS
 		if h.PidsLimit != nil {
 			st.Limits.Pids = *h.PidsLimit
 		}
+		st.Limits.LogMaxSize = h.LogConfig.Config["max-size"]
+		st.Limits.LogMaxFiles, _ = strconv.Atoi(h.LogConfig.Config["max-file"])
 	}
 	if res.Container.Config != nil {
 		st.Labels = res.Container.Config.Labels

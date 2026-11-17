@@ -123,6 +123,8 @@ func proxyRequest(rel string, revision int, spec ProxySpec, dir, user string) po
 		MemoryBytes:   envoyMemory,
 		MilliCPU:      envoyMilliCPU,
 		PidsLimit:     envoyPids,
+		LogMaxSize:    resource.DefaultLogMaxSize,
+		LogMaxFiles:   resource.DefaultLogMaxFiles,
 	}
 	if nets := sortedNetworks(spec); len(nets) > 0 {
 		wr.Networks, wr.Aliases = []string{RuntimeName(rel, nets[0])}, spec.Networks[nets[0]]

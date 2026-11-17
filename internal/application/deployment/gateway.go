@@ -313,7 +313,8 @@ const labelGatewaySource = "io.karga.gateway-source"
 func gatewaySource(dir string) string { return dir + " " + envoyLimits + " " + envoy.Image() }
 
 // envoyLimits names the limits in what decides whether an Envoy container must be recreated.
-var envoyLimits = fmt.Sprintf("mem=%d,cpu=%dm,pids=%d", envoyMemory, envoyMilliCPU, envoyPids)
+var envoyLimits = fmt.Sprintf("mem=%d,cpu=%dm,pids=%d,log=%sx%d", envoyMemory, envoyMilliCPU, envoyPids,
+	resource.DefaultLogMaxSize, resource.DefaultLogMaxFiles)
 
 func gatewayRequest(dir string) ports.WorkloadRequest {
 	return ports.WorkloadRequest{
@@ -334,6 +335,8 @@ func gatewayRequest(dir string) ports.WorkloadRequest {
 		MemoryBytes:     envoyMemory,
 		MilliCPU:        envoyMilliCPU,
 		PidsLimit:       envoyPids,
+		LogMaxSize:      resource.DefaultLogMaxSize,
+		LogMaxFiles:     resource.DefaultLogMaxFiles,
 	}
 }
 

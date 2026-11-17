@@ -615,6 +615,10 @@ func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[str
 		wr.HealthCheck = &ports.HealthCheck{Command: hc.Command, Interval: interval, Timeout: timeout, Retries: hc.Retries, StartPeriod: start}
 	}
 	wr.PidsLimit = resource.DefaultPids
+	wr.LogMaxSize, wr.LogMaxFiles = resource.DefaultLogMaxSize, resource.DefaultLogMaxFiles
+	if l := s.Logging; l != nil && l.MaxSize != "" {
+		wr.LogMaxSize, wr.LogMaxFiles = l.MaxSize, l.MaxFiles
+	}
 	if r := s.Resources; r != nil && r.Pids != nil {
 		wr.PidsLimit = *r.Pids
 	}

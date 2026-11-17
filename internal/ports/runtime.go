@@ -140,7 +140,10 @@ type WorkloadRequest struct {
 	MemoryBytes     int64
 	MilliCPU        int64
 	// PidsLimit caps processes (0: no limit). With MemoryBytes, no swap is allowed beyond it.
-	PidsLimit     int64
+	PidsLimit int64
+	// LogMaxSize and LogMaxFiles rotate the container log (empty: runtime default).
+	LogMaxSize    string
+	LogMaxFiles   int
 	RestartPolicy string
 }
 
@@ -204,6 +207,8 @@ type WorkloadStatus struct {
 // Limits are the enforced resource and logging limits of a workload.
 type Limits struct {
 	MemoryBytes, MemorySwapBytes, NanoCPUs, Pids int64
+	LogMaxSize                                   string
+	LogMaxFiles                                  int
 }
 
 // Object is a managed runtime object.

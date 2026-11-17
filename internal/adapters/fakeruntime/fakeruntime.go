@@ -256,7 +256,8 @@ func (r *Runtime) GetWorkload(_ context.Context, name string) (ports.WorkloadSta
 			health = r.Health
 		}
 	}
-	lim := ports.Limits{MemoryBytes: w.Request.MemoryBytes, NanoCPUs: w.Request.MilliCPU * 1_000_000, Pids: w.Request.PidsLimit}
+	lim := ports.Limits{MemoryBytes: w.Request.MemoryBytes, NanoCPUs: w.Request.MilliCPU * 1_000_000, Pids: w.Request.PidsLimit,
+		LogMaxSize: w.Request.LogMaxSize, LogMaxFiles: w.Request.LogMaxFiles}
 	if lim.MemoryBytes > 0 {
 		lim.MemorySwapBytes = lim.MemoryBytes
 	}
