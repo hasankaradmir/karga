@@ -37,6 +37,8 @@ What karga does not do yet, what it does with known limits, and the open questio
 - **Volume backups** go through a workload that mounts the volume; a live backup is not consistent
   for databases (use `--stop` or the database's own dump). Restore overwrites files with the same
   names and keeps the others.
+- **Anonymous volumes** (image `VOLUME` paths no Volume covers) move to the new container on
+  upgrades, but `uninstall` deletes them and `volume backup` cannot reach them; karga warns.
 - **State backup** does not include `state.key`; without it, Secrets are applied once more after a
   restore.
 - **Secrets** that are not marked `writeOnly` in the schema are stored as written in the state.
