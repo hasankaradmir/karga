@@ -4,10 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net"
 	"slices"
-	"strconv"
-	"syscall"
 
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/ports"
@@ -91,35 +88,4 @@ func checkHostPort(release, workload string, p resource.Port, published []ports.
 		return fmt.Errorf("%s is taken by another process on this host: %w", where, ports.ErrPortInUse)
 	}
 	return nil
-}
-
-// ipOverlap reports whether two bind addresses can conflict: equal, or either binds every address.
-func ipOverlap(a, b string) bool {
-	if a == b {
-		return true
-	}
-	unspecified := func(s string) bool {
-		ip := net.ParseIP(s)
-		return s == "" || (ip != nil && ip.IsUnspecified())
-	}
-	return unspecified(a) || unspecified(b)
-}
-
-// portTaken test-binds a host port. Only "address in use" counts: karga usually runs without root,
-// and Docker or the gateway bind privileged ports that karga itself may not.
-func portTaken(protocol, ip string, port int) bool {
-	addr := net.JoinHostPort(ip, strconv.Itoa(port))
-	var err error
-	if protocol == "udp" {
-		var c net.PacketConn
-		if c, err = net.ListenPacket("udp", addr); err == nil {
-			_ = c.Close()
-		}
-	} else {
-		var l net.Listener
-		if l, err = net.Listen("tcp", addr); err == nil {
-			_ = l.Close()
-		}
-	}
-	return errors.Is(err, syscall.EADDRINUSE)
 }

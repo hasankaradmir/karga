@@ -1,0 +1,121 @@
+// Package runtimeops holds what the deployment executor, the release proxy and the host gateway
+// share: runtime object names and removal, host port checks, and control of karga's Envoys.
+package runtimeops
+
+import (
+	"context"
+	"errors"
+	"fmt"
+	"net"
+	"strconv"
+	"sync/atomic"
+	"syscall"
+	"time"
+
+	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
+	"github.com/hasankaradmir/karga/internal/ports"
+)
+
+// RuntimeName is the runtime object name of a release-local resource name.
+func RuntimeName(release, name string) string { return release + "-" + name }
+
+// RemoveWorkload stops a container gracefully and deletes it; a missing one is fine.
+func RemoveWorkload(ctx context.Context, rt ports.Runtime, name string) error {
+	if err := rt.StopWorkload(ctx, name, StopTimeout); err != nil && !errors.Is(err, ports.ErrNotFound) {
+		return err
+	}
+	return rt.DeleteWorkload(ctx, name)
+}
+
+// StopTimeout gives workloads a graceful shutdown before they are removed.
+const StopTimeout = 10 * time.Second
+
+// IPOverlap reports whether two bind addresses can conflict: equal, or either binds every address.
+func IPOverlap(a, b string) bool {
+	if a == b {
+		return true
+	}
+	unspecified := func(s string) bool {
+		ip := net.ParseIP(s)
+		return s == "" || (ip != nil && ip.IsUnspecified())
+	}
+	return unspecified(a) || unspecified(b)
+}
+
+// PortTaken test-binds a host port. Only "address in use" counts: karga usually runs without root,
+// and Docker or the gateway bind privileged ports that karga itself may not.
+func PortTaken(protocol, ip string, port int) bool {
+	addr := net.JoinHostPort(ip, strconv.Itoa(port))
+	var err error
+	if protocol == "udp" {
+		var c net.PacketConn
+		if c, err = net.ListenPacket("udp", addr); err == nil {
+			_ = c.Close()
+		}
+	} else {
+		var l net.Listener
+		if l, err = net.Listen("tcp", addr); err == nil {
+			_ = l.Close()
+		}
+	}
+	return errors.Is(err, syscall.EADDRINUSE)
+}
+
+// Supported is set by UseProxies: karga's proxies rely on bind-mounted unix sockets, inotify
+// and (the gateway) the host network namespace, so only a local Docker daemon on Linux has them.
+var Supported atomic.Bool
+
+// UseProxies turns the gateway and release proxies on when the runtime supports them. The
+// release service calls it once it knows the runtime, before planning.
+func UseProxies(info ports.RuntimeInfo) { Supported.Store(info.Has(ports.CapHostGateway)) }
+
+// ProxyControl writes an Envoy's configuration and reads its state, for the release proxies and the
+// gateway alike. The Envoy implementation is the default; tests substitute a fake.
+type ProxyControl interface {
+	Write(dir, node string, socketMode int, cfg envoy.Config) error
+	// WaitReady waits until each cluster routes to a healthy endpoint (cluster -> DNS name or ip:port).
+	WaitReady(ctx context.Context, dir string, want map[string]string, timeout time.Duration) error
+	// WaitDrained waits until no connection is left on endpoints the clusters no longer have.
+	WaitDrained(ctx context.Context, dir string, clusters []string, timeout time.Duration) (bool, error)
+}
+
+// EnvoyProxies controls Envoy proxies through their directories (ADR-009, ADR-010).
+type EnvoyProxies struct{}
+
+// Write implements ProxyControl.
+func (EnvoyProxies) Write(dir, node string, socketMode int, cfg envoy.Config) error {
+	return envoy.Write(dir, node, socketMode, cfg)
+}
+
+// WaitReady implements ProxyControl.
+func (EnvoyProxies) WaitReady(ctx context.Context, dir string, want map[string]string, timeout time.Duration) error {
+	return envoy.NewAdmin(dir).WaitReady(ctx, want, timeout)
+}
+
+// WaitDrained implements ProxyControl.
+func (EnvoyProxies) WaitDrained(ctx context.Context, dir string, clusters []string, timeout time.Duration) (bool, error) {
+	return envoy.NewAdmin(dir).WaitDrained(ctx, clusters, timeout)
+}
+
+// ProxyReadyTimeout bounds how long a proxy may take to route to a new backend.
+const ProxyReadyTimeout = 30 * time.Second
+
+// HTTPHealthPath is the path Envoy checks on port when the workload's health check is http there.
+func HTTPHealthPath(w *resource.WorkloadSpec, port int) string {
+	if hc := w.HealthCheck; hc != nil && hc.Type == resource.HealthHTTP && hc.Port == port {
+		return hc.Path
+	}
+	return ""
+}
+
+// Limits of karga's Envoys: one worker uses about 15MB; the rest is headroom for connections.
+const (
+	EnvoyMemory   = 128 << 20
+	EnvoyMilliCPU = 500
+	EnvoyPids     = 256
+)
+
+// EnvoyLimits names the limits in what decides whether an Envoy container must be recreated.
+var EnvoyLimits = fmt.Sprintf("mem=%d,cpu=%dm,pids=%d,log=%sx%d", EnvoyMemory, EnvoyMilliCPU, EnvoyPids,
+	resource.DefaultLogMaxSize, resource.DefaultLogMaxFiles)

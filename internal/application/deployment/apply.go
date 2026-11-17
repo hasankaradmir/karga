@@ -65,9 +65,6 @@ type ExecRequest struct {
 	ProxyUser string
 }
 
-// RuntimeName is the runtime object name of a release-local resource name.
-func RuntimeName(release, name string) string { return release + "-" + name }
-
 func labels(release string, revision int, kind, name string) map[string]string {
 	return map[string]string{
 		ports.LabelManaged:  "true",
@@ -380,13 +377,6 @@ func ownedOK(owned map[string]bool, kind, name string, err error) error {
 	return fmt.Errorf("%s %s already exists and is not managed by this release: %w", kind, name, err)
 }
 
-func removeWorkload(ctx context.Context, rt ports.Runtime, name string) error {
-	if err := rt.StopWorkload(ctx, name, stopTimeout); err != nil && !errors.Is(err, ports.ErrNotFound) {
-		return err
-	}
-	return rt.DeleteWorkload(ctx, name)
-}
-
 // recreateWorkload recreates a workload: the old container goes first, so ports and names are free.
 func recreateWorkload(ctx context.Context, rt ports.Runtime, c Change, owned map[string]bool, rel string, s *resource.WorkloadSpec, lbl map[string]string, paths map[Key]string, behind bool) error {
 	name := RuntimeName(rel, c.Name)
@@ -678,9 +668,6 @@ func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[str
 
 // pollInterval is how often waitReady checks workload status.
 var pollInterval = 500 * time.Millisecond
-
-// stopTimeout gives workloads a graceful shutdown before they are removed.
-const stopTimeout = 10 * time.Second
 
 // Delete removes every managed object of release: workloads first, then networks. Volumes are kept
 // unless deleteVolumes is set or the volume's retention is delete. Materialized files under home are removed.
