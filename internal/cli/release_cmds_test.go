@@ -173,3 +173,26 @@ func TestStateBackup(t *testing.T) {
 		t.Fatalf("backup misses release w: %v", err)
 	}
 }
+
+func TestLogs(t *testing.T) {
+	e := newCLIEnv(t)
+	web := "../../tests/integration/testdata/web"
+	e.mustRun("install", "w", web, "--set", "second=true")
+	e.rt.Output = map[string]string{"w-web": "web 1\nweb 2\nweb 3\n", "w-api": "api 1\napi 2"}
+
+	if out := e.mustRun("logs", "w", "web", "--tail", "2"); out != "web 2\nweb 3\n" {
+		t.Fatalf("one workload: %q", out)
+	}
+	if out := e.mustRun("logs", "w", "--tail", "1"); out != "api | api 2\nweb | web 3\n" {
+		t.Fatalf("all workloads: %q", out)
+	}
+	if _, err := e.run("logs", "w", "nope"); err == nil || !strings.Contains(err.Error(), "workloads: api, web") {
+		t.Fatalf("unknown workload: %v", err)
+	}
+	if _, err := e.run("logs"); err == nil || !strings.Contains(err.Error(), "--gateway") {
+		t.Fatalf("no release: %v", err)
+	}
+	if _, err := e.run("logs", "w", "--proxy"); err == nil || !strings.Contains(err.Error(), "has no proxy") {
+		t.Fatalf("no proxy off Linux: %v", err)
+	}
+}

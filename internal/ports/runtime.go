@@ -4,6 +4,7 @@ package ports
 import (
 	"context"
 	"errors"
+	"io"
 	"slices"
 	"time"
 )
@@ -79,8 +80,9 @@ type Runtime interface {
 
 	// ListManaged returns every karga-managed object of a release.
 	ListManaged(ctx context.Context, release string) ([]Object, error)
-	// Logs returns the last tail lines a workload wrote to stdout and stderr.
-	Logs(ctx context.Context, name string, tail int) (string, error)
+	// Logs writes the last tail lines (all with tail < 0) a workload wrote to stdout and stderr to w.
+	// With follow it keeps writing new lines until ctx is done.
+	Logs(ctx context.Context, name string, tail int, follow bool, w io.Writer) error
 	// ListLabeled returns every workload, of any release, that carries label key.
 	ListLabeled(ctx context.Context, key string) ([]Object, error)
 	// PublishedPorts returns host ports published by any container.

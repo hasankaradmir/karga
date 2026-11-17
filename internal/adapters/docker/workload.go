@@ -1,10 +1,10 @@
 package docker
 
 import (
-	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net/netip"
 	"strconv"
 	"strings"
@@ -229,18 +229,21 @@ func (r *Runtime) ListManaged(ctx context.Context, release string) ([]ports.Obje
 }
 
 // Logs implements ports.Runtime.
-func (r *Runtime) Logs(ctx context.Context, name string, tail int) (string, error) {
-	rc, err := r.c.ContainerLogs(ctx, name, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: strconv.Itoa(tail)})
+func (r *Runtime) Logs(ctx context.Context, name string, tail int, follow bool, w io.Writer) error {
+	t := "all"
+	if tail >= 0 {
+		t = strconv.Itoa(tail)
+	}
+	rc, err := r.c.ContainerLogs(ctx, name, client.ContainerLogsOptions{ShowStdout: true, ShowStderr: true, Tail: t, Follow: follow})
 	if err != nil {
-		return "", wrap(err, "logs of "+name)
+		return wrap(err, "logs of "+name)
 	}
 	defer func() { _ = rc.Close() }()
-	var out bytes.Buffer
 	// Containers without a TTY multiplex stdout and stderr.
-	if _, err := stdcopy.StdCopy(&out, &out, rc); err != nil {
-		return "", fmt.Errorf("logs of %s: %w", name, err)
+	if _, err := stdcopy.StdCopy(w, w, rc); err != nil && ctx.Err() == nil {
+		return fmt.Errorf("logs of %s: %w", name, err)
 	}
-	return out.String(), nil
+	return nil
 }
 
 // ListLabeled implements ports.Runtime.

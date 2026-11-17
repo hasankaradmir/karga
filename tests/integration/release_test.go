@@ -6,6 +6,7 @@ import (
 	"context"
 	"path/filepath"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -92,6 +93,10 @@ func TestRedisReleaseLifecycle(t *testing.T) {
 	}
 	if st := workload(t, rt, name+"-redis"); st.Health != ports.HealthHealthy || st.Labels[ports.LabelRevision] != "2" {
 		t.Fatalf("after upgrade: %+v", st)
+	}
+	var out strings.Builder
+	if err := s.Logs(ctx, releases.LogsRequest{Release: name, Tail: 50}, &out); err != nil || !strings.Contains(out.String(), "Ready to accept connections") {
+		t.Fatalf("logs: %v\n%s", err, out.String())
 	}
 
 	// A missing image fails before the running container is touched.

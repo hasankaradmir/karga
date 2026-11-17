@@ -4,6 +4,7 @@ package fakeruntime
 import (
 	"context"
 	"fmt"
+	"io"
 	"maps"
 	"slices"
 	"sort"
@@ -278,14 +279,24 @@ func (r *Runtime) ListManaged(_ context.Context, release string) ([]ports.Object
 	return out, nil
 }
 
-// Logs implements ports.Runtime.
-func (r *Runtime) Logs(_ context.Context, name string, _ int) (string, error) {
+// Logs implements ports.Runtime: it writes the last tail lines of Output[name] (follow ends at once).
+func (r *Runtime) Logs(_ context.Context, name string, tail int, _ bool, w io.Writer) error {
 	r.mu.Lock()
-	defer r.mu.Unlock()
-	if _, ok := r.Workloads[name]; !ok {
-		return "", fmt.Errorf("workload %s: %w", name, ports.ErrNotFound)
+	out := r.Output[name]
+	_, exists := r.Workloads[name]
+	r.mu.Unlock()
+	if !exists {
+		return fmt.Errorf("workload %s: %w", name, ports.ErrNotFound)
 	}
-	return r.Output[name], nil
+	lines := strings.SplitAfter(out, "\n")
+	if lines[len(lines)-1] == "" {
+		lines = lines[:len(lines)-1]
+	}
+	if tail >= 0 && len(lines) > tail {
+		lines = lines[len(lines)-tail:]
+	}
+	_, err := io.WriteString(w, strings.Join(lines, ""))
+	return err
 }
 
 // ListLabeled implements ports.Runtime.

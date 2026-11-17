@@ -8,6 +8,7 @@ import (
 	"errors"
 	"net"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -138,7 +139,8 @@ func Run(t *testing.T, rt ports.Runtime, cfg Config) {
 			t.Fatalf("labels: %v", st.Labels)
 		}
 		assertListed(t, rt, release, ports.ObjectWorkload, req.Name, true)
-		if _, err := rt.Logs(ctx, req.Name, 10); err != nil {
+		var logBuf strings.Builder
+		if err := rt.Logs(ctx, req.Name, 10, false, &logBuf); err != nil {
 			t.Fatalf("logs: %v", err)
 		}
 		labeled, err := rt.ListLabeled(ctx, "io.karga.contract")

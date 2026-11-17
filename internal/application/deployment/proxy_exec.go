@@ -221,12 +221,12 @@ func envoyErr(ctx context.Context, rt ports.Runtime, container string, err error
 	if err == nil {
 		return nil
 	}
-	out, lerr := rt.Logs(ctx, container, 50)
-	if lerr != nil {
+	var out strings.Builder
+	if lerr := rt.Logs(ctx, container, 50, false, &out); lerr != nil {
 		return err
 	}
 	var why []string
-	for _, line := range strings.Split(out, "\n") {
+	for _, line := range strings.Split(out.String(), "\n") {
 		if strings.Contains(line, "rejected") || strings.Contains(line, "][error]") || strings.Contains(line, "][critical]") {
 			why = append(why, strings.TrimSpace(line))
 		}
