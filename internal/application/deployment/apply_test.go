@@ -472,3 +472,23 @@ func TestFailedReplaceWaitsForEarlierRecreates(t *testing.T) {
 		t.Fatalf("previous web must keep running: %v", w.State)
 	}
 }
+
+func TestWorkloadSecurityRequest(t *testing.T) {
+	s := manifest(0)[0].Spec.(*resource.WorkloadSpec)
+	wr, err := workloadRequest("cache", "redis", s, map[string]string{}, map[Key]string{{resource.KindConfig, "conf"}: "/x"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !wr.NoNewPrivileges || wr.ReadOnlyRootfs {
+		t.Fatalf("defaults: %+v", wr)
+	}
+	off := false
+	s.Security = &resource.Security{NoNewPrivileges: &off, ReadOnlyRootFilesystem: true, CapDrop: []string{"ALL"}, CapAdd: []string{"CHOWN"}, User: "999:999"}
+	wr, err = workloadRequest("cache", "redis", s, map[string]string{}, map[Key]string{{resource.KindConfig, "conf"}: "/x"}, false)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if wr.NoNewPrivileges || !wr.ReadOnlyRootfs || wr.Tmpfs["/tmp"] == "" || wr.CapDrop[0] != "ALL" || wr.CapAdd[0] != "CHOWN" || wr.User != "999:999" {
+		t.Fatalf("security: %+v", wr)
+	}
+}

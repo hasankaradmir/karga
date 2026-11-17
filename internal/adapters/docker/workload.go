@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/netip"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
@@ -125,6 +126,7 @@ func (r *Runtime) CreateWorkload(ctx context.Context, req ports.WorkloadRequest)
 	if req.NoNewPrivileges {
 		host.SecurityOpt = []string{"no-new-privileges"}
 	}
+	host.ReadonlyRootfs, host.Tmpfs = req.ReadOnlyRootfs, req.Tmpfs
 	var netCfg *network.NetworkingConfig
 	if req.HostNetwork {
 		host.NetworkMode = network.NetworkHost
@@ -216,6 +218,8 @@ func (r *Runtime) GetWorkload(ctx context.Context, name string) (ports.WorkloadS
 			st.Limits.Pids = *h.PidsLimit
 		}
 		st.Limits.LogMaxSize = h.LogConfig.Config["max-size"]
+		st.Limits.NoNewPrivileges = slices.ContainsFunc(h.SecurityOpt, func(o string) bool { return strings.HasPrefix(o, "no-new-privileges") })
+		st.Limits.ReadOnlyRootfs = h.ReadonlyRootfs
 		st.Limits.LogMaxFiles, _ = strconv.Atoi(h.LogConfig.Config["max-file"])
 	}
 	if res.Container.Config != nil {

@@ -615,6 +615,15 @@ func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[str
 		start, _ := time.ParseDuration(hc.StartPeriod)
 		wr.HealthCheck = &ports.HealthCheck{Command: hc.Command, Interval: interval, Timeout: timeout, Retries: hc.Retries, StartPeriod: start}
 	}
+	wr.NoNewPrivileges = true
+	if sec := s.Security; sec != nil {
+		wr.NoNewPrivileges = sec.NoNewPrivileges == nil || *sec.NoNewPrivileges
+		wr.CapDrop, wr.CapAdd, wr.User = sec.CapDrop, sec.CapAdd, sec.User
+		if sec.ReadOnlyRootFilesystem {
+			wr.ReadOnlyRootfs = true
+			wr.Tmpfs = map[string]string{"/tmp": "rw,nosuid,nodev,size=64m"}
+		}
+	}
 	wr.PidsLimit = resource.DefaultPids
 	wr.LogMaxSize, wr.LogMaxFiles = resource.DefaultLogMaxSize, resource.DefaultLogMaxFiles
 	if l := s.Logging; l != nil && l.MaxSize != "" {

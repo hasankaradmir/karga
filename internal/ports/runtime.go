@@ -132,13 +132,16 @@ type WorkloadRequest struct {
 	CapAdd, CapDrop []string
 	// NoNewPrivileges blocks privilege gains through setuid binaries.
 	NoNewPrivileges bool
-	Ports           []PortBinding
-	Mounts          []Mount
-	Networks        []string
-	Aliases         []string
-	HealthCheck     *HealthCheck
-	MemoryBytes     int64
-	MilliCPU        int64
+	// ReadOnlyRootfs mounts the image read-only; Tmpfs adds in-memory mounts (path -> options).
+	ReadOnlyRootfs bool
+	Tmpfs          map[string]string
+	Ports          []PortBinding
+	Mounts         []Mount
+	Networks       []string
+	Aliases        []string
+	HealthCheck    *HealthCheck
+	MemoryBytes    int64
+	MilliCPU       int64
 	// PidsLimit caps processes (0: no limit). With MemoryBytes, no swap is allowed beyond it.
 	PidsLimit int64
 	// LogMaxSize and LogMaxFiles rotate the container log (empty: runtime default).
@@ -211,6 +214,7 @@ type Limits struct {
 	MemoryBytes, MemorySwapBytes, NanoCPUs, Pids int64
 	LogMaxSize                                   string
 	LogMaxFiles                                  int
+	NoNewPrivileges, ReadOnlyRootfs              bool
 }
 
 // Object is a managed runtime object.

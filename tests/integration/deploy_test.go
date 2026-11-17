@@ -10,6 +10,7 @@ import (
 	"errors"
 	"slices"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -226,5 +227,48 @@ func TestMemoryLimitIsEnforced(t *testing.T) {
 			t.Fatalf("still %s after 60s", st.State)
 		}
 		time.Sleep(500 * time.Millisecond)
+	}
+}
+
+// TestReadOnlyRootFilesystem: the image is read-only and /tmp stays writable.
+func TestReadOnlyRootFilesystem(t *testing.T) {
+	ctx := context.Background()
+	rt := newRuntime(t)
+	name := releaseName("it-ro")
+	if err := rt.EnsureImage(ctx, "busybox:1.37", "if-not-present"); err != nil {
+		t.Fatal(err)
+	}
+	if err := rt.CreateWorkload(ctx, ports.WorkloadRequest{
+		Name: name, Image: "busybox:1.37", RestartPolicy: "never", NoNewPrivileges: true,
+		ReadOnlyRootfs: true, Tmpfs: map[string]string{"/tmp": "rw,size=1m"},
+		Labels:  map[string]string{ports.LabelManaged: "true", ports.LabelRelease: name},
+		Command: []string{"sh", "-c", "touch /x 2>/dev/null && echo root-writable; touch /tmp/x && echo tmp-writable"},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = rt.DeleteWorkload(context.Background(), name) })
+	if err := rt.StartWorkload(ctx, name); err != nil {
+		t.Fatal(err)
+	}
+	deadline := time.Now().Add(30 * time.Second)
+	for {
+		st, err := rt.GetWorkload(ctx, name)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if st.State == ports.StateExited {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatal("container did not finish")
+		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	var out strings.Builder
+	if err := rt.Logs(ctx, name, -1, false, &out); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(out.String(), "root-writable") || !strings.Contains(out.String(), "tmp-writable") {
+		t.Fatalf("output: %q", out.String())
 	}
 }
