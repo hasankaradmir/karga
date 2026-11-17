@@ -90,5 +90,6 @@ func newRootCmd(stdout, stderr io.Writer, newRuntime func(context.Context) (port
 	root.AddCommand(newVersionCmd(a), newCreateCmd(a), newTemplateCmd(a), newLintCmd(a), newShowCmd(a),
 		newInstallCmd(a), newUpgradeCmd(a), newRollbackCmd(a), newUninstallCmd(a),
 		newHistoryCmd(a), newListCmd(a), newStatusCmd(a), newGetCmd(a), newGatewayCmd(a), newStateCmd(a), newLogsCmd(a), newVolumeCmd(a), newExecCmd(a), newDiffCmd(a))
+	addCompletion(a, root)
 	return root
 }

@@ -395,3 +395,50 @@ func TestStatusWatchAndColor(t *testing.T) {
 		t.Fatalf("colored table misaligned:\n%s\n---\n%s", stripped, plain)
 	}
 }
+
+// complete runs shell completion for args (the last one is the word being completed).
+func (e *cliEnv) complete(args ...string) []string {
+	e.t.Helper()
+	var out bytes.Buffer
+	cmd := newRootCmd(&out, &bytes.Buffer{}, func(context.Context) (ports.Runtime, func(), error) { return e.rt, func() {}, nil })
+	cmd.SetArgs(append([]string{"__complete", "--home", e.home}, args...))
+	if err := cmd.Execute(); err != nil {
+		e.t.Fatalf("complete %v: %v", args, err)
+	}
+	var vals []string
+	for _, l := range strings.Split(out.String(), "\n") {
+		if l != "" && !strings.HasPrefix(l, ":") && !strings.HasPrefix(l, "Completion ended") {
+			vals = append(vals, strings.SplitN(l, "\t", 2)[0])
+		}
+	}
+	return vals
+}
+
+func TestDynamicCompletion(t *testing.T) {
+	e := newCLIEnv(t)
+	if got := e.complete("status", ""); len(got) != 0 {
+		t.Fatalf("no state yet, nothing to offer: %v", got)
+	}
+	if _, err := os.Stat(filepath.Join(e.home, "karga.db")); err == nil {
+		t.Fatal("completion created the state database")
+	}
+	e.mustRun("install", "web1", "../../tests/integration/testdata/web", "--set", "second=true")
+	e.mustRun("install", "redis1", redis, "--set", "network.port="+e.port)
+	e.mustRun("upgrade", "web1", "../../tests/integration/testdata/web", "--set", "second=true", "--set", "content=v2")
+	for _, tc := range []struct {
+		args []string
+		want string
+	}{
+		{[]string{"status", ""}, "redis1 web1"},
+		{[]string{"status", "w"}, "web1"},
+		{[]string{"logs", "web1", ""}, "api web"},
+		{[]string{"exec", "web1", "a"}, "api"},
+		{[]string{"rollback", "web1", ""}, "2 1"},
+		{[]string{"volume", "backup", "redis1", ""}, "redis-data"},
+		{[]string{"get", "notes", ""}, "redis1 web1"},
+	} {
+		if got := strings.Join(e.complete(tc.args...), " "); got != tc.want {
+			t.Errorf("complete %v: %q, want %q", tc.args, got, tc.want)
+		}
+	}
+}
