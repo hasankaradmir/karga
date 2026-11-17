@@ -93,19 +93,25 @@ func parseGatewayLabel(labels map[string]string) []GatewayPort {
 }
 
 // gatewayTargets finds, per release workload, the container the gateway routes to: the one named in
-// prefer ("release/workload" -> container) or else the canonical one. Others (a replace's -next,
-// a stopped leftover) are ignored.
+// prefer ("release/workload" -> container) if it exists, else the canonical one. Others (a
+// replace's -next before its switch, a stopped leftover) are ignored.
 func gatewayTargets(ctx context.Context, rt ports.Runtime, prefer map[string]string) ([]gatewayTarget, error) {
 	objs, err := rt.ListLabeled(ctx, LabelGateway)
 	if err != nil {
 		return nil, err
 	}
+	byName := map[string]ports.Object{}
+	for _, o := range objs {
+		byName[o.Name] = o
+	}
 	var out []gatewayTarget
 	for _, o := range objs {
 		rel, name := o.Labels[ports.LabelRelease], o.Labels[ports.LabelName]
-		want, ok := prefer[rel+"/"+name]
-		if !ok {
-			want = RuntimeName(rel, name)
+		want := RuntimeName(rel, name)
+		if p, ok := prefer[rel+"/"+name]; ok {
+			if _, exists := byName[p]; exists {
+				want = p
+			}
 		}
 		if o.Name != want {
 			continue
@@ -114,6 +120,55 @@ func gatewayTargets(ctx context.Context, rt ports.Runtime, prefer map[string]str
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Container < out[j].Container })
 	return out, nil
+}
+
+// routingFile keeps the switches of replaces in progress ("release/workload" -> container), so a
+// gateway update by another release does not send their traffic back to the old container.
+func routingFile(home string) string { return filepath.Join(home, "gateway-routing.json") }
+
+// updateRouting applies changes (an empty container removes the entry) to the stored switches and
+// returns them. Called under the gateway lock.
+func updateRouting(home string, changes map[string]string) (map[string]string, error) {
+	routing := map[string]string{}
+	data, err := os.ReadFile(routingFile(home))
+	switch {
+	case err == nil:
+		if err := json.Unmarshal(data, &routing); err != nil {
+			return nil, fmt.Errorf("%s: %w", routingFile(home), err)
+		}
+	case !errors.Is(err, os.ErrNotExist):
+		return nil, err
+	}
+	if len(changes) == 0 {
+		return routing, nil
+	}
+	for k, v := range changes {
+		if v == "" {
+			delete(routing, k)
+		} else {
+			routing[k] = v
+		}
+	}
+	if len(routing) == 0 {
+		if err := os.Remove(routingFile(home)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return nil, err
+		}
+		return routing, nil
+	}
+	js, err := json.Marshal(routing)
+	if err != nil {
+		return nil, err
+	}
+	return routing, writeFile(routingFile(home), js)
+}
+
+// releaseRouting clears the switches of every workload of a release once its operation is over.
+func releaseRouting(rel string, names []string) map[string]string {
+	out := map[string]string{}
+	for _, n := range names {
+		out[rel+"/"+n] = ""
+	}
+	return out
 }
 
 // certName is the file name (without extension) of a TLS host's certificate in the gateway
@@ -343,14 +398,19 @@ func gatewayRequest(dir string) ports.WorkloadRequest {
 }
 
 // SyncGateway rewrites the gateway from every release's workload containers and creates or removes
-// the gateway container as needed. prefer routes specific workloads to another container (a
-// replace's -next). It returns the targets it routes to.
-func SyncGateway(ctx context.Context, rt ports.Runtime, px ProxyControl, home string, prefer map[string]string) ([]gatewayTarget, error) {
+// the gateway container as needed. switches routes workloads to another container (a replace's
+// -next) until switched back with an empty name; they are stored, so concurrent updates by other
+// releases keep them. It returns the targets it routes to.
+func SyncGateway(ctx context.Context, rt ports.Runtime, px ProxyControl, home string, switches map[string]string) ([]gatewayTarget, error) {
 	unlock, err := lockGateway(home)
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
+	prefer, err := updateRouting(home, switches)
+	if err != nil {
+		return nil, err
+	}
 	targets, err := gatewayTargets(ctx, rt, prefer)
 	if err != nil {
 		return nil, err

@@ -108,3 +108,50 @@ func errorsText(errs []error) string {
 	}
 	return strings.Join(s, "; ")
 }
+
+func TestGatewaySwitchSurvivesOtherSyncs(t *testing.T) {
+	withProxySupport(t, true)
+	ctx := context.Background()
+	home := t.TempDir()
+	rt := fakeruntime.New("img")
+	px := &fakeProxies{rt: rt, home: home, notReady: map[string]bool{}}
+	for _, c := range []struct{ name, workload string }{{"a-web", "web"}, {"a-web-next", "web"}, {"b-api", "api"}} {
+		rel := strings.SplitN(c.name, "-", 2)[0]
+		label, _ := json.Marshal([]GatewayPort{{ContainerPort: 80, Upstream: 4000 + len(c.name), HostIP: "127.0.0.1", HostPort: 9000 + len(c.name)}})
+		if err := rt.CreateWorkload(ctx, ports.WorkloadRequest{Name: c.name, Image: "img", Labels: map[string]string{
+			ports.LabelManaged: "true", ports.LabelRelease: rel, ports.LabelName: c.workload, LabelGateway: string(label)}}); err != nil {
+			t.Fatal(err)
+		}
+	}
+	routed := func() string {
+		targets, err := SyncGateway(ctx, rt, px, home, nil) // another release's update
+		if err != nil {
+			t.Fatal(err)
+		}
+		for _, tg := range targets {
+			if tg.Release == "a" {
+				return tg.Container
+			}
+		}
+		return ""
+	}
+	if _, err := SyncGateway(ctx, rt, px, home, map[string]string{"a/web": "a-web-next"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := routed(); got != "a-web-next" {
+		t.Fatalf("a concurrent update undid the switch: %s", got)
+	}
+	if _, err := SyncGateway(ctx, rt, px, home, releaseRouting("a", []string{"web"})); err != nil {
+		t.Fatal(err)
+	}
+	if got := routed(); got != "a-web" {
+		t.Fatalf("after clearing: %s", got)
+	}
+	// A switch to a container that is gone falls back to the canonical one.
+	if _, err := SyncGateway(ctx, rt, px, home, map[string]string{"a/web": "a-web-gone"}); err != nil {
+		t.Fatal(err)
+	}
+	if got := routed(); got != "a-web" {
+		t.Fatalf("missing preferred container: %s", got)
+	}
+}

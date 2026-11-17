@@ -93,7 +93,7 @@ func Execute(ctx context.Context, rt ports.Runtime, req ExecRequest) error {
 	}
 	if disrupted && proxySupported.Load() {
 		// Point the gateway at what runs now; the error that got us here is the one to report.
-		_, _ = SyncGateway(ctx, rt, proxyControl(req), req.Home, nil)
+		_, _ = SyncGateway(ctx, rt, proxyControl(req), req.Home, releaseRouting(req.Release, workloadNames(req.Resources)))
 	}
 	return &ExecError{Err: err, Disrupted: disrupted}
 }
@@ -276,7 +276,7 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 		}
 	}
 	if proxySupported.Load() {
-		targets, err := SyncGateway(ctx, rt, req.Proxies, req.Home, nil)
+		targets, err := SyncGateway(ctx, rt, req.Proxies, req.Home, releaseRouting(req.Release, workloadNames(req.Resources)))
 		if err == nil {
 			err = envoyErr(ctx, rt, GatewayName, waitGateway(ctx, req.Proxies, req.Home, req.Release, targets))
 		}
@@ -319,6 +319,16 @@ func preflightLocked(ctx context.Context, rt ports.Runtime, info ports.RuntimeIn
 		defer unlock()
 	}
 	return Preflight(ctx, rt, info, req.Release, req.Supported, req.Resources)
+}
+
+func workloadNames(rs []resource.Resource) []string {
+	var out []string
+	for _, r := range rs {
+		if r.Kind == resource.KindWorkload {
+			out = append(out, r.Metadata.Name)
+		}
+	}
+	return out
 }
 
 func workloadOf(c Change) (*resource.WorkloadSpec, bool) {
@@ -474,7 +484,7 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 			err = envoyErr(ctx, rt, GatewayName, req.Proxies.WaitReady(ctx, GatewayDir(req.Home), want, proxyReadyTimeout))
 		}
 		if err != nil {
-			_, gerr := SyncGateway(ctx, rt, req.Proxies, req.Home, nil)
+			_, gerr := SyncGateway(ctx, rt, req.Proxies, req.Home, map[string]string{req.Release + "/" + c.Name: ""})
 			return true, stopNext(errors.Join(err, gerr, revertProxy()))
 		}
 	}
@@ -503,7 +513,15 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 	if err := rt.DeleteWorkload(ctx, old); err != nil {
 		return true, err
 	}
-	return true, rt.RenameWorkload(ctx, next, name)
+	if err := rt.RenameWorkload(ctx, next, name); err != nil {
+		return true, err
+	}
+	if viaGateway {
+		// -next is gone under that name: the gateway routes to the canonical container again.
+		_, err := SyncGateway(ctx, rt, req.Proxies, req.Home, map[string]string{req.Release + "/" + c.Name: ""})
+		return true, err
+	}
+	return true, nil
 }
 
 // Reconcile repairs what an interrupted replace leaves behind, before the next plan is made:
@@ -681,7 +699,13 @@ func Delete(ctx context.Context, rt ports.Runtime, home, release string, deleteV
 	if home != "" {
 		errs = append(errs, os.RemoveAll(filepath.Join(home, "releases", release)), os.RemoveAll(ProxyDir(home, release)))
 		if proxySupported.Load() {
-			_, err := SyncGateway(ctx, rt, EnvoyProxies{}, home, nil)
+			var names []string
+			for _, o := range objs {
+				if n := o.Labels[ports.LabelName]; o.Kind == ports.ObjectWorkload && n != "" {
+					names = append(names, n)
+				}
+			}
+			_, err := SyncGateway(ctx, rt, EnvoyProxies{}, home, releaseRouting(release, names))
 			errs = append(errs, err)
 		}
 	}
