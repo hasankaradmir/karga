@@ -329,7 +329,8 @@ $ karga install other shop --set route.host=shop.local
 Error: Workload "web": route shop.local/ on 127.0.0.1:80 is already routed to shop: port already in use
 ```
 
-The release is then listed as failed with revision 0; remove it with `karga uninstall other`.
+An install that fails before creating anything leaves no release behind (`revision 1 failed;
+nothing was installed`).
 
 Set `hostIP: 0.0.0.0` on a port or route to listen on every interface. Applications behind routes
 receive the client address in `x-forwarded-for`.
@@ -548,27 +549,22 @@ machine-readable output for every read command.
 
 ### Things changed behind karga's back
 
-karga plans from what it recorded, not from what Docker has. If a container was removed by hand,
-`karga status` shows it as `missing`, but an upgrade with the same values plans no changes:
+If a container, network or volume of a release was removed outside karga, `karga status` shows it
+as `missing` and the next upgrade creates it again:
 
 ```console
 $ docker rm -f demo-web
 $ karga status demo
 Workload  web   demo-web      1         applied  missing  0
 $ karga upgrade demo shop --reuse-values --dry-run
-  No changes.
+  + WORKLOAD web
+
+1 to create, 0 to update, 0 to delete, 1 unchanged.
 ```
 
-To bring it back, uninstall keeping the history (volumes are kept too) and install again:
-
-```console
-$ karga uninstall demo --keep-history
-$ karga install demo shop -f my-values.yaml
-Release "demo" installed (revision 2).
-```
-
-Containers of the release that karga does not know are listed under "Not tracked by karga". A
-command that repairs drift in place is planned ([roadmap](docs/roadmap.md)).
+Other changes made behind karga's back (a container recreated by hand with other settings) are not
+detected; the plan compares with what karga applied. Containers of the release that karga does not
+know are listed under "Not tracked by karga".
 
 ## 12. Back up and move a host
 
@@ -586,11 +582,16 @@ Restore on a new host, in this order:
 
 1. Install karga and Docker.
 2. Copy `karga.db` and `state.key` into the new `$KARGA_HOME` (mode 0600) before running any karga
-   command. `karga list` and `karga history` now show your releases, but their containers do not
-   exist on this host yet, and karga plans from its records (see
-   [section 11](#things-changed-behind-kargas-back)).
-3. For each release: `karga uninstall <release> --keep-history`, then `karga install <release>
-   <package> -f values.yaml`. This creates everything and keeps the history.
+   command. `karga list` and `karga history` now show your releases.
+3. For each release, upgrade from its package; the plan creates everything missing on this host:
+
+   ```console
+   $ karga upgrade demo shop -f values.yaml
+   Release "demo" upgraded (revision 3).
+     create network net
+     create workload web
+   ```
+
 4. Restore the volumes with `karga volume restore`.
 
 Without the old state (a fresh host), install each release and restore its volumes; only the history

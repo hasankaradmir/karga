@@ -318,6 +318,12 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 	if rtErr != nil && !in.DryRun {
 		return nil, rtErr
 	}
+	recorded := applied
+	if rtErr == nil {
+		if applied, err = existing(ctx, rt, in.Name, applied); err != nil {
+			return nil, err
+		}
+	}
 	plan, err := deployment.Diff(in.Name, in.Resources, applied, in.Strategy)
 	if err != nil {
 		return nil, err
@@ -334,7 +340,7 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	if plan, err = s.reconcile(ctx, rt, in, applied, plan); err == nil {
+	if plan, err = s.reconcile(ctx, rt, in, recorded, plan); err == nil {
 		res.Plan = plan
 		err = s.run(ctx, rt, &op, in, plan)
 	}
@@ -349,6 +355,8 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 			hint += fmt.Sprintf("; nothing that was running changed and revision %d is still serving", res.From)
 		case res.From > 0:
 			hint += fmt.Sprintf("; revision %d stays current. Inspect with 'karga status %s' (and 'docker logs'), then fix and upgrade or run 'karga rollback %s'", res.From, in.Name, in.Name)
+		case s.discard(context.WithoutCancel(ctx), in.Name):
+			hint += "; nothing was installed. Fix the problem and run 'karga install' again"
 		default:
 			hint += fmt.Sprintf("; fix the problem and run 'karga install' again, or remove the failed release with 'karga uninstall %s'", in.Name)
 		}
@@ -362,6 +370,42 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 }
 
 // reconcile repairs leftovers of an interrupted replace and, if anything changed, plans again.
+// discard removes a release that never had a deployed revision and owns nothing in the runtime (an
+// install that failed before creating anything), so it does not linger as a failed release.
+func (s *Service) discard(ctx context.Context, name string) bool {
+	applied, err := s.Store.ListResources(ctx, name)
+	if err != nil || len(applied) > 0 {
+		return false
+	}
+	if err := s.Store.DeleteRelease(ctx, name); err != nil {
+		s.Log.Warn("remove failed release", "release", name, "error", err)
+		return false
+	}
+	return true
+}
+
+// existing drops the recorded workloads, networks and volumes that no longer exist in the runtime
+// (removed outside karga, or a state restored on another host), so the plan creates them again.
+func existing(ctx context.Context, rt ports.Runtime, name string, applied []release.AppliedResource) ([]release.AppliedResource, error) {
+	objs, err := rt.ListManaged(ctx, name)
+	if err != nil {
+		return nil, err
+	}
+	have := map[string]bool{}
+	for _, o := range objs {
+		have[o.Kind+"/"+o.Name] = true
+	}
+	kinds := map[string]string{resource.KindWorkload: ports.ObjectWorkload, resource.KindNetwork: ports.ObjectNetwork, resource.KindVolume: ports.ObjectVolume}
+	var out []release.AppliedResource
+	for _, a := range applied {
+		if k, ok := kinds[a.Kind]; ok && !have[k+"/"+a.RuntimeName] {
+			continue
+		}
+		out = append(out, a)
+	}
+	return out, nil
+}
+
 func (s *Service) reconcile(ctx context.Context, rt ports.Runtime, in deployInput, applied []release.AppliedResource, plan deployment.Plan) (deployment.Plan, error) {
 	repaired, err := deployment.Reconcile(ctx, rt, s.Home, in.Name, applied)
 	if err != nil || len(repaired) == 0 {
@@ -374,6 +418,9 @@ func (s *Service) reconcile(ctx context.Context, rt ports.Runtime, in deployInpu
 		}
 	}
 	if applied, err = s.Store.ListResources(ctx, in.Name); err != nil {
+		return plan, err
+	}
+	if applied, err = existing(ctx, rt, in.Name, applied); err != nil {
 		return plan, err
 	}
 	return deployment.Diff(in.Name, in.Resources, applied, in.Strategy)

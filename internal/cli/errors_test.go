@@ -22,7 +22,7 @@ func TestErrorMessages(t *testing.T) {
 		want []string
 	}{
 		{"port taken", []string{"install", "a", redis, "--set", "network.port=" + busyPort},
-			[]string{"hostPort 127.0.0.1:" + busyPort + "/tcp is taken by another process on this host", "karga uninstall a"}},
+			[]string{"hostPort 127.0.0.1:" + busyPort + "/tcp is taken by another process on this host", "nothing was installed"}},
 		{"image missing", []string{"install", "b", redis, "--set", "image.repository=missing/redis"},
 			[]string{"missing/redis:7.4", "image not found"}},
 		{"schema", []string{"install", "c", redis, "--set", "network.port=abc"},

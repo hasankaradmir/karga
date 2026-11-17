@@ -14,6 +14,8 @@ First release.
 - Releases: install, upgrade (`--reuse-values`, `--install`), rollback, uninstall; immutable
   revisions in SQLite; `history`, `diff`, `status --watch`, `get values|manifest|notes`.
 - Plans as a summary (`--verbose` for fields) and live progress while applying.
+- An upgrade recreates containers, networks and volumes removed outside karga; an install that
+  fails before creating anything leaves no release behind.
 
 ### Upgrades without downtime (Linux)
 - `updateStrategy: replace` starts the new container next to the old one and switches over.

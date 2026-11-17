@@ -97,7 +97,7 @@ to `karga.db.bak-v<n>` and refuses a database written by a newer karga.
 
 Every mutating command records an operation first. An operation whose process is alive on this
 host locks the release; one whose process is gone is aborted only with `--force`. A failed apply
-marks the revision failed; if nothing that was running changed (an image that cannot be pulled, an
+marks the revision failed; an install that failed before creating anything removes the release; if nothing that was running changed (an image that cannot be pulled, an
 unhealthy new container in a replace), the release keeps its status. Rollback re-applies a stored
 revision as a new revision. `--history-max` (default 10) prunes old revisions.
 
@@ -107,7 +107,9 @@ guessed offline from the database.
 
 ## 6. Planning
 
-`deployment.Diff` compares the desired resources with the applied ones by digest. A workload's
+`deployment.Diff` compares the desired resources with the applied ones by digest. Applied
+workloads, networks and volumes that no longer exist in the runtime are left out first, so the plan
+creates them again (removed by hand, or a state restored on another host). A workload's
 digest covers its spec and the content of the Configs and Secrets it mounts or serves TLS with, so
 changing a config file re-applies the workloads using it. Changing a Network or a Volume is refused
 (uninstall or rename instead). Each change gets an action (create, update, delete, unchanged) and,

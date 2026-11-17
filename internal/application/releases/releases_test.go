@@ -483,3 +483,37 @@ func TestStateKeyCreatedOnceUnderConcurrency(t *testing.T) {
 		t.Fatalf("leftover temporary files: %v", entries)
 	}
 }
+
+func TestFailedInstallLeavesNothing(t *testing.T) {
+	e := newEnv(t)
+	e.rt.Fail["EnsureImage:redis:7.4"] = errors.New("image not found")
+	_, err := e.install("image.tag=7.4")
+	if err == nil || !strings.Contains(err.Error(), "nothing was installed") {
+		t.Fatalf("install: %v", err)
+	}
+	if _, err := e.svc.Store.GetRelease(context.Background(), "cache"); !errors.Is(err, ports.ErrNotFound) {
+		t.Fatalf("failed install left a release: %v", err)
+	}
+	delete(e.rt.Fail, "EnsureImage:redis:7.4")
+	if res := must[*Result](t)(e.install("image.tag=7.4")); res.Revision != 1 {
+		t.Fatalf("reinstall: %+v", res)
+	}
+}
+
+func TestUpgradeRecreatesWhatWasRemoved(t *testing.T) {
+	e := newEnv(t)
+	must[*Result](t)(e.install())
+	if err := e.rt.DeleteWorkload(context.Background(), "cache-redis"); err != nil {
+		t.Fatal(err)
+	}
+	res := must[*Result](t)(e.upgrade())
+	var created []string
+	for _, c := range res.Plan.Changes {
+		if c.Action == deployment.ActionCreate {
+			created = append(created, c.Kind+"/"+c.Name)
+		}
+	}
+	if !slices.Equal(created, []string{"Workload/redis"}) || e.rt.Workloads["cache-redis"] == nil {
+		t.Fatalf("plan created %v, workload %v", created, e.rt.Workloads["cache-redis"])
+	}
+}
