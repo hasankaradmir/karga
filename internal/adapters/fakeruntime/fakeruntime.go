@@ -15,6 +15,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
@@ -43,6 +44,8 @@ type Runtime struct {
 	// "anon-<n>" in Volumes) for each one no mount covers.
 	ImageVolumes map[string][]string
 	anonymous    int
+	// IPs are the network addresses GetWorkload reports for a workload (network -> address).
+	IPs map[string]map[string]string
 }
 
 // Workload is a fake container. Aliases maps each attached network to the workload's DNS aliases.
@@ -74,6 +77,33 @@ func (r *Runtime) call(op, name string) error {
 	key := op + ":" + name
 	r.Calls = append(r.Calls, key)
 	return r.Fail[key]
+}
+
+// WithGateway makes the runtime report the default capabilities plus karga's gateway, as Docker
+// on Linux does. Use it with Proxies, which stands in for the Envoys' admin API.
+func (r *Runtime) WithGateway() *Runtime {
+	r.Capabilities = []string{
+		ports.CapNetworkDriver("bridge"), ports.CapVolumeDriver("local"),
+		ports.CapResourcesMemory, ports.CapResourcesCPU, ports.CapHealthcheckExec, ports.CapHostGateway,
+	}
+	return r
+}
+
+// Proxies writes karga's Envoy configuration files like the real thing and reports every proxy
+// ready and drained at once.
+type Proxies struct{}
+
+// Write writes an Envoy's configuration.
+func (Proxies) Write(dir, node string, mode int, cfg envoy.Config) error {
+	return envoy.Write(dir, node, mode, cfg)
+}
+
+// WaitReady returns at once.
+func (Proxies) WaitReady(context.Context, string, map[string]string, time.Duration) error { return nil }
+
+// WaitDrained returns at once.
+func (Proxies) WaitDrained(context.Context, string, []string, time.Duration) (bool, error) {
+	return true, nil
 }
 
 // Info implements ports.Runtime.
@@ -288,7 +318,7 @@ func (r *Runtime) GetWorkload(_ context.Context, name string) (ports.WorkloadSta
 		}
 	}
 	return ports.WorkloadStatus{Name: name, State: w.State, Health: health, Labels: maps.Clone(w.Request.Labels), Limits: lim,
-		OOMKilled: w.OOMKilled, RestartCount: w.Restarts, AnonymousVolumes: anon}, nil
+		OOMKilled: w.OOMKilled, RestartCount: w.Restarts, AnonymousVolumes: anon, IPs: maps.Clone(r.IPs[name])}, nil
 }
 
 // ListManaged implements ports.Runtime.

@@ -22,7 +22,7 @@ func manifest(port int) []resource.Resource {
 			Image: "redis:7.4", PullPolicy: "if-not-present", RestartPolicy: "always",
 			Command:  []string{"redis-server"},
 			Networks: []string{"net"},
-			Ports:    []resource.Port{{ContainerPort: 6379, HostPort: port, HostIP: "127.0.0.1", Protocol: "tcp"}},
+			Ports:    []resource.Port{{Name: "redis", ContainerPort: port, Protocol: "tcp"}},
 			Mounts: []resource.Mount{
 				{Volume: "data", MountPath: "/data"},
 				{Config: "conf", MountPath: "/etc/redis"},
@@ -122,10 +122,11 @@ func TestExecuteInstall(t *testing.T) {
 	if w.Labels[ports.LabelRelease] != "cache" || w.Labels[ports.LabelName] != "redis" || w.Labels[ports.LabelRevision] != "1" {
 		t.Fatalf("labels: %v", w.Labels)
 	}
-	if !slices.Equal(w.Networks, []string{"cache-net"}) || !slices.Equal(w.Aliases, []string{"redis"}) {
-		t.Fatalf("networks/aliases: %v %v", w.Networks, w.Aliases)
+	// No Service targets it: no alias and nothing published.
+	if !slices.Equal(w.Networks, []string{"cache-net"}) || len(w.Aliases) != 0 || len(w.Ports) != 0 {
+		t.Fatalf("networks/aliases/ports: %v %v %v", w.Networks, w.Aliases, w.Ports)
 	}
-	if w.Ports[0].HostIP != "127.0.0.1" || w.MemoryBytes != 512<<20 || w.MilliCPU != 500 {
+	if w.MemoryBytes != 512<<20 || w.MilliCPU != 500 {
 		t.Fatalf("ports/resources: %+v", w)
 	}
 	if w.HealthCheck.Interval != 10*time.Second || w.HealthCheck.Retries != 3 || w.HealthCheck.StartPeriod != 5*time.Second {
@@ -185,7 +186,7 @@ func TestExecuteUpgradeRecreatesOnlyChangedWorkload(t *testing.T) {
 	}
 	r.rt.Calls = nil
 	r.req.Revision = 2
-	r.req.Resources = manifest(r.req.Resources[0].Spec.(*resource.WorkloadSpec).Ports[0].HostPort)
+	r.req.Resources = manifest(r.req.Resources[0].Spec.(*resource.WorkloadSpec).Ports[0].ContainerPort)
 	r.req.Resources[0].Spec.(*resource.WorkloadSpec).Image = "redis:7.2"
 	if err := r.run(); err != nil {
 		t.Fatal(err)
@@ -307,7 +308,7 @@ func TestDelete(t *testing.T) {
 func replaceable(rs []resource.Resource) []resource.Resource {
 	w := rs[0].Spec.(*resource.WorkloadSpec)
 	w.UpdateStrategy = &resource.UpdateStrategy{Type: resource.StrategyReplace, DrainTimeout: "3s"}
-	w.Ports = []resource.Port{{ContainerPort: 6379, Protocol: "tcp"}}
+	w.Ports = []resource.Port{{Name: "redis", ContainerPort: 6379, Protocol: "tcp"}}
 	w.Mounts[0].ReadOnly = true
 	return rs
 }
@@ -332,7 +333,6 @@ func TestExecuteReplace(t *testing.T) {
 	calls := r.rt.Calls
 	order := []string{
 		"CreateWorkload:cache-redis-next", "StartWorkload:cache-redis-next",
-		"DisconnectNetwork:cache-redis-next@cache-net", "ConnectNetwork:cache-redis-next@cache-net=redis",
 		"StopWorkload:cache-redis", "DeleteWorkload:cache-redis", "RenameWorkload:cache-redis-next->cache-redis",
 	}
 	for i := 1; i < len(order); i++ {
@@ -341,7 +341,8 @@ func TestExecuteReplace(t *testing.T) {
 		}
 	}
 	w, ok := r.rt.Workloads["cache-redis"]
-	if !ok || w.Request.Image != "redis:7.2" || w.State != ports.StateRunning || !slices.Equal(w.Aliases["cache-net"], []string{"redis"}) {
+	// No Service targets it, so it has no traffic to switch and no alias.
+	if !ok || w.Request.Image != "redis:7.2" || w.State != ports.StateRunning || len(w.Aliases["cache-net"]) != 0 {
 		t.Fatalf("after replace: %+v", w)
 	}
 	if _, left := r.rt.Workloads["cache-redis-next"]; left {
@@ -443,15 +444,16 @@ func TestReconcile(t *testing.T) {
 
 func TestFailedReplaceWaitsForEarlierRecreates(t *testing.T) {
 	r := newRequest(t, freePort(t))
-	port := r.req.Resources[0].Spec.(*resource.WorkloadSpec).Ports[0].HostPort
-	r.req.Resources = withWorkload(manifest(port), "web", 8080)
+	port := r.req.Resources[0].Spec.(*resource.WorkloadSpec).Ports[0].ContainerPort
+	noService := func() []resource.Resource { rs := withWorkload(manifest(port), "web", 8080); return rs[:len(rs)-1] }
+	r.req.Resources = noService()
 	if err := r.run(); err != nil {
 		t.Fatal(err)
 	}
 	// redis (recreate) comes first in the plan, then web (replace), whose new container fails.
 	r.rt.Calls = nil
 	r.req.Revision = 2
-	r.req.Resources = withWorkload(manifest(port), "web", 8080)
+	r.req.Resources = noService()
 	r.req.Resources[0].Spec.(*resource.WorkloadSpec).Image = "redis:7.2"
 	r.req.Resources[len(r.req.Resources)-1].Spec.(*resource.WorkloadSpec).Image = "app:2"
 	r.rt.Fail["StartWorkload:cache-web-next"] = errors.New("boom")

@@ -1,6 +1,6 @@
 # ADR-0010: Host gateway and release proxy (Linux)
 
-**Status:** accepted
+**Status:** accepted; host ports, routes and the replace-only release proxy superseded by ADR-0011
 
 **Decision:** Traffic goes through two kinds of karga-managed Envoy:
 

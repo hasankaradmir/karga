@@ -66,22 +66,35 @@ func (f *fakeProxies) WaitDrained(_ context.Context, dir string, _ []string, _ t
 	return true, nil
 }
 
+// newProxyRequest installs replaceManifest with Service redis exposed on tcp listener pg.
 func newProxyRequest(t *testing.T) (*request, *fakeProxies) {
 	t.Helper()
 	withProxySupport(t, true)
 	r := newRequest(t, freePort(t))
-	r.req.Resources = replaceManifest(r.req.Resources[0].Spec.(*resource.WorkloadSpec).Ports[0].HostPort)
+	if err := gateway.WriteSettings(r.req.Home, gateway.Settings{Listeners: []gateway.Listener{{Name: "pg", Port: freePort(t), Protocol: gateway.ProtocolTCP}}}); err != nil {
+		t.Fatal(err)
+	}
+	r.req.Resources = exposedManifest(r.port())
 	px := &fakeProxies{rt: r.rt, home: r.req.Home, notReady: map[string]bool{}}
 	r.req.Proxies, r.req.ProxyUser = px, "1000:1000"
 	return r, px
 }
 
-// upgrade runs revision rev of the replace manifest with a new image.
+func exposedManifest(port int) []resource.Resource {
+	rs := replaceManifest(port)
+	rs[len(rs)-1].Spec.(*resource.ServiceSpec).Expose = []resource.Exposure{{Port: "p", Listener: "pg"}}
+	return rs
+}
+
+func (r *request) port() int {
+	return r.req.Resources[0].Spec.(*resource.WorkloadSpec).Ports[0].ContainerPort
+}
+
+// upgrade runs revision rev of the exposed manifest with a new image.
 func (r *request) upgrade(rev int) error {
 	r.rt.Calls = nil
 	r.req.Revision = rev
-	port := r.req.Resources[0].Spec.(*resource.WorkloadSpec).Ports[0].HostPort
-	r.req.Resources = replaceManifest(port)
+	r.req.Resources = exposedManifest(r.port())
 	r.req.Resources[0].Spec.(*resource.WorkloadSpec).Image = "redis:7.2"
 	return r.run()
 }
@@ -105,26 +118,25 @@ func upstream(t *testing.T, w *fakeruntime.Workload) string {
 
 func TestProxyAndGatewayInstall(t *testing.T) {
 	r, _ := newProxyRequest(t)
-	port := r.req.Resources[0].Spec.(*resource.WorkloadSpec).Ports[0].HostPort
+	port := r.port()
 	if err := r.run(); err != nil {
 		t.Fatal(err)
 	}
 	w := r.rt.Workloads["cache-redis"]
-	if !slices.Equal(w.Request.Aliases, []string{"karga-redis-r1"}) {
-		t.Fatalf("proxied workload must carry the backend alias: %+v", w.Request)
-	}
-	if p := w.Request.Ports[0]; p.HostIP != "127.0.0.1" || p.HostPort == port || p.HostPort == 0 {
-		t.Fatalf("workload must publish only a loopback upstream: %+v", p)
-	}
-	gp := gateway.ParseLabel(w.Request.Labels)
-	if len(gp) != 1 || gp[0].HostPort != port || gp[0].Upstream != w.Request.Ports[0].HostPort {
-		t.Fatalf("gateway label: %+v", gp)
+	if !slices.Equal(w.Request.Aliases, []string{"karga-redis-r1"}) || len(w.Request.Ports) != 0 {
+		t.Fatalf("the workload carries only the backend alias and publishes nothing: %+v", w.Request)
 	}
 
-	pr := r.rt.Workloads["cache-karga-proxy"].Request
+	proxy := r.rt.Workloads["cache-karga-proxy"]
+	pr := proxy.Request
 	if !slices.Equal(pr.Aliases, []string{"redis"}) || !slices.Equal(pr.Networks, []string{"cache-net"}) || pr.User != "1000:1000" ||
-		len(pr.Ports) != 0 || pr.Sysctls["net.ipv4.ip_unprivileged_port_start"] != "0" || pr.Mounts[0].Target != envoy.MountPath {
+		pr.Sysctls["net.ipv4.ip_unprivileged_port_start"] != "0" || pr.Mounts[0].Target != envoy.MountPath {
 		t.Fatalf("proxy request: %+v", pr)
+	}
+	gp := gateway.ParseLabel(pr.Labels)
+	if len(pr.Ports) != 1 || pr.Ports[0].HostIP != "127.0.0.1" || pr.Ports[0].ContainerPort != port ||
+		len(gp) != 1 || gp[0] != (gateway.Port{Service: "redis", Port: port, Upstream: pr.Ports[0].HostPort}) {
+		t.Fatalf("the proxy publishes the exposed port on a loopback upstream: %+v %+v", pr.Ports, gp)
 	}
 	for _, req := range []ports.WorkloadRequest{pr, r.rt.Workloads[gateway.ContainerName].Request} {
 		if req.MemoryBytes != 128<<20 || req.MilliCPU != 500 || req.PidsLimit != 256 {
@@ -139,20 +151,21 @@ func TestProxyAndGatewayInstall(t *testing.T) {
 		t.Fatalf("gateway request: %+v", gw)
 	}
 
+	backend := "karga-redis-r1:" + strconv.Itoa(port)
 	c := r.rt.Calls
-	before(t, c, "StartWorkload:cache-redis", "Write:proxy:karga-redis-r1:6379")
-	before(t, c, "Write:proxy:karga-redis-r1:6379", "CreateWorkload:cache-karga-proxy")
+	before(t, c, "StartWorkload:cache-redis", "Write:proxy:"+backend)
+	before(t, c, "Write:proxy:"+backend, "CreateWorkload:cache-karga-proxy")
 	before(t, c, "StartWorkload:cache-karga-proxy", "WaitReady:proxy:karga-redis-r1")
-	before(t, c, "WaitReady:proxy:karga-redis-r1", "Write:gateway:"+upstream(t, w))
+	before(t, c, "WaitReady:proxy:karga-redis-r1", "Write:gateway:"+upstream(t, proxy))
 	before(t, c, "Write:gateway:", "CreateWorkload:"+gateway.ContainerName)
-	before(t, c, "StartWorkload:"+gateway.ContainerName, "WaitReady:gateway:"+upstream(t, w))
+	before(t, c, "StartWorkload:"+gateway.ContainerName, "WaitReady:gateway:"+upstream(t, proxy))
 	cfgEps, _ := envoy.Endpoints(gateway.Dir(r.req.Home))
-	if cfgEps[gateway.Cluster("cache", "redis", 6379)] != upstream(t, w) {
+	if cfgEps[gateway.Cluster("cache", "redis", port)] != upstream(t, proxy) {
 		t.Fatalf("gateway endpoints: %v", cfgEps)
 	}
 }
 
-func TestProxyAndGatewayReplace(t *testing.T) {
+func TestProxyReplace(t *testing.T) {
 	r, _ := newProxyRequest(t)
 	if err := r.run(); err != nil {
 		t.Fatal(err)
@@ -161,25 +174,22 @@ func TestProxyAndGatewayReplace(t *testing.T) {
 		t.Fatal(err)
 	}
 	c := r.rt.Calls
-	next := r.rt.Workloads["cache-redis"] // renamed from -next
 	for _, step := range [][2]string{
 		{"StartWorkload:cache-redis-next", "Write:proxy:karga-redis-r2"},
 		{"Write:proxy:karga-redis-r2", "WaitReady:proxy:karga-redis-r2"},
-		{"WaitReady:proxy:karga-redis-r2", "Write:gateway:" + upstream(t, next)},
-		{"Write:gateway:" + upstream(t, next), "WaitReady:gateway:" + upstream(t, next)},
-		{"WaitReady:gateway:", "WaitDrained:proxy"},
-		{"WaitDrained:proxy", "WaitDrained:gateway"},
-		{"WaitDrained:gateway", "StopWorkload:cache-redis"},
+		{"WaitReady:proxy:karga-redis-r2", "WaitDrained:proxy"},
+		{"WaitDrained:proxy", "StopWorkload:cache-redis"},
 		{"DeleteWorkload:cache-redis", "RenameWorkload:cache-redis-next->cache-redis"},
 	} {
 		before(t, c, step[0], step[1])
 	}
+	// The gateway forwards to the proxy, so a replace switches nothing there.
 	if slices.ContainsFunc(c, func(s string) bool {
-		return strings.HasSuffix(s, ":cache-karga-proxy") || strings.HasSuffix(s, ":"+gateway.ContainerName)
+		return strings.HasSuffix(s, ":cache-karga-proxy") || strings.HasSuffix(s, ":"+gateway.ContainerName) || s == "WaitDrained:gateway"
 	}) {
 		t.Fatalf("a replace must not touch the proxy or gateway containers: %v", c)
 	}
-	if w := next.Request; w.Image != "redis:7.2" || !slices.Equal(w.Aliases, []string{"karga-redis-r2"}) {
+	if w := r.rt.Workloads["cache-redis"].Request; w.Image != "redis:7.2" || !slices.Equal(w.Aliases, []string{"karga-redis-r2"}) {
 		t.Fatalf("after replace: %+v", w)
 	}
 }
@@ -189,47 +199,30 @@ func TestReplaceRevertsWhenProxyNotReady(t *testing.T) {
 	if err := r.run(); err != nil {
 		t.Fatal(err)
 	}
-	old := upstream(t, r.rt.Workloads["cache-redis"])
 	px.notReady["proxy"] = true
 	if err := r.upgrade(2); err == nil {
 		t.Fatal("expected failure")
 	}
 	before(t, r.rt.Calls, "Write:proxy:karga-redis-r2", "Write:proxy:karga-redis-r1")
-	if slices.Contains(r.rt.Calls, "StopWorkload:cache-redis") || slices.ContainsFunc(r.rt.Calls, func(s string) bool { return strings.HasPrefix(s, "WaitReady:gateway") }) {
-		t.Fatalf("old container stopped or gateway switched although the proxy never got ready: %v", r.rt.Calls)
+	if slices.Contains(r.rt.Calls, "StopWorkload:cache-redis") {
+		t.Fatalf("old container stopped although the proxy never got ready: %v", r.rt.Calls)
 	}
-	if eps, _ := envoy.Endpoints(ProxyDir(r.req.Home, "cache")); eps["redis-p6379"] != "karga-redis-r1:6379" {
+	if eps, _ := envoy.Endpoints(ProxyDir(r.req.Home, "cache")); eps[proxyCluster("redis", r.port())] != "karga-redis-r1:"+strconv.Itoa(r.port()) {
 		t.Fatalf("old backend not restored: %v", eps)
-	}
-	if eps, _ := envoy.Endpoints(gateway.Dir(r.req.Home)); eps[gateway.Cluster("cache", "redis", 6379)] != old {
-		t.Fatalf("gateway moved: %v", eps)
 	}
 	if n := r.rt.Workloads["cache-redis-next"]; n == nil || n.State != ports.StateExited {
 		t.Fatalf("failed -next should be stopped and kept: %+v", n)
 	}
 }
 
-func TestReplaceRevertsWhenGatewayNotReady(t *testing.T) {
+func TestGatewayRejectionIsReported(t *testing.T) {
 	r, px := newProxyRequest(t)
-	if err := r.run(); err != nil {
-		t.Fatal(err)
-	}
-	old := upstream(t, r.rt.Workloads["cache-redis"])
 	px.notReady["gateway"] = true
 	r.rt.Output = map[string]string{gateway.ContainerName: "[2026-11-17][1][info][main] starting\n" +
 		"[2026-11-17][1][warning][config] Filesystem config update rejected: cannot bind '0.0.0.0:80': Permission denied\n"}
-	err := r.upgrade(2)
+	err := r.run()
 	if err == nil || !strings.Contains(err.Error(), "cannot bind '0.0.0.0:80'") || strings.Contains(err.Error(), "starting") {
 		t.Fatalf("want the gateway's rejection in the error, got %v", err)
-	}
-	if slices.Contains(r.rt.Calls, "StopWorkload:cache-redis") {
-		t.Fatal("old container stopped although the gateway never got ready")
-	}
-	if eps, _ := envoy.Endpoints(gateway.Dir(r.req.Home)); eps[gateway.Cluster("cache", "redis", 6379)] != old {
-		t.Fatalf("old upstream not restored: %v", eps)
-	}
-	if eps, _ := envoy.Endpoints(ProxyDir(r.req.Home, "cache")); eps["redis-p6379"] != "karga-redis-r1:6379" {
-		t.Fatalf("proxy not restored: %v", eps)
 	}
 }
 

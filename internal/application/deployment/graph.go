@@ -12,11 +12,18 @@ import (
 // kindRank breaks ties between independent resources so the order is stable.
 var kindRank = map[string]int{
 	resource.KindNetwork: 0, resource.KindVolume: 1, resource.KindConfig: 2, resource.KindSecret: 3, resource.KindWorkload: 4,
-	KindProxy: 5,
+	resource.KindService: 5, KindProxy: 6,
 }
 
 // dependencies returns the resources r needs to exist first.
 func dependencies(r resource.Resource) []Key {
+	if s, ok := r.Spec.(*resource.ServiceSpec); ok {
+		deps := []Key{{resource.KindWorkload, s.Workload}}
+		for _, name := range s.TLSSecrets() {
+			deps = append(deps, Key{resource.KindSecret, name})
+		}
+		return deps
+	}
 	w, ok := r.Spec.(*resource.WorkloadSpec)
 	if !ok {
 		return nil
@@ -28,9 +35,6 @@ func dependencies(r resource.Resource) []Key {
 	for _, m := range w.Mounts {
 		kind, name := m.Target()
 		deps = append(deps, Key{kind, name})
-	}
-	for _, name := range w.TLSSecrets() {
-		deps = append(deps, Key{resource.KindSecret, name})
 	}
 	return deps
 }

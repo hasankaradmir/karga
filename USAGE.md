@@ -10,7 +10,7 @@ replaced by documentation addresses.
 - [3. Your first release](#3-your-first-release)
 - [4. Configure with values](#4-configure-with-values)
 - [5. Upgrade safely](#5-upgrade-safely)
-- [6. Expose services through the gateway (Linux)](#6-expose-services-through-the-gateway-linux)
+- [6. Services and the gateway](#6-services-and-the-gateway)
 - [7. Upgrades without downtime](#7-upgrades-without-downtime)
 - [8. Databases and other stateful services](#8-databases-and-other-stateful-services)
 - [9. Secrets](#9-secrets)
@@ -27,20 +27,21 @@ replaced by documentation addresses.
 |------|---------|
 | **Package** | A directory (or `.tgz`) with `Package.yaml`, `values.yaml`, an optional `values.schema.json`, `templates/` and an optional `NOTES.txt`. |
 | **Values** | The settings of a package: its defaults, overridden with `-f file.yaml` and `--set key=value`. |
-| **Resources** | What templates render to: `Workload` (a container), `Volume`, `Network`, `Config` (files), `Secret`. |
+| **Resources** | What templates render to: `Workload` (a container), `Service`, `Volume`, `Network`, `Config` (files), `Secret`. |
 | **Release** | A package installed under a name, e.g. `shop`. Its containers are named `<release>-<name>` (`shop-web`). |
 | **Revision** | Each install, upgrade and rollback is a new, immutable revision of the release. |
 | **Plan** | What a command will change: created (`+`), updated (`~`) and deleted (`-`) resources, and for workloads how (recreate or replace). |
-| **Gateway** | On Linux, one Envoy container (`karga-gateway`) serves every release's host ports and HTTP(S) routes. |
-| **Release proxy** | On Linux, one Envoy per release (`<release>-karga-proxy`) that lets other containers keep working while a workload is replaced. |
+| **Service** | The only way to reach a workload: a name inside the release (`web:80`), and optionally an exposure on a gateway listener. A workload alone publishes nothing. |
+| **Release proxy** | One Envoy per release with Services (`<release>-karga-proxy`). It answers to the Service names and forwards to the current container, so upgrades switch without losing requests. |
+| **Gateway** | One Envoy per host (`karga-gateway`), the only way in from outside. The host's administrator defines where it listens and its **listeners** (a name, a port, a protocol); packages can only expose Services on them. |
 
 Where things live:
 
 - Docker runs the containers. karga is a CLI: when it is not running, nothing of karga runs except
   your containers, the gateway and the release proxies, all restarted by Docker.
 - `$KARGA_HOME` (default `~/.local/share/karga`) holds the state database `karga.db`, the key
-  `state.key`, rendered Config and Secret files, and the Envoy configuration. Keep it private; it is
-  created with mode 0700.
+  `state.key`, rendered Config and Secret files, the gateway settings `gateway.json` and the Envoy
+  configuration. Keep it private; it is created with mode 0700.
 
 ## 2. Install karga
 
@@ -66,8 +67,10 @@ $ make build        # needs Go 1.27; produces bin/karga
 
 ### Connect to Docker
 
-karga uses `DOCKER_HOST`, then `DOCKER_CONTEXT`, then the current Docker context, so it works with
-Docker on Linux and with OrbStack, Docker Desktop or colima on macOS without extra setup.
+karga needs Linux with a local Docker daemon: its Envoys share files, unix sockets and the host
+network with it. karga uses `DOCKER_HOST`, then `DOCKER_CONTEXT`, then the current Docker context.
+On macOS or with a remote Docker host, `lint` and `template` work, but a plan with Services is
+refused (`services ... need karga's gateway and release proxy (Linux with a local Docker)`).
 
 ### Shell completion
 
@@ -77,19 +80,9 @@ $ karga completion zsh > "${fpath[1]}/_karga"     # bash: karga completion bash 
 
 Completion offers release, workload, volume and revision names from your state.
 
-### What works where
-
-| Feature | Linux, local Docker | macOS, or a remote Docker host |
-|---------|--------------------|-------------------------------|
-| Install, upgrade, rollback, status, logs, exec, backups | yes | yes |
-| Host ports | through the gateway | published by Docker |
-| HTTP routes, TLS, several releases on port 80 | yes | refused by the plan |
-| Replace without dropping requests | from the host and from other containers | only without host ports; containers switch by DNS |
-| `tcp`/`http` health checks | always | only on published ports |
-
 ## 3. Your first release
 
-Create a package to start from, check it, look at what it renders and what it would do:
+Create a package to start from, check it and look at what it would do:
 
 ```console
 $ karga create shop
@@ -98,22 +91,7 @@ Created package shop. Try: karga lint shop && karga install <release> shop
 $ karga lint shop
 1 package(s) linted, 0 failed
 
-$ karga template demo shop --set service.port=18080
-# Source: shop/templates/web.yaml
-kind: Workload
-metadata:
-  name: web
-spec:
-  image: "nginx:1.27-alpine"
-  ports:
-    - containerPort: 80
-      hostPort: 18080
-      hostIP: 127.0.0.1
-  healthCheck:
-    type: http
-...
-
-$ karga install demo shop --set service.port=18080 --dry-run
+$ karga install demo shop --dry-run
 Deployment Plan
 
 Release:  demo
@@ -121,54 +99,66 @@ Revision: 1
 
   + NETWORK net
   + WORKLOAD web
+  + SERVICE web
+  + PROXY proxy
 
-2 to create, 0 to update, 0 to delete, 0 unchanged.
+4 to create, 0 to update, 0 to delete, 0 unchanged.
 ```
 
-Install it. Progress goes to stderr; the package's notes are printed at the end:
+The package has a workload `web` (nginx) and a Service `web` for it; karga adds the release proxy
+that serves the Service. `karga template demo shop` shows the rendered resources. Install it.
+Progress goes to stderr; the package's notes are printed at the end:
 
 ```console
-$ karga install demo shop --set service.port=18080
+$ karga install demo shop
 [  0s] workload web: image nginx:1.27-alpine (if-not-present)
 [  0s] workload web: creating demo-web
 [  2s] workload demo-web: waiting for demo-web to be ready (...)
+[  5s] proxy proxy: create done
 Release "demo" installed (revision 1).
   create network net
   create workload web
+  create service web
+  create proxy proxy
 
 NOTES:
 demo (revision 1) runs nginx:1.27-alpine.
 
-Open http://127.0.0.1:18080/
+Open http://web:80/ from the release network (not exposed on the host)
 Logs:   karga logs demo -f
 Shell:  karga exec demo web
 ```
 
-Look at it:
+Nothing is reachable from the host yet: the workload publishes no port. Inside the release, the
+Service name answers:
 
 ```console
+$ karga exec demo web -- wget -qO- http://web:80/
+<!DOCTYPE html>
+<html>
+<head>
+<title>Welcome to nginx!</title>
+...
+
 $ karga status demo
 Release:  demo
 Status:   deployed
 Revision: 1
 
-KIND      NAME  RUNTIME NAME  REVISION  DESIRED  ACTUAL   RESTARTS  HEALTH/BACKEND
-Network   net   demo-net      1         applied  present
-Workload  web   demo-web      1         applied  running  0         healthy
-
-$ karga logs demo --tail 3
-192.0.2.1 - - [17/Nov/2026:10:18:06 +0000] "GET / HTTP/1.1" 200 615 "-" "curl/8.7.1" "-"
-
-$ karga exec demo web -- nginx -v
-nginx version: nginx/1.27.5
+KIND      NAME   RUNTIME NAME      REVISION  DESIRED  ACTUAL   RESTARTS  HEALTH/BACKEND
+Network   net    demo-net          1         applied  present
+Proxy     proxy  demo-karga-proxy  1         applied  running  0         -> karga-web-r1
+Service   web    demo-karga-proxy  1         applied  routed             -> karga-web-r1
+Workload  web    demo-web          1         applied  running  0         healthy
 
 $ karga list
 NAME  REVISION  STATUS    PACKAGE  VERSION  UPDATED
-demo  1         deployed  shop     0.1.0    2026-11-17 13:18:06
+demo  1         deployed  shop     0.1.0    2026-11-17 17:59:08
 ```
 
-`karga exec demo web` without a command opens an interactive shell; `-it` gives any command a
-terminal. `karga status demo --watch` refreshes every two seconds.
+[Section 6](#6-services-and-the-gateway) exposes it on the host. `karga exec demo web` without a
+command opens an interactive shell; `-it` gives any command a terminal. `karga logs demo -f`
+follows the logs; `karga status demo --watch` refreshes every two seconds.
 
 Installing the same package with the same values again does nothing: `Release "demo" is already
 installed with the same package and values`.
@@ -178,7 +168,7 @@ installed with the same package and values`.
 See a package's defaults with `karga show values <package>`. Override them, later sources winning:
 
 ```console
-$ karga install db examples/postgres -f prod.yaml --set network.port=15432 --set database.password=s3cret-pw
+$ karga install db examples/postgres -f prod.yaml --set service.listener=pg --set database.password=s3cret-pw
 ```
 
 - `-f file.yaml` (repeatable), then `--set a.b=c` (types inferred), then `--set-string a=007`.
@@ -200,8 +190,8 @@ What a release was installed with (`--all` adds the defaults, `--revision N` an 
 $ karga get values db
 database:
   password: <redacted>
-network:
-  port: 15432
+service:
+  listener: pg
 ```
 
 Values the schema marks `"writeOnly": true` (passwords, tokens) are used to render but stored and
@@ -213,12 +203,12 @@ shown as `<redacted>`; `--reuse-values` cannot bring them back, so pass them aga
 ### Read the plan first
 
 ```console
-$ karga upgrade demo shop --reuse-values --set image.tag=1.27.3-alpine --dry-run
+$ karga upgrade demo shop --set image.tag=1.27.3-alpine --dry-run
 Revision: 1 -> 2
 
-  ~ WORKLOAD web (recreate: publishes hostPort 18080/tcp without the gateway (Linux, tcp))
+  ~ WORKLOAD web (replace)
 
-0 to create, 1 to update, 0 to delete, 1 unchanged. --verbose shows the changed fields.
+0 to create, 1 to update, 0 to delete, 3 unchanged. --verbose shows the changed fields.
 ```
 
 `--verbose` lists every changed field. The text in parentheses is the update strategy and, when a
@@ -226,19 +216,21 @@ workload asked for `replace` but cannot have it, why:
 
 - **recreate**: the old container stops, then the new one starts. A short outage.
 - **replace**: the new container starts next to the old one and takes over once healthy. Needs a
-  health check, read-only volumes, and on macOS no host port (see [section 7](#7-upgrades-without-downtime)).
+  health check and read-only volumes (see [section 7](#7-upgrades-without-downtime)).
 
 `--strategy recreate|replace` overrides the packages' choice for one upgrade or rollback.
 
 ### Upgrade
 
 ```console
-$ karga upgrade demo shop --reuse-values --set image.tag=1.27.3-alpine
+$ karga upgrade demo shop --set image.tag=1.27.3-alpine
 [  0s] workload web: image nginx:1.27.3-alpine (if-not-present)
-[  9s] workload web: stopping and removing demo-web
-[  9s] workload web: creating demo-web
+[  0s] workload web: starting demo-web-next next to demo-web
+[  5s] workload web: switching traffic to demo-web-next
+[  5s] workload web: waiting up to 10s for connections to demo-web to finish
+[  5s] workload web: stopping demo-web
 Release "demo" upgraded (revision 2).
-  update workload web (recreate: ...)
+  update workload web (replace)
 ```
 
 Images are pulled before anything running is touched. A tag that does not exist changes nothing:
@@ -274,7 +266,7 @@ Resources:
 
 $ karga rollback demo --dry-run
 Revision: 2 -> 4
-  ~ WORKLOAD web (recreate: ...)
+  ~ WORKLOAD web (replace)
 ```
 
 `karga rollback demo` returns to the last good revision before the current one; `karga rollback
@@ -283,81 +275,124 @@ changes your application made to its data (database migrations, for example). A 
 would delete a volume's data needs `--delete-volumes` (see
 [section 8](#8-databases-and-other-stateful-services)).
 
-## 6. Expose services through the gateway (Linux)
+## 6. Services and the gateway
 
-On Linux every host port and route of every release is served by the gateway, so several releases
-can share port 80 and upgrades do not drop host traffic.
+A workload publishes nothing. Two things make it reachable:
 
-### Host ports and routes
+- A **Service** gives it a name inside the release, on the networks the workload joins:
 
-A workload port is either a tcp **host port** (one release owns it) or a list of HTTP **routes**
-(shared by host name and path prefix):
+  ```yaml
+  kind: Service
+  metadata: {name: web}           # other workloads connect to web:80
+  spec:
+    workload: web
+    ports:
+      - {name: http, port: 80, targetPort: http}   # targetPort: the workload's port name or number
+  ```
 
-```yaml
-ports:
-  - containerPort: 5432
-    hostPort: 5432               # 127.0.0.1 unless hostIP says otherwise
-  - containerPort: 80
-    routes:
-      - host: shop.local         # path defaults to /, hostPort to 80 (443 with tls), hostIP to 127.0.0.1
-        path: /
-```
+  A Service name resolves only on its release's networks: two releases can both have a Service
+  `web` on port 80 without seeing each other. One release proxy serves all Services of a release, so
+  a port number belongs to one Service of the release.
+- An **exposure** puts a Service port on a listener of the host gateway. Listeners belong to the
+  host's administrator, not to packages.
 
-Two releases on one port:
+### Listeners and listen addresses (the administrator)
 
 ```console
-$ karga install shop shop --set route.host=shop.local
-$ karga install blog blog --set route.host=blog.local
+$ karga gateway listener list
+NAME       PORT  PROTOCOL  SERVICES
+web        80    http
+websecure  443   https
+
+$ karga gateway listener add pg --port 15432 --protocol tcp
+listener pg added (tcp on port 15432)
+```
+
+- `http` and `https` listeners are shared: each exposure selects a Service by host name and path
+  prefix. A `tcp` listener belongs to one Service.
+- Every listener binds the addresses of `karga gateway set listen`, by default `127.0.0.1` only:
+  nothing is reachable from other machines until you say so.
+
+  ```console
+  $ karga gateway set listen 0.0.0.0          # every interface; or a list: 10.0.0.5,127.0.0.1
+  gateway listens on 0.0.0.0
+  ```
+
+  Then make sure DNS points the host names at the server and the firewall lets the ports through.
+- A listener a Service uses cannot be removed:
+
+  ```console
+  $ karga gateway listener remove pg
+  Error: gateway listener "pg" is used by db/postgres; remove those exposures first
+  ```
+
+### Expose a Service (the package)
+
+```yaml
+spec:
+  expose:
+    - {port: http, listener: web, host: shop.local}        # path defaults to /
+    - {port: postgres, listener: pg}                         # tcp: no host
+```
+
+The scaffold from `karga create` exposes its Service with `--set expose.host=...`; the examples with
+`--set service.listener=...`:
+
+```console
+$ karga upgrade demo shop --reuse-values --set expose.host=shop.local --dry-run
+  ~ SERVICE web
+  ~ PROXY proxy (recreate: image, limits or exposed ports changed: brief interruption)
+
+$ karga upgrade demo shop --reuse-values --set expose.host=shop.local
+Release "demo" upgraded (revision 3).
+  update service web
+  update proxy proxy (recreate: image, limits or exposed ports changed: brief interruption)
 
 $ curl -s -o /dev/null -w "%{http_code}\n" -H "Host: shop.local" http://127.0.0.1/
 200
-$ curl -s -o /dev/null -w "%{http_code}\n" -H "Host: nobody.local" http://127.0.0.1/
-404
 
 $ karga gateway status
 Gateway:    running, ready (Envoy 1.36.13)
 Image:      envoyproxy/envoy:distroless-v1.36.13@sha256:...
+Listen:     127.0.0.1
 Access log: off
 
-LISTENER      ROUTE        RELEASE  WORKLOAD  UPSTREAM
-127.0.0.1:80  blog.local/  blog     web       127.0.0.1:35593
-127.0.0.1:80  shop.local/  shop     web       127.0.0.1:39435
+LISTENER  ROUTE        RELEASE  SERVICE  UPSTREAM
+web:80    shop.local/  demo     web:80   127.0.0.1:34359
 ```
 
-A host and path that another release already serves is refused before anything changes:
+Exposing a new port recreates the release proxy (it publishes the port on a loopback upstream for
+the gateway); changing a host or path does not. An exposure the gateway cannot serve is refused
+before anything changes:
 
 ```console
-$ karga install other shop --set route.host=shop.local
-Error: Workload "web": route shop.local/ on 127.0.0.1:80 is already routed to shop: port already in use
+$ karga install other shop --set expose.host=shop.local
+Error: Service "web": expose http on listener web: shop.local/ is already routed to demo/web: port already in use
+revision 1 failed; nothing was installed. Fix the problem and run 'karga install' again
+
+$ karga install db examples/postgres --set database.password=s3cret-pw --set service.listener=pg
+Error: Service "postgres": expose postgres on listener pg: no such gateway listener; the host's administrator adds it with 'karga gateway listener add pg --port <port> --protocol tcp|http|https'
 ```
 
-An install that fails before creating anything leaves no release behind (`revision 1 failed;
-nothing was installed`).
-
-Set `hostIP: 0.0.0.0` on a port or route to listen on every interface. Applications behind routes
-receive the client address in `x-forwarded-for`.
+Applications behind http and https listeners receive the client address in `x-forwarded-for`.
 
 ### TLS
 
-Add `tls: {secret: <name>}` to a route. The Secret holds the PEM certificate chain as `tls.crt` and
-the key as `tls.key`; the route moves to port 443 and plain HTTP on port 80 redirects to it:
+Expose on an https listener (`websecure` on a new host) with a Secret that holds the PEM certificate
+chain as `tls.crt` and the key as `tls.key`. Plain HTTP on the port-80 http listener redirects to it,
+unless that listener serves the host itself:
 
 ```yaml
 kind: Secret
 metadata: {name: blog-cert}
 spec:
   values:
-    tls.crt: |
-      -----BEGIN CERTIFICATE-----
-      ...
-    tls.key: |
-      -----BEGIN PRIVATE KEY-----
-      ...
+    tls.crt: {{ .Values.tls.cert | quote }}     # from a values file kept outside git
+    tls.key: {{ .Values.tls.key | quote }}
 ---
-# in the workload
-      routes:
-        - host: blog.local
-          tls: {secret: blog-cert}
+# in the Service
+  expose:
+    - {port: http, listener: websecure, host: blog.local, tls: {secret: blog-cert}}
 ```
 
 ```console
@@ -367,10 +402,8 @@ $ curl -s -o /dev/null -w "%{http_code} %{redirect_url}\n" -H "Host: blog.local"
 301 https://blog.local/
 ```
 
-Keep the certificate out of the package: render the Secret from values passed with `-f` from a
-file outside git, and mark them `writeOnly`. To renew a certificate, upgrade with the new one; the
-workload is replaced and the gateway serves the new certificate. There is no automatic certificate
-(ACME) yet.
+Mark the certificate values `writeOnly` in the schema. To renew a certificate, upgrade with the new
+one; the gateway serves it after the upgrade. There is no automatic certificate (ACME) yet.
 
 ### Gateway access log
 
@@ -381,11 +414,6 @@ $ karga logs --gateway -f
 ```
 
 It is off by default to keep the log small; turning it on or off does not interrupt traffic.
-
-### On macOS
-
-Docker publishes host ports itself and `routes` are refused (`routes need the gateway (Linux with a
-local Docker)`). Use host ports, one per release.
 
 ## 7. Upgrades without downtime
 
@@ -403,21 +431,23 @@ updateStrategy:
   drainTimeout: 10s # how long open connections may finish on the old container
 ```
 
-A replace on Linux:
+A replace:
 
 ```console
-$ karga upgrade shop shop --reuse-values --set image.tag=1.27.3-alpine
-[ 11s] workload web: starting shop-web-next next to shop-web
-[ 13s] workload shop-web-next: waiting for shop-web-next to be ready (...)
-[ 16s] workload web: switching traffic to shop-web-next
-[ 16s] workload web: waiting up to 10s for connections to shop-web to finish
-[ 16s] workload web: stopping shop-web
-Release "shop" upgraded (revision 2).
+$ karga upgrade demo shop --set image.tag=1.27.3-alpine
+[  0s] workload web: starting demo-web-next next to demo-web
+[  2s] workload demo-web-next: waiting for demo-web-next to be ready (...)
+[  5s] workload web: switching traffic to demo-web-next
+[  5s] workload web: waiting up to 10s for connections to demo-web to finish
+[  5s] workload web: stopping demo-web
+Release "demo" upgraded (revision 2).
   update workload web (replace)
 ```
 
-The gateway and the release proxy only send traffic to the new container once it is healthy, and
-the old one keeps its open connections until they finish or `drainTimeout` passes. If the new
+Every client reaches the workload through its Service, that is through the release proxy, from the
+release's networks and through the gateway alike. The proxy sends traffic to the new container only
+once it is healthy, and the old one keeps its open connections until they finish or `drainTimeout`
+passes. If the new
 container never becomes healthy it is stopped and kept for its logs, and nothing that was running
 changed.
 
@@ -429,15 +459,16 @@ Rules to know:
 - **Volumes.** A workload that mounts a volume read-write, or keeps an image VOLUME in an anonymous
   volume (see [section 8](#what-happens-to-data-on-an-upgrade)), is always recreated: two
   containers writing the same data are unsafe.
-- **Release proxy.** `karga status` shows it with the backend it routes to:
+- **Release proxy.** `karga status` shows it, and each Service, with the backend it routes to:
 
   ```
-  Proxy     proxy  shop-karga-proxy  1  applied  running  0  -> karga-web-r1
+  Proxy     proxy  demo-karga-proxy  1  applied  running  0  -> karga-web-r1
+  Service   web    demo-karga-proxy  1  applied  routed      -> karga-web-r1
   ```
 
-  Replace workloads of one release cannot share a container port behind it; the later one (by name)
-  switches by DNS and the plan says so. Adding or removing a replace workload briefly interrupts the
-  proxy's open connections on that network.
+  Adding or removing a Service briefly interrupts the proxy's open connections on that network.
+- A workload no Service targets receives no traffic; a replace just starts the new container and
+  stops the old one once it is healthy.
 
 ## 8. Databases and other stateful services
 
@@ -445,12 +476,22 @@ Databases mount a volume read-write, so they upgrade with **recreate** (a short 
 their data in the volume across upgrades, rollbacks and reinstalls:
 
 ```console
-$ karga install db examples/postgres --set network.port=15432 --set database.password=s3cret-pw
+$ karga install db examples/postgres --set database.password=s3cret-pw --set service.listener=pg
+Release "db" installed (revision 1).
   create network postgres-network
   create volume postgres-data
   create secret postgres-credentials
   create workload postgres
+  create service postgres
+  create proxy proxy
+
+$ docker port db-postgres                  # the database publishes nothing
+$ docker port db-karga-proxy               # the proxy: only a loopback upstream for the gateway
+5432/tcp -> 127.0.0.1:37115
 ```
+
+Other workloads of the release connect to `postgres:5432`; outside clients to the `pg` listener
+(`127.0.0.1:15432` until `karga gateway set listen` says otherwise).
 
 Volumes have `retention: retain` by default: `uninstall` keeps them and a later install of the same
 release name reuses them, and a volume removed from the package stays in Docker. `retention: delete`
@@ -579,15 +620,17 @@ machine-readable output for every read command.
 | Error | Meaning and fix |
 |-------|-----------------|
 | `values do not match values.schema.json` | A value has the wrong type or range; fix the `--set` or file. |
-| `hostPort ... is taken by another process on this host` / `is used by release X` | Another program or release holds the port; pick another one. |
-| `route host/ on ip:80 is already routed to X` | Another release serves that host and path. |
+| `no such gateway listener` | The Service exposes on a listener the host does not have; the administrator adds it (`karga gateway listener add`) or the package uses another one. |
+| `... is already routed to R/S` / `the listener is used by R/S` | Another release's Service holds that host and path, or that tcp listener. |
+| `...:N is taken by another process on this host` | Another program holds a listener's port on a listen address. |
+| `is a tcp listener and takes no host` / `needs a host` / `needs tls.secret` | The exposure does not fit the listener's protocol. |
 | `image ... was not found in its registry` | Wrong repository or tag; nothing running changed. |
 | `workload X is unhealthy: http check on ... failed` | The application did not answer its health check; `karga logs` the stopped container. |
 | `another operation is running on this release` | Another karga command works on the release; wait for it. |
 | `a previous operation on this release was interrupted` | A karga process died mid-operation; check `karga status`, then rerun with `--force`. |
 | `gateway: proxy does not route to ... : <reason>` | The gateway did not accept or reach the new backend; the reason (and Envoy's own message, if it refused the configuration) follows. |
-| `routes need the gateway (Linux with a local Docker)` | Routes are Linux-only; use a host port. |
-| `healthCheck type tcp needs port N published here` | On macOS karga cannot reach an unpublished port; add a `hostPort` or use `exec`. |
+| `services ... need karga's gateway and release proxy (Linux with a local Docker)` | karga runs on Linux with a local Docker daemon. |
+| `a Workload no longer exposes ports; a Service does` | The package uses the removed `hostPort`, `hostIP` or `routes`; move them to a Service. |
 
 ### Things changed behind karga's back
 
@@ -610,13 +653,13 @@ know are listed under "Not tracked by karga".
 
 ## 12. Back up and move a host
 
-A complete backup is three things:
+A complete backup is the state, its key, the gateway settings and the volumes:
 
 ```console
 $ karga state backup ~/backup/karga.db
 state written to ~/backup/karga.db
 The backup does not hold ~/.local/share/karga/state.key, which keys the digests of secret values: copy it too (...)
-$ cp ~/.local/share/karga/state.key ~/backup/
+$ cp ~/.local/share/karga/state.key ~/.local/share/karga/gateway.json ~/backup/
 $ karga volume backup db postgres-data ~/backup/db-postgres-data.tar.gz --stop
 ```
 
@@ -634,6 +677,8 @@ Restore on a new host, in this order:
      create workload web
    ```
 
+   Copy `gateway.json` too, so the new host has the same listeners and listen addresses.
+
 4. Restore the volumes with `karga volume restore`.
 
 Without the old state (a fresh host), install each release and restore its volumes; only the history
@@ -649,7 +694,7 @@ shop/
   Package.yaml          name, version, runtime.supported: [docker]
   values.yaml           defaults, with comments
   values.schema.json    types, ranges, "writeOnly": true for secrets
-  templates/web.yaml    resources, separated by ---
+  templates/web.yaml    resources, separated by --- (a Workload, its Service, ...)
   templates/_helpers.tpl named templates ({{ define "url" }} ... used with include)
   NOTES.txt             shown after install and upgrade
   files/                read with .Files.Get "name"
@@ -672,6 +717,10 @@ $ karga install demo shop --dry-run    # what it would do
 A resource that does not decode names its file, document and line in the rendered output; look at
 that line with `karga template`. The package format is `karga.io/v1alpha1` and may still change.
 
+Give every workload other workloads or users talk to a Service, and expose it through a values
+setting (a listener name, a host) rather than a fixed one: the listeners are the host's, and the
+person installing the package knows them (`karga gateway listener list`).
+
 ## 14. Uninstall and clean up
 
 ```console
@@ -683,13 +732,17 @@ db-postgres-data
 
 - Volumes are kept (reinstalling `db` reuses them); `--delete-volumes` removes them.
 - `--keep-history` keeps the release's revisions in the state.
-- When the last release using the gateway or a release proxy goes, they go too.
+- The release proxy goes with the release; the gateway goes when nothing is exposed anymore. The
+  gateway's listeners and listen addresses stay: they are the host's settings.
 
 ## 15. Limits to know
 
-- Traffic features (gateway, routes, TLS, the release proxy) need Linux with a local Docker daemon.
-- The gateway runs as root (with only the capabilities to bind ports) and is a single point for host
-  traffic; local users can reach the loopback ports behind it.
+- karga needs Linux with a local Docker daemon.
+- Services carry TCP only; a release's Service ports must be distinct numbers.
+- Workloads on the same network of a release can reach each other by IP (and Docker resolves
+  container names); there is no network policy.
+- The gateway runs as root (with only the capabilities to bind ports) and is a single point for
+  outside traffic; local users can reach the loopback ports behind it.
 - Images are pulled anonymously; private registries are not supported yet.
 - Packages come from local directories or archives; there is no repository or dependency support.
 - There are no lifecycle tasks (e.g. running migrations before an upgrade) yet.

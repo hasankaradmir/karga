@@ -29,6 +29,11 @@ func TestMain(m *testing.M) {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
+	if runtime.GOOS != "linux" {
+		// Services need karga's gateway and release proxy: Linux with a local Docker.
+		fmt.Fprintln(os.Stderr, "e2e tests run on Linux with a local Docker: use make test-linux")
+		os.Exit(1)
+	}
 	karga = filepath.Join(dir, "karga")
 	build := exec.Command("go", "build", "-o", karga, "../../cmd/karga")
 	build.Stdout, build.Stderr = os.Stdout, os.Stderr
@@ -179,7 +184,9 @@ func TestRedisLifecycle(t *testing.T) {
 	rel := releaseName("e2e-redis")
 	e.cleanup(rel)
 	port := freePort(t)
-	portSet := "network.port=" + strconv.Itoa(port)
+	// The host's administrator opens a tcp listener; the package exposes its Service on it.
+	e.run("gateway", "listener", "add", "redis", "--port", strconv.Itoa(port), "--protocol", "tcp")
+	portSet := "service.listener=redis"
 
 	// 1. Lint and 2. install.
 	e.run("lint", "../../examples/redis")
@@ -215,14 +222,15 @@ func TestRedisLifecycle(t *testing.T) {
 	if got := redis(t, port, "GET e2e"); !strings.Contains(got, "kept") {
 		t.Fatalf("key after restore: %q", got)
 	}
-	// Docker publishes the port itself, or (Linux gateway) only a loopback upstream: never on 0.0.0.0.
-	if out, _ := exec.Command("docker", "port", rel+"-redis").Output(); !strings.Contains(string(out), "127.0.0.1:") || strings.Contains(string(out), "0.0.0.0") {
-		t.Fatalf("published ports: %s", out)
+	// The workload publishes nothing; the release proxy only a loopback upstream for the gateway.
+	if out, _ := exec.Command("docker", "port", rel+"-redis").Output(); len(strings.TrimSpace(string(out))) != 0 {
+		t.Fatalf("the workload published ports: %s", out)
 	}
-	if runtime.GOOS == "linux" {
-		if out := e.run("gateway", "status"); !strings.Contains(out, "127.0.0.1:"+strconv.Itoa(port)) {
-			t.Fatalf("gateway status:\n%s", out)
-		}
+	if out, _ := exec.Command("docker", "port", rel+"-karga-proxy").Output(); !strings.Contains(string(out), "127.0.0.1:") || strings.Contains(string(out), "0.0.0.0") {
+		t.Fatalf("proxy ports: %s", out)
+	}
+	if out := e.run("gateway", "status"); !strings.Contains(out, "redis:"+strconv.Itoa(port)) || !strings.Contains(out, "Listen:     127.0.0.1") {
+		t.Fatalf("gateway status:\n%s", out)
 	}
 
 	// 4. Dry run shows the plan and changes nothing.
@@ -274,7 +282,7 @@ func TestPostgresSecretStaysOutOfDocker(t *testing.T) {
 	rel := releaseName("e2e-pg")
 	e.cleanup(rel)
 	const password = "e2e-hunter2"
-	e.run("install", rel, "../../examples/postgres", "--set", "network.port="+strconv.Itoa(freePort(t)), "--set", "database.password="+password)
+	e.run("install", rel, "../../examples/postgres", "--set", "database.password="+password)
 	if st, actual := status(t, e, rel); st != "deployed" || actual["Workload"] != "running/healthy" {
 		t.Fatalf("status: %s %v", st, actual)
 	}

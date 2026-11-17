@@ -7,7 +7,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"slices"
 	"sort"
 	"strings"
 	"sync/atomic"
@@ -115,17 +114,26 @@ func withoutStrategy(r resource.Resource) resource.Resource {
 }
 
 // Specs returns the canonical redacted JSON and digest of every resource. A workload's digest also
-// covers the Config and Secret resources it mounts or serves TLS with, so changing their content
-// applies it again.
+// covers the Config and Secret resources it mounts, and a Service's the Secrets it serves TLS with,
+// so changing their content applies them again.
 func Specs(rs []resource.Resource) (map[Key]release.AppliedResource, error) {
 	out := map[Key]release.AppliedResource{}
-	behind, _ := proxied(rs)
-	for _, pass := range []bool{false, true} { // non-workloads first, workloads need their digests
+	behind := servicesOf(rs).wl
+	pass := func(r resource.Resource) int {
+		switch r.Spec.(type) {
+		case *resource.ServiceSpec:
+			return 1
+		case *resource.WorkloadSpec:
+			return 2
+		}
+		return 0
+	}
+	for p := range 3 { // Configs and Secrets first: the others fold their digests in
 		for _, r := range rs {
-			w, isWorkload := r.Spec.(*resource.WorkloadSpec)
-			if isWorkload != pass {
+			if pass(r) != p {
 				continue
 			}
+			w, isWorkload := r.Spec.(*resource.WorkloadSpec)
 			js, err := json.Marshal(withoutStrategy(Redacted(r)))
 			if err != nil {
 				return nil, err
@@ -142,8 +150,10 @@ func Specs(rs []resource.Resource) (map[Key]release.AppliedResource, error) {
 						_, _ = fmt.Fprintf(h, "\n%s/%s=%s", kind, name, out[Key{kind, name}].Digest) // hash writes never fail
 					}
 				}
-				for _, name := range w.TLSSecrets() {
-					_, _ = fmt.Fprintf(h, "\ntls/%s=%s", name, out[Key{resource.KindSecret, name}].Digest) // a new certificate re-applies the workload
+			}
+			if s, ok := r.Spec.(*resource.ServiceSpec); ok {
+				for _, name := range s.TLSSecrets() {
+					_, _ = fmt.Fprintf(h, "\ntls/%s=%s", name, out[Key{resource.KindSecret, name}].Digest) // a new certificate updates the gateway
 				}
 			}
 			out[keyOf(r)] = release.AppliedResource{
@@ -169,8 +179,9 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 	for _, a := range applied {
 		current[Key{a.Kind, a.Name}] = a
 	}
-	hadProxy := appliedProxied(applied)
-	behind, reasons := proxied(desired)
+	hadProxy := appliedBehind(applied)
+	svcs := servicesOf(desired)
+	behind := svcs.wl
 	ordered, err := Order(desired)
 	if err != nil {
 		return Plan{}, err
@@ -178,13 +189,13 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 
 	var plan Plan
 	var errs []string
+	if !proxySupported.Load() && len(svcs.svc) > 0 {
+		errs = append(errs, fmt.Sprintf("services %s need karga's gateway and release proxy (Linux with a local Docker)", strings.Join(svcs.names(), ", ")))
+	}
 	for _, r := range ordered {
 		w, ok := r.Spec.(*resource.WorkloadSpec)
 		if !ok {
 			continue
-		}
-		if !proxySupported.Load() && slices.ContainsFunc(w.Ports, func(p resource.Port) bool { return len(p.Routes) > 0 }) {
-			errs = append(errs, fmt.Sprintf("workload %q: routes need the gateway (Linux with a local Docker)", r.Metadata.Name))
 		}
 		if why := probeReachable(w); why != "" {
 			errs = append(errs, fmt.Sprintf("workload %q: %s", r.Metadata.Name, why))
@@ -195,6 +206,9 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 		k := keyOf(r)
 		want := specs[k]
 		c := Change{Kind: k.Kind, Name: k.Name, Resource: &r, Spec: want.Spec, Digest: want.Digest, RuntimeName: RuntimeName(releaseName, k.Name)}
+		if k.Kind == resource.KindService {
+			c.RuntimeName = ProxyName(releaseName) // a Service has no container; the release proxy serves it
+		}
 		have, exists := current[k]
 		switch {
 		case !exists:
@@ -206,12 +220,12 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 			c.Fields = fieldChanges(k.Kind, have.Spec, want.Spec)
 			w, isWorkload := r.Spec.(*resource.WorkloadSpec)
 			if isWorkload {
-				c.Strategy, c.StrategyReason = workloadStrategy(w, strategy, behind[k.Name] != nil, hadProxy[k.Name], reasons[k.Name])
+				c.Strategy, c.StrategyReason = workloadStrategy(w, strategy, behind[k.Name] != nil, hadProxy[k.Name])
 			}
 			if len(c.Fields) == 0 {
 				why := "(mounted Config/Secret content or previous failure)"
 				if isWorkload && (behind[k.Name] != nil) != hadProxy[k.Name] {
-					why = "(proxy placement)"
+					why = "(service placement)"
 				}
 				c.Fields = []FieldChange{{Path: why}}
 			}
@@ -222,8 +236,8 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 		plan.Changes = append(plan.Changes, c)
 		delete(current, k)
 	}
-	if len(behind) > 0 {
-		c, err := proxyChange(releaseName, behind, current)
+	if len(svcs.svc) > 0 {
+		c, err := proxyChange(releaseName, svcs, current)
 		if err != nil {
 			return Plan{}, err
 		}
@@ -250,30 +264,21 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 	return plan, nil
 }
 
-// workloadStrategy adds the proxy transitions to strategyFor: moving a workload behind the release
-// proxy or out from behind it changes its network alias, which only a recreate can do. A proxied
-// workload is always replaced: the proxy keeps serving while the backend changes. notProxied says
-// why a replaced workload is not behind the proxy (its network clients switch by DNS).
-func workloadStrategy(w *resource.WorkloadSpec, override string, now, had bool, notProxied string) (string, string) {
+// workloadStrategy adds the service transitions to strategyFor: a workload a Service starts or
+// stops targeting gains or loses its backend alias, which only a recreate can do.
+func workloadStrategy(w *resource.WorkloadSpec, override string, now, had bool) (string, string) {
 	switch {
 	case now && !had:
-		return resource.StrategyRecreate, "moving behind the proxy"
+		return resource.StrategyRecreate, "a service now targets it"
 	case !now && had:
-		return resource.StrategyRecreate, "moving out from behind the proxy"
-	case now:
-		return resource.StrategyReplace, ""
+		return resource.StrategyRecreate, "no service targets it anymore"
 	}
-	typ, why := strategyFor(w, override)
-	if typ == resource.StrategyReplace && notProxied != "" {
-		why = "not behind the proxy, " + notProxied
-	}
-	return typ, why
+	return strategyFor(w, override)
 }
 
 // strategyFor decides how a workload update is applied. replace runs the new container next to the
-// old one, which is only safe without host ports (two containers cannot bind one) unless the gateway
-// holds them, without read-write volumes (two writers on the same data) and with a healthcheck (to
-// know it is ready).
+// old one, which is only safe without read-write volumes (two writers on the same data) and with a
+// healthcheck (to know it is ready).
 func strategyFor(w *resource.WorkloadSpec, override string) (string, string) {
 	requested, _ := w.Strategy()
 	if override != "" {
@@ -287,11 +292,6 @@ func strategyFor(w *resource.WorkloadSpec, override string) (string, string) {
 
 // eligible checks whether w can be replaced, ignoring what was requested.
 func eligible(w *resource.WorkloadSpec) (string, string) {
-	for _, p := range w.Ports {
-		if p.HostPort != 0 && (!proxySupported.Load() || p.Protocol == "udp") {
-			return resource.StrategyRecreate, fmt.Sprintf("publishes hostPort %d/%s without the gateway (Linux, tcp)", p.HostPort, p.Protocol)
-		}
-	}
 	for _, m := range w.Mounts {
 		if m.Volume != "" && !m.ReadOnly {
 			return resource.StrategyRecreate, fmt.Sprintf("mounts volume %s read-write", m.Volume)

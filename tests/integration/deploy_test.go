@@ -7,16 +7,15 @@ import (
 	"context"
 	"errors"
 	"slices"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/hasankaradmir/karga/internal/application/deployment"
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/application/packages"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/ports"
-	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )
 
 func render(t *testing.T, example, release string, sets ...string) []resource.Resource {
@@ -41,6 +40,11 @@ func render(t *testing.T, example, release string, sets ...string) []resource.Re
 func deploy(t *testing.T, rt ports.Runtime, example, release string, sets ...string) (deployment.ExecRequest, error) {
 	t.Helper()
 	rs := render(t, example, release, sets...)
+	info, err := rt.Info(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	deployment.UseProxies(info)
 	plan, err := deployment.Diff(release, rs, nil, "")
 	if err != nil {
 		t.Fatal(err)
@@ -75,8 +79,8 @@ func TestRedis(t *testing.T) {
 	rt := newRuntime(t)
 	ctx := context.Background()
 	release := releaseName("it-redis")
-	port := runtimetest.FreePort(t)
-	req, err := deploy(t, rt, "redis", release, "network.port="+strconv.Itoa(port))
+	l, _ := listener(t, gateway.ProtocolTCP)
+	req, err := deploy(t, rt, "redis", release, "service.listener="+l)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -90,14 +94,14 @@ func TestRedis(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range pub {
-		if p.Release == release && p.HostIP != "127.0.0.1" {
-			t.Fatalf("port published on %s, want 127.0.0.1 only: %+v", p.HostIP, pub)
+		if p.Release == release && (p.HostIP != "127.0.0.1" || p.Workload != deployment.ProxyName(release)) {
+			t.Fatalf("only the release proxy publishes, on 127.0.0.1 only: %+v", pub)
 		}
 	}
 
-	// A second release on the same host port fails in pre-flight, before creating anything.
+	// A second release on the same tcp listener fails in pre-flight, before creating anything.
 	clash := releaseName("it-clash")
-	if _, err := deploy(t, rt, "redis", clash, "network.port="+strconv.Itoa(port)); !errors.Is(err, ports.ErrPortInUse) {
+	if _, err := deploy(t, rt, "redis", clash, "service.listener="+l); !errors.Is(err, ports.ErrPortInUse) {
 		t.Fatalf("port clash: want ErrPortInUse, got %v", err)
 	}
 	if objs := managed(t, rt, clash); len(objs) != 0 {
@@ -118,10 +122,9 @@ func TestPostgres(t *testing.T) {
 	t.Parallel()
 	rt := newRuntime(t)
 	release := releaseName("it-pg")
-	port := runtimetest.FreePort(t)
 	// Postgres reads POSTGRES_PASSWORD_FILE as the postgres user (uid 999): healthy proves the
 	// bind-mounted secret is readable by a non-root container user.
-	if _, err := deploy(t, rt, "postgres", release, "network.port="+strconv.Itoa(port), "database.password=s3cret"); err != nil {
+	if _, err := deploy(t, rt, "postgres", release, "database.password=s3cret"); err != nil {
 		t.Fatal(err)
 	}
 	st, err := rt.GetWorkload(context.Background(), release+"-postgres")

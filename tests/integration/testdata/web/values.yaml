@@ -2,24 +2,28 @@
 content: v1
 # healthy=false makes the healthcheck fail.
 healthy: true
-# publish=true adds a tcp hostPort (through the gateway on Linux; replace falls back to recreate elsewhere).
-publish: false
-# route=<host> serves the port as an HTTP route for that host on hostPort port (Linux gateway).
+# listener=<name> exposes the web port on that tcp gateway listener (the test adds it).
+listener: ""
+# route=<host> exposes the web port for that host on gateway listener routeListener.
 route: ""
-port: 18080
+routeListener: web
 # startDelay seconds before the server listens, like a real application starting up.
 startDelay: 0
-# strategy is the update strategy; replace puts the workload behind the release proxy on Linux.
+# strategy is the update strategy.
 strategy: replace
-# listenPort is the port the server listens on (and the containerPort).
+# listenPort is the port the server listens on (the containerPort); servicePort is the port of
+# Service web (default listenPort).
 listenPort: 8080
-# second=true adds workload api, serving the same content on listenPort+1.
+servicePort: 0
+# second=true adds workload and Service api, serving the same content on listenPort+1.
 second: false
-# echoPort>0 adds a tcp echo server on containerPort 9000, published on that host port.
-echoPort: 0
+# echo=true adds a tcp echo server on containerPort 9000 (Service web port 9000); echoListener=<name>
+# exposes it on that tcp gateway listener.
+echo: false
+echoListener: ""
 # drain is the replace drain timeout.
 drain: 2s
-# tls.cert/tls.key (PEM) serve the route as HTTPS on port; plain HTTP on 80 redirects to it.
+# tls.cert/tls.key (PEM) serve the route on an https listener; plain HTTP on port 80 redirects to it.
 tls:
   cert: ""
   key: ""

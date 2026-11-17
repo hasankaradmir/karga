@@ -3,13 +3,17 @@
 Package management for containers on a **single host**, without Kubernetes.
 
 karga renders a versioned package (templates + values + schema) into its own small resource model
-(Workload, Volume, Network, Config, Secret), applies it to Docker, and keeps every install, upgrade
-and rollback as an immutable revision in a local SQLite database.
+(Workload, Service, Volume, Network, Config, Secret), applies it to Docker, and keeps every install,
+upgrade and rollback as an immutable revision in a local SQLite database.
+
+Nothing a package runs is reachable on its own. Workloads publish no port; a **Service** gives a
+workload a name inside its release, and only the host's administrator decides what is reachable from
+outside, by defining the listeners of the host **gateway** that Services can be exposed on.
 
 ```bash
-karga install cache examples/redis --set network.port=6379
-karga upgrade cache examples/redis --set network.port=6379 --set config.maxmemory=128mb --dry-run
-karga upgrade cache examples/redis --set network.port=6379 --set config.maxmemory=128mb
+karga install cache examples/redis
+karga upgrade cache examples/redis --set config.maxmemory=128mb --dry-run
+karga upgrade cache examples/redis --set config.maxmemory=128mb
 karga history cache
 karga rollback cache 1
 karga uninstall cache          # the data volume is kept
@@ -17,18 +21,20 @@ karga uninstall cache          # the data volume is kept
 
 ## Status
 
-MVP. Works on one Linux or macOS host with Docker. Not available (yet): Podman, package
-repositories/registries, package dependencies, a daemon that reconciles drift, Windows.
+MVP, for one Linux host with Docker. Not available (yet): Podman, package repositories/registries,
+package dependencies, a daemon that reconciles drift. macOS and Windows are not supported: Services
+need karga's gateway and release proxy, which need Linux with a local Docker daemon (the macOS build
+only lints and renders packages).
 
 ## Requirements
 
+- Linux with a local Docker Engine. karga connects through `DOCKER_HOST` or, like the docker CLI,
+  the active `docker context`.
 - Go 1.27 to build.
-- A Docker Engine: Linux Docker, or OrbStack, Docker Desktop or colima on macOS. karga connects
-  through `DOCKER_HOST` or, like the docker CLI, the active `docker context`.
 
 ## Install
 
-From a release (Linux and macOS, amd64 and arm64), checked against the release checksums. The
+From a release (Linux, amd64 and arm64), checked against the release checksums. The
 repository is private, so the script downloads with an authenticated GitHub CLI (`gh auth login`) or
 `GITHUB_TOKEN`:
 
@@ -45,12 +51,15 @@ From source: `make build` produces `bin/karga`. Shell completion: `karga complet
 karga lint examples/redis
 karga template cache examples/redis --set image.tag=7.4.2      # render only, touches nothing
 
-karga install cache examples/redis --set network.port=16379
+karga install cache examples/redis
 karga status cache
-docker exec cache-redis redis-cli ping                         # port 16379 is published on 127.0.0.1 only
+karga exec cache redis -- redis-cli ping                       # nothing is reachable from the host
 
-karga upgrade cache examples/redis --set network.port=16379 --set config.maxmemory=128mb --dry-run
-karga upgrade cache examples/redis --set network.port=16379 --set config.maxmemory=128mb
+# The host's administrator opens a tcp listener; the package exposes its Service on it.
+karga gateway listener add redis --port 16379 --protocol tcp
+karga upgrade cache examples/redis --set service.listener=redis --dry-run
+karga upgrade cache examples/redis --set service.listener=redis
+redis-cli -p 16379 ping                                        # through the gateway, on 127.0.0.1 only
 karga history cache
 karga get values cache
 karga get manifest cache
@@ -79,7 +88,9 @@ logs). State lives in `$KARGA_HOME` (default `$XDG_DATA_HOME/karga`, i.e. `~/.lo
 | `get values\|manifest\|notes <release>` | Stored values (`--all` merges defaults), rendered resources, or the package's notes |
 | `exec <release> <workload> [-it] [-- cmd]` | Run a command in a workload (default: an interactive `sh`); exits with its code |
 | `logs <release> [workload...]` | Container logs (`--tail`, `-f`); `--proxy` for the release proxy, `--gateway` for the gateway |
-| `gateway status` | Health, version and image of the host gateway, and its listeners, routes and upstreams (Linux) |
+| `gateway status` | Health, version, image and listen addresses of the host gateway, and what it serves |
+| `gateway listener list\|add\|remove` | The ports Services can be exposed on: `add <name> --port <port> --protocol tcp\|http\|https`; a listener in use cannot be removed |
+| `gateway set listen <ip>[,<ip>]` | Where every listener binds (default `127.0.0.1`; `0.0.0.0` is every interface) |
 | `gateway set access-log on\|off` | Log every request and connection the gateway handles (off by default) |
 | `state backup <file>` | Consistent copy of the state database, safe while karga runs |
 | `volume backup\|restore <release> <volume> <file>` | Copy a volume's files to/from a gzipped tar; `--stop` for a consistent backup |
@@ -129,7 +140,9 @@ stored and printed as `<redacted>`; `--reuse-values` asks for them again.
 All resources use `apiVersion: karga.io/v1alpha1` and `metadata.name` (a DNS label). Runtime objects
 are named `<release>-<name>` and labelled `io.karga.*`.
 
-**Workload**: one container.
+**Workload**: one container. It publishes nothing and its name in the package is not a DNS name:
+other workloads and outside clients reach it through a Service. (Docker still resolves the container
+name, `<release>-<name>`, on the release's networks; there is no network policy yet.)
 
 ```yaml
 kind: Workload
@@ -141,15 +154,9 @@ spec:
   command: []
   args: []
   environment: {KEY: value}
-  networks: [web-net]               # the workload is reachable as "web" on these networks
-  ports:
-    - containerPort: 80
-      hostPort: 8080                # optional, tcp: held by the gateway on Linux
-      hostIP: 127.0.0.1             # default; set 0.0.0.0 to expose on every interface
-    - containerPort: 3000
-      routes:                       # HTTP through the gateway (Linux); excludes hostPort
-        - {host: app.local, path: /, hostPort: 80, hostIP: 127.0.0.1}   # path, hostPort, hostIP are defaults
-        - {host: shop.example.com, tls: {secret: shop-cert}}            # HTTPS on 443; Secret has tls.crt, tls.key
+  networks: [web-net]               # Services of this workload are reachable on these networks
+  ports:                            # what the container listens on, for Services to refer to
+    - {name: http, containerPort: 80}           # protocol defaults to tcp
   mounts:
     - {volume: data, mountPath: /data, readOnly: false}
     - {config: site, mountPath: /etc/nginx/conf.d}      # always read-only
@@ -168,12 +175,30 @@ spec:
   stopTimeout: 10s                                # default; time to shut down after SIGTERM before a kill (1s-1h)
 ```
 
+**Service**: a stable name for one workload inside the release, served by the release proxy, and
+optionally exposed on the host gateway's listeners.
+
+```yaml
+kind: Service
+metadata: {name: shop}              # other workloads of the release connect to shop:80
+spec:
+  workload: web
+  ports:
+    - {name: http, port: 80, targetPort: http}   # targetPort: a port name or number of the workload (default: name)
+  expose:                                        # optional; listeners are defined by the host's administrator
+    - {port: http, listener: web, host: shop.example.com, path: /}           # http listener: by Host and path prefix
+    - {port: http, listener: websecure, host: shop.example.com, tls: {secret: shop-cert}}   # https; Secret has tls.crt, tls.key
+    # - {port: db, listener: pg}                 # tcp listener: belongs to this one service
+```
+
+One release proxy serves every Service of a release on one address, so a port number belongs to one
+Service of the release. A workload is reachable only on the networks it joins, so a Service's
+workload must join one.
+
 **Health checks:** `exec` runs a command inside the container (Docker's healthcheck), so the image
 needs that tool. `tcp` (the port accepts a connection) and `http` (GET `path` answers 2xx/3xx) are run
-by karga from the host and need nothing in the image: through the gateway's upstream, a published
-port, or on Linux the container's address. On macOS or with a remote Docker host, `tcp`/`http` need
-the port published with `hostPort`; the plan says so otherwise. Behind karga's proxies, Envoy checks
-the same HTTP path before switching traffic to a new container. All types take `interval`,
+by karga from the host against the container's address and need nothing in the image. Behind the
+release proxy, Envoy checks the same HTTP path before switching traffic to a new container. All types take `interval`,
 `timeout`, `retries` and `startPeriod`, and any of them makes a workload eligible for replace.
 
 **Limits and defaults:** Docker enforces memory (without extra swap), CPU and the process limit;
@@ -201,55 +226,50 @@ Before any change karga pulls every image it needs, so a bad tag fails without t
   when the workload mounts volumes read-only and has a healthcheck; otherwise the plan falls back to
   recreate and says why.
 
-### Traffic through karga's Envoys (Linux)
+### Traffic through karga's Envoys
 
-On Linux with a local Docker daemon, karga runs two kinds of Envoy (Envoy 1.36.13 distroless, pinned by
-digest, about 150MB, one worker thread, about 15MB RAM each, limited to 128Mi, 0.5 CPU and 256
-processes). Envoy updates ship with karga releases;
-a new image recreates the gateway and the release proxies on the next apply, a short interruption.
-`KARGA_PROXY_IMAGE` overrides the image.
+karga runs two kinds of Envoy (Envoy 1.36.13 distroless, pinned by digest, about 150MB, one worker
+thread, about 15MB RAM each, limited to 128Mi, 0.5 CPU and 256 processes). Envoy updates ship with
+karga releases; a new image recreates the gateway and the release proxies on the next apply, a short
+interruption. `KARGA_PROXY_IMAGE` overrides the image.
 
-- **Gateway** (`karga-gateway`, one per host, host network): holds every tcp `hostPort` and every
-  HTTP `route` of every release. Workloads publish nothing else than a loopback upstream port
-  (`127.0.0.1:<random>`). HTTP routes select a workload by `Host` header and path prefix, so several
-  releases can share port 80; the backend receives the client address in `x-forwarded-for`. karga
-  creates the gateway when a release needs it and removes it with the last one.
-  `karga gateway status` shows whether it is ready and lists its listeners, routes and upstreams.
-  `karga gateway set access-log on` logs every request (see `karga logs --gateway`); it is off by
-  default to keep the Docker log small.
-- **Release proxy** (`<release>-karga-proxy`, one per release): answers on the network for the
-  release's `replace` workloads, so their network clients switch over too. Recreate workloads, such
-  as databases, are reached directly.
+- **Release proxy** (`<release>-karga-proxy`, one per release with Services): answers to the release's
+  Service names on its networks and forwards each Service port to the current container of its
+  workload. Workloads carry only a per-revision alias meant for the proxy. It publishes the
+  exposed Service ports on loopback upstream ports (`127.0.0.1:<random>`) for the gateway.
+- **Gateway** (`karga-gateway`, one per host, host network): the host's only entry point. Its
+  settings belong to the host's administrator, not to packages: the addresses it listens on
+  (`karga gateway set listen`, default `127.0.0.1`) and its **listeners** (`karga gateway listener
+  add`): a name, a port and a protocol. A new host has `web` (80, http) and `websecure` (443,
+  https). A Service exposes a port on a listener by name; exposing on a listener that does not exist,
+  of another protocol, or that another release holds is refused before anything changes. HTTP and
+  HTTPS listeners select a Service by `Host` header and path prefix, so several releases share them;
+  the backend receives the client address in `x-forwarded-for`. A tcp listener belongs to one Service.
+  Listeners nobody uses are not opened. karga creates the gateway when a Service is exposed and
+  removes it with the last one. `karga gateway status` shows whether it is ready and what it serves.
+  `karga gateway set access-log on` logs every request (see `karga logs --gateway`).
 
-A replace switches both: no request is lost, from the host or from other workloads. Notes:
+A replace switches the release proxy, which every client goes through: no request is lost, from
+outside or from other workloads. Notes:
 
-- Replace workloads of one release cannot share a `containerPort`; the later one (by name) is
-  replaced by DNS (a request may fail during the switch) and the plan says why.
-- Adding or removing a replace workload reconnects the release proxy to its networks, which briefly
-  interrupts proxied connections on them; changing the proxy image recreates it. The plan says so.
-- **TLS:** a route with `tls: {secret: <name>}` is served as HTTPS (port 443 by default). The Secret
-  holds the PEM certificate chain as `tls.crt` and the key as `tls.key`. The certificate is chosen by
-  SNI, so several hosts and releases can share the port. Plain HTTP on port 80 of the same address
-  redirects to HTTPS, unless port 80 already serves that host. A new certificate is a new Secret
-  value: the upgrade replaces the workload and the gateway serves the new certificate. A port is
-  either TLS or plain HTTP, and one host has one certificate. There is no automatic certificate
-  (ACME) yet.
-- The gateway is TCP and HTTP only: UDP host ports are published by Docker directly.
+- Adding or removing a Service reconnects the release proxy to its networks, and exposing a new port
+  recreates it; both briefly interrupt proxied connections. The plan says so.
+- **TLS:** an exposure on an https listener names a Secret with the PEM certificate chain as
+  `tls.crt` and the key as `tls.key`. The certificate is chosen by SNI, so several hosts and releases
+  share the listener. Plain HTTP on the port-80 http listener redirects to HTTPS, unless it serves that
+  host itself. A new certificate is a new Secret value; the gateway serves it after the upgrade. One
+  host has one certificate. There is no automatic certificate (ACME) yet.
+- Services carry TCP only; there is no UDP.
 - The gateway runs as root with only `NET_BIND_SERVICE` and `DAC_OVERRIDE` (to bind low ports in the
-  host namespace) and `no-new-privileges`. It is a single point for host traffic; it restarts
+  host namespace) and `no-new-privileges`. It is a single point for outside traffic; it restarts
   automatically.
 - Local users can reach the loopback upstream ports directly, bypassing the gateway.
 - A connection open during a replace stays on the old container until it closes or `drainTimeout`
   passes. Configuration is validated before it is written; if Envoy still rejects it (for example a
   port it cannot bind), the error shows Envoy's reason.
 - After a reboot or Docker restart the gateway, proxies and workloads come back on their own. If
-  another process took a workload's loopback upstream port meanwhile, that workload does not start
-  until the next upgrade.
-
-Elsewhere (macOS, a remote Docker host) ports are published by Docker, `routes` are refused, a
-workload with a `hostPort` falls back to recreate, and replace switches network clients by DNS: there
-is no outage window, but a request that resolved the old container's address just before it stopped
-can still fail, so clients should retry.
+  another process took a proxy's loopback upstream port meanwhile, the proxy does not start until the
+  next upgrade.
 
 If a recreate fails, the failed container is stopped (but kept for `docker logs`), the revision is
 marked failed and the previous revision stays current. Run `karga rollback <release>` to go back.
@@ -277,7 +297,9 @@ Secrets (and what mounts them) once more on its next upgrade.
 ## Security notes
 
 - Access to the Docker socket is root-equivalent on the host. Run karga as a user you trust with it.
-- Ports are published on `127.0.0.1` unless `hostIP` says otherwise.
+- Packages cannot open ports: workloads publish nothing, and only the gateway's listeners, which the
+  host's administrator defines, are reachable from outside, on `127.0.0.1` unless `karga gateway set
+  listen` says otherwise.
 - Containers are never privileged and never join the host PID, network or IPC namespaces, except the
   gateway, which uses the host network (see above). Release proxies run as the karga user. Proxy and
   gateway configuration and admin sockets are in `0700` directories under `$KARGA_HOME/proxies/` and
@@ -297,12 +319,12 @@ Secrets (and what mounts them) once more on its next upgrade.
 ```bash
 make test               # unit tests
 make lint               # golangci-lint
-make test-integration   # needs Docker: adapter contract and deployments
-make test-e2e           # needs Docker: builds the binary and runs the lifecycle end to end
-make test-linux         # the same in a Linux VM (OrbStack or Lima; KARGA_VM names it, default karga-linux)
+make test-integration   # Linux with Docker: adapter contract and deployments
+make test-e2e           # Linux with Docker: builds the binary and runs the lifecycle end to end
+make test-linux         # both in a Linux VM (OrbStack or Lima; KARGA_VM names it, default karga-linux)
 ```
 
-On Linux the integration tests also cover the gateway and release proxy. `make test-linux` creates
+Integration and e2e tests run on Linux only (they stop with a message elsewhere). `make test-linux` creates
 and provisions the VM on first use (`KARGA_VM` names it) and runs `TARGETS` there (default
 `test-integration test-e2e`). Integration tests run in parallel and share one `KARGA_HOME`.
 `KARGA_TEST_DAEMON_RESTART=1 make test-integration` additionally restarts the Docker daemon (needs

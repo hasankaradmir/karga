@@ -9,7 +9,6 @@ var (
 	removeWorkload = runtimeops.RemoveWorkload
 	deleteWorkload = runtimeops.DeleteWorkload
 	ipOverlap      = runtimeops.IPOverlap
-	portTaken      = runtimeops.PortTaken
 	httpHealthPath = runtimeops.HTTPHealthPath
 	proxySupported = &runtimeops.Supported
 	// UseProxies turns the gateway and release proxies on when the runtime supports them.
@@ -19,6 +18,8 @@ var (
 
 const (
 	proxyReadyTimeout = runtimeops.ProxyReadyTimeout
+	// ProxyReadyTimeout bounds how long a proxy may take to route to a new backend.
+	ProxyReadyTimeout = runtimeops.ProxyReadyTimeout
 	envoyMemory       = runtimeops.EnvoyMemory
 	envoyMilliCPU     = runtimeops.EnvoyMilliCPU
 	envoyPids         = runtimeops.EnvoyPids

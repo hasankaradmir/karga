@@ -4,19 +4,18 @@ package integration
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/application/packages"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/ports"
-	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )
 
-// TestKargaHealthChecks: tcp and http health checks need no tool in the image; karga runs them.
-// The port is published so karga can reach it on every platform.
+// TestKargaHealthChecks: tcp and http health checks need no tool in the image; karga runs them
+// against the container's address.
 func TestKargaHealthChecks(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
@@ -24,8 +23,7 @@ func TestKargaHealthChecks(t *testing.T) {
 		t.Run(health, func(t *testing.T) {
 			name := releaseName("it-hc-" + health)
 			s, _ := service(t, name)
-			port := runtimetest.FreePort(t)
-			sets := []string{"health=" + health, "publish=true", "port=" + strconv.Itoa(port), "strategy=recreate"}
+			sets := []string{"health=" + health, "strategy=recreate"}
 			if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: webPkg,
 				Values: packages.Options{Sets: sets}}); err != nil {
 				t.Fatal(err)
@@ -84,11 +82,11 @@ func TestReplaceWithHTTPHealth(t *testing.T) {
 	ctx := context.Background()
 	name := releaseName("it-hc-replace")
 	s, rt := service(t, name)
-	port := runtimetest.FreePort(t)
+	l, port := listener(t, gateway.ProtocolTCP)
 	common := opts()
 	common.Timeout = 30 * time.Second
 	sets := func(extra ...string) packages.Options {
-		return packages.Options{Sets: append([]string{startDelay, "health=http", "publish=true", "port=" + strconv.Itoa(port)}, extra...)}
+		return packages.Options{Sets: append([]string{startDelay, "health=http", "listener=" + l}, extra...)}
 	}
 	if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: common, Name: name, Package: webPkg, Values: sets()}); err != nil {
 		t.Fatal(err)

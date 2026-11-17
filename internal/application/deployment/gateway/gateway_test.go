@@ -17,40 +17,52 @@ import (
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
-func tlsRoute(host, secret string) resource.Route {
-	return resource.Route{Host: host, Path: "/", HostPort: 443, HostIP: "127.0.0.1", TLS: &resource.RouteTLS{Secret: secret}}
+func testSettings() Settings {
+	return Settings{Listen: []string{"127.0.0.1", "10.0.0.5"}, Listeners: append(DefaultListeners(),
+		Listener{Name: "pg", Port: 5432, Protocol: ProtocolTCP}, Listener{Name: "unused", Port: 8080, Protocol: ProtocolHTTP})}
 }
 
-func plainRoute(host string) resource.Route {
-	return resource.Route{Host: host, Path: "/", HostPort: 80, HostIP: "127.0.0.1"}
-}
-
-func TestGatewayConfigTLSAndRedirects(t *testing.T) {
+func TestGatewayConfigListenersAndRedirects(t *testing.T) {
 	targets := []Target{
-		{Release: "a", Workload: "web", Ports: []Port{{ContainerPort: 80, Upstream: 4001,
-			Routes: []resource.Route{tlsRoute("secure.example", "cert"), plainRoute("plain.example")}}}},
-		{Release: "b", Workload: "web", Ports: []Port{{ContainerPort: 80, Upstream: 4002,
-			Routes: []resource.Route{tlsRoute("both.example", "cert"), plainRoute("both.example")}}}},
+		{Release: "a", Ports: []Port{{Service: "shop", Port: 80, Upstream: 4001}, {Service: "db", Port: 5432, Upstream: 4002}},
+			Routes: []Route{
+				{Service: "shop", Port: 80, Listener: "websecure", Host: "secure.example", Path: "/", TLSSecret: "cert", CertDir: "/c"},
+				{Service: "shop", Port: 80, Listener: "web", Host: "plain.example", Path: "/"},
+				{Service: "db", Port: 5432, Listener: "pg"},
+			}},
+		{Release: "b", Ports: []Port{{Service: "web", Port: 80, Upstream: 4003}},
+			Routes: []Route{
+				{Service: "web", Port: 80, Listener: "websecure", Host: "both.example", Path: "/", TLSSecret: "cert", CertDir: "/d"},
+				{Service: "web", Port: 80, Listener: "web", Host: "both.example", Path: "/"},
+			}},
 	}
-	cfg := buildConfig(targets)
-	tls, plain := -1, -1
-	for i, l := range cfg.HTTP {
+	cfg := buildConfig(testSettings(), targets)
+	if len(cfg.Clusters) != 3 || cfg.Clusters[0].Name != "a_shop_p80" || cfg.Clusters[0].Port != 4001 {
+		t.Fatalf("clusters: %+v", cfg.Clusters)
+	}
+	if len(cfg.TCP) != 2 || cfg.TCP[0].Port != 5432 || cfg.TCP[0].Cluster != "a_db_p5432" || cfg.TCP[1].Address != "10.0.0.5" {
+		t.Fatalf("tcp listeners on every listen address: %+v", cfg.TCP)
+	}
+	var tls, plain []envoy.HTTPListener
+	for _, l := range cfg.HTTP {
 		switch l.Port {
 		case 443:
-			tls = i
+			tls = append(tls, l)
 		case 80:
-			plain = i
+			plain = append(plain, l)
+		default:
+			t.Fatalf("a listener nobody uses was opened: %+v", l)
 		}
 	}
-	if tls < 0 || plain < 0 {
-		t.Fatalf("listeners: %+v", cfg.HTTP)
+	if len(tls) != 2 || len(plain) != 2 {
+		t.Fatalf("http listeners: %+v", cfg.HTTP)
 	}
-	if c := cfg.HTTP[tls].Certs; len(c) != 2 || !strings.HasPrefix(c["secure.example"].Chain, "/etc/karga-proxy/certs/a_443_secure.example_") {
+	if c := tls[0].Certs; len(c) != 2 || !strings.HasPrefix(c["secure.example"].Chain, "/etc/karga-proxy/certs/a_websecure_secure.example_") {
 		t.Fatalf("certs: %+v", c)
 	}
 	// secure.example gets a redirect; both.example is served plainly on 80, so it does not.
-	if r := cfg.HTTP[plain].Redirects; !slices.Equal(r, []string{"secure.example"}) || cfg.HTTP[plain].RedirectPort != 443 {
-		t.Fatalf("redirects: %v %d", r, cfg.HTTP[plain].RedirectPort)
+	if r := plain[0].Redirects; !slices.Equal(r, []string{"secure.example"}) || plain[0].RedirectPort != 443 {
+		t.Fatalf("redirects: %v %d", r, plain[0].RedirectPort)
 	}
 }
 
@@ -62,12 +74,11 @@ func TestSyncCertsCopiesAndPrunes(t *testing.T) {
 		}
 	}
 	dir := t.TempDir()
-	targets := []Target{{Release: "a", Workload: "web", Ports: []Port{{ContainerPort: 80,
-		Routes: []resource.Route{tlsRoute("secure.example", "cert")}, CertDirs: map[string]string{"cert": src}}}}}
+	targets := []Target{{Release: "a", Routes: []Route{{Service: "web", Port: 80, Listener: "websecure", Host: "secure.example", Path: "/", TLSSecret: "cert", CertDir: src}}}}
 	if err := syncCerts(dir, targets, true); err != nil {
 		t.Fatal(err)
 	}
-	key := filepath.Join(dir, "certs", certName("a", 443, "secure.example", src)+".key")
+	key := filepath.Join(dir, "certs", certName("a", "websecure", "secure.example", src)+".key")
 	if b, err := os.ReadFile(key); err != nil || string(b) != "KEY" {
 		t.Fatalf("key: %q %v", b, err)
 	}
@@ -82,25 +93,54 @@ func TestSyncCertsCopiesAndPrunes(t *testing.T) {
 	}
 }
 
-func TestCheckGatewayTLSConflicts(t *testing.T) {
-	withProxySupport(t, true)
-	ctx := context.Background()
-	rt := fakeruntime.New("img")
-	label, _ := json.Marshal([]Port{{ContainerPort: 80, Upstream: 4001, Routes: []resource.Route{tlsRoute("secure.example", "cert")}}})
-	if err := rt.CreateWorkload(ctx, ports.WorkloadRequest{Name: "other-web", Image: "img", Labels: map[string]string{
-		ports.LabelManaged: "true", ports.LabelRelease: "other", ports.LabelName: "web", LabelPorts: string(label)}}); err != nil {
+// proxyOf creates the proxy container of release rel with its upstream ports and expose file.
+func proxyOf(t *testing.T, rt *fakeruntime.Runtime, home, rel string, ps []Port, routes []Route) {
+	t.Helper()
+	label, _ := json.Marshal(ps)
+	if err := rt.CreateWorkload(context.Background(), ports.WorkloadRequest{Name: rel + "-karga-proxy", Image: "img", Labels: map[string]string{
+		ports.LabelManaged: "true", ports.LabelRelease: rel, ports.LabelName: "proxy", LabelPorts: string(label)}}); err != nil {
 		t.Fatal(err)
 	}
-	check := func(r resource.Route) string {
-		w := resource.Resource{Kind: resource.KindWorkload, Metadata: resource.Metadata{Name: "web"}, Spec: &resource.WorkloadSpec{
-			Ports: []resource.Port{{ContainerPort: 80, Protocol: "tcp", Routes: []resource.Route{r}}}}}
-		return errorsText(Check(ctx, rt, "mine", []resource.Resource{w}))
+	if err := WriteExpose(home, rel, routes); err != nil {
+		t.Fatal(err)
 	}
-	if got := check(resource.Route{Host: "x.example", Path: "/", HostPort: 443, HostIP: "127.0.0.1"}); !strings.Contains(got, "serves HTTPS on this port") {
-		t.Errorf("plain on a TLS port: %q", got)
+}
+
+func TestCheckExposures(t *testing.T) {
+	withProxySupport(t, true)
+	ctx := context.Background()
+	home := t.TempDir()
+	if err := WriteSettings(home, Settings{Listeners: append(DefaultListeners(), Listener{Name: "pg", Port: 5432, Protocol: ProtocolTCP})}); err != nil {
+		t.Fatal(err)
 	}
-	if got := check(resource.Route{Host: "secure.example", Path: "/api", HostPort: 443, HostIP: "127.0.0.1", TLS: &resource.RouteTLS{Secret: "mycert"}}); !strings.Contains(got, "another certificate") {
-		t.Errorf("second certificate for a host: %q", got)
+	rt := fakeruntime.New("img")
+	proxyOf(t, rt, home, "other", []Port{{Service: "web", Port: 80, Upstream: 4001}, {Service: "db", Port: 5432, Upstream: 4002}}, []Route{
+		{Service: "web", Port: 80, Listener: "websecure", Host: "secure.example", Path: "/", TLSSecret: "cert"},
+		{Service: "db", Port: 5432, Listener: "pg"},
+	})
+	check := func(e resource.Exposure) string {
+		svc := resource.Resource{Kind: resource.KindService, Metadata: resource.Metadata{Name: "s"}, Spec: &resource.ServiceSpec{
+			Workload: "w", Ports: []resource.ServicePort{{Name: "p", Port: 80, TargetPort: "p"}}, Expose: []resource.Exposure{e}}}
+		return errorsText(Check(ctx, rt, home, "mine", []resource.Resource{svc}))
+	}
+	tls := &resource.ExposureTLS{Secret: "mycert"}
+	for _, tt := range []struct {
+		e    resource.Exposure
+		want string
+	}{
+		{resource.Exposure{Port: "p", Listener: "nope", Host: "a.example", Path: "/"}, "no such gateway listener"},
+		{resource.Exposure{Port: "p", Listener: "pg", Host: "a.example", Path: "/"}, "tcp listener and takes no host"},
+		{resource.Exposure{Port: "p", Listener: "web"}, "needs a host"},
+		{resource.Exposure{Port: "p", Listener: "websecure", Host: "a.example", Path: "/"}, "needs tls.secret"},
+		{resource.Exposure{Port: "p", Listener: "web", Host: "a.example", Path: "/", TLS: tls}, "plain http listener"},
+		{resource.Exposure{Port: "p", Listener: "pg"}, "used by other/db"},
+		{resource.Exposure{Port: "p", Listener: "websecure", Host: "secure.example", Path: "/", TLS: &resource.ExposureTLS{Secret: "cert"}}, "already routed to other/web"},
+		{resource.Exposure{Port: "p", Listener: "websecure", Host: "secure.example", Path: "/api", TLS: tls}, "another certificate"},
+		{resource.Exposure{Port: "p", Listener: "websecure", Host: "mine.example", Path: "/", TLS: tls}, ""},
+	} {
+		if got := check(tt.e); tt.want == "" && got != "" || !strings.Contains(got, tt.want) {
+			t.Errorf("%+v: want %q, got %q", tt.e, tt.want, got)
+		}
 	}
 }
 
@@ -112,50 +152,52 @@ func errorsText(errs []error) string {
 	return strings.Join(s, "; ")
 }
 
-func TestGatewaySwitchSurvivesOtherSyncs(t *testing.T) {
+func TestSettings(t *testing.T) {
+	home := t.TempDir()
+	s, err := ReadSettings(home)
+	if err != nil || !slices.Equal(s.Listen, []string{"127.0.0.1"}) || !slices.Equal(s.Listeners, DefaultListeners()) {
+		t.Fatalf("defaults: %+v %v", s, err)
+	}
+	s.Listeners = append(s.Listeners, Listener{Name: "alt", Port: 80, Protocol: ProtocolHTTP})
+	if err := WriteSettings(home, s); err == nil || !strings.Contains(err.Error(), "port 80 is used by listener \"web\"") {
+		t.Fatalf("duplicate port: %v", err)
+	}
+	if err := WriteSettings(home, Settings{Listen: []string{"localhost"}}); err == nil || !strings.Contains(err.Error(), "not an IP address") {
+		t.Fatalf("bad address: %v", err)
+	}
+	// Removing every listener is the administrator's choice, not a reason to bring the defaults back.
+	if err := WriteSettings(home, Settings{Listen: []string{"0.0.0.0"}}); err != nil {
+		t.Fatal(err)
+	}
+	if s, err := ReadSettings(home); err != nil || len(s.Listeners) != 0 || s.Listen[0] != "0.0.0.0" {
+		t.Fatalf("stored: %+v %v", s, err)
+	}
+}
+
+func TestSyncFollowsExposures(t *testing.T) {
 	withProxySupport(t, true)
 	ctx := context.Background()
 	home := t.TempDir()
-	rt := fakeruntime.New("img")
-	px := &fakeProxies{rt: rt, home: home, notReady: map[string]bool{}}
-	for _, c := range []struct{ name, workload string }{{"a-web", "web"}, {"a-web-next", "web"}, {"b-api", "api"}} {
-		rel := strings.SplitN(c.name, "-", 2)[0]
-		label, _ := json.Marshal([]Port{{ContainerPort: 80, Upstream: 4000 + len(c.name), HostIP: "127.0.0.1", HostPort: 9000 + len(c.name)}})
-		if err := rt.CreateWorkload(ctx, ports.WorkloadRequest{Name: c.name, Image: "img", Labels: map[string]string{
-			ports.LabelManaged: "true", ports.LabelRelease: rel, ports.LabelName: c.workload, LabelPorts: string(label)}}); err != nil {
-			t.Fatal(err)
-		}
-	}
-	routed := func() string {
-		targets, err := Sync(ctx, rt, px, home, nil) // another release's update
-		if err != nil {
-			t.Fatal(err)
-		}
-		for _, tg := range targets {
-			if tg.Release == "a" {
-				return tg.Container
-			}
-		}
-		return ""
-	}
-	if _, err := Sync(ctx, rt, px, home, map[string]string{"a/web": "a-web-next"}); err != nil {
+	rt := fakeruntime.New("img", envoy.Image())
+	px := &fakeProxies{}
+	proxyOf(t, rt, home, "a", nil, nil)
+	if _, err := Sync(ctx, rt, px, home); err != nil {
 		t.Fatal(err)
 	}
-	if got := routed(); got != "a-web-next" {
-		t.Fatalf("a concurrent update undid the switch: %s", got)
+	if _, err := rt.GetWorkload(ctx, ContainerName); err == nil {
+		t.Fatal("gateway started with nothing exposed")
 	}
-	if _, err := Sync(ctx, rt, px, home, ReleaseRouting("a", []string{"web"})); err != nil {
+	proxyOf(t, rt, home, "b", []Port{{Service: "web", Port: 80, Upstream: 4001}}, []Route{{Service: "web", Port: 80, Listener: "web", Host: "b.example", Path: "/"}})
+	targets, err := Sync(ctx, rt, px, home)
+	if err != nil {
 		t.Fatal(err)
 	}
-	if got := routed(); got != "a-web" {
-		t.Fatalf("after clearing: %s", got)
+	if _, err := rt.GetWorkload(ctx, ContainerName); err != nil || len(targets) != 2 {
+		t.Fatalf("gateway: %v, targets %+v", err, targets)
 	}
-	// A switch to a container that is gone falls back to the canonical one.
-	if _, err := Sync(ctx, rt, px, home, map[string]string{"a/web": "a-web-gone"}); err != nil {
-		t.Fatal(err)
-	}
-	if got := routed(); got != "a-web" {
-		t.Fatalf("missing preferred container: %s", got)
+	routes, err := Routes(ctx, rt, home)
+	if err != nil || len(routes) != 1 || routes[0] != (Exposed{"web:80", "b.example/", "b", "web:80", "127.0.0.1:4001"}) {
+		t.Fatalf("routes: %+v %v", routes, err)
 	}
 }
 
@@ -168,11 +210,7 @@ func withProxySupport(t *testing.T, on bool) {
 }
 
 // fakeProxies writes real configuration files and reports every proxy ready and drained.
-type fakeProxies struct {
-	rt       *fakeruntime.Runtime
-	home     string
-	notReady map[string]bool
-}
+type fakeProxies struct{}
 
 func (f *fakeProxies) Write(dir, node string, mode int, cfg envoy.Config) error {
 	return envoy.Write(dir, node, mode, cfg)

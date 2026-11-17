@@ -63,7 +63,7 @@ func (s *Service) mounters(ctx context.Context, rel, volume string) ([]mounter, 
 		if a.Kind != resource.KindWorkload {
 			continue
 		}
-		r, err := resource.Decode(a.Spec) // JSON is YAML
+		r, err := resource.DecodeStored(a.Spec)
 		if err != nil {
 			return nil, err
 		}

@@ -24,6 +24,9 @@ import (
 
 const redisPkg = "../../../examples/redis"
 
+// Tests run without Envoy: proxy and gateway configuration is written, readiness is assumed.
+func init() { deployment.Proxies = fakeruntime.Proxies{} }
+
 type env struct {
 	t    *testing.T
 	svc  *Service
@@ -39,13 +42,13 @@ func newEnv(t *testing.T) *env {
 		t.Fatal(err)
 	}
 	t.Cleanup(func() { _ = store.Close() })
-	rt := fakeruntime.New()
+	rt := fakeruntime.New().WithGateway()
 	svc := New(store, func(context.Context) (ports.Runtime, error) { return rt, nil }, home, nil, nil)
 	return &env{t: t, svc: svc, rt: rt, port: strconv.Itoa(runtimetest.FreePort(t))}
 }
 
 func (e *env) opts(sets ...string) packages.Options {
-	return packages.Options{Sets: append([]string{"network.port=" + e.port}, sets...)}
+	return packages.Options{Sets: append([]string{"service.enabled=false"}, sets...)}
 }
 
 func common() CommonOptions {
@@ -283,7 +286,7 @@ func TestManifestAndStatus(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	_, err := e.svc.Install(ctx, InstallRequest{CommonOptions: common(), Name: "db", Package: "../../../examples/postgres",
-		Values: packages.Options{Sets: []string{"network.port=" + e.port, "database.password=hunter2"}}})
+		Values: packages.Options{Sets: []string{"service.enabled=false", "database.password=hunter2"}}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -397,7 +400,7 @@ func TestWriteOnlyValuesNotStored(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
 	pg := func(sets ...string) packages.Options {
-		return packages.Options{Sets: append([]string{"network.port=" + e.port}, sets...)}
+		return packages.Options{Sets: append([]string{"service.enabled=false"}, sets...)}
 	}
 	if _, err := e.svc.Install(ctx, InstallRequest{CommonOptions: common(), Name: "db", Package: pgPkg, Values: pg("database.password=hunter2")}); err != nil {
 		t.Fatal(err)
@@ -431,7 +434,7 @@ func TestWriteOnlyValuesNotStored(t *testing.T) {
 		t.Fatalf("reuse with password: %v", err)
 	}
 	vals := must[map[string]any](t)(e.svc.GetValues(ctx, "db", 0, false))
-	if vals["network"].(map[string]any)["port"] == nil {
+	if vals["service"].(map[string]any)["enabled"] == nil {
 		t.Fatalf("reused values lost: %#v", vals)
 	}
 }

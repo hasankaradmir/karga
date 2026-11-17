@@ -17,8 +17,11 @@ Goals:
 - Small footprint: a CLI and ordinary containers; no daemon, no control plane.
 - Runtime independence: the package format does not depend on Docker.
 
+- Nothing reachable by accident: packages cannot open ports; the host's administrator decides what is
+  reachable from outside.
+
 Non-goals: multi-node orchestration, scheduling, horizontal scaling, Kubernetes compatibility, a
-package marketplace, automatic database migration rollback.
+package marketplace, automatic database migration rollback, platforms other than Linux.
 
 ## 2. Architecture
 
@@ -68,16 +71,20 @@ rejects undeclared keys). The package format is alpha (`v1alpha1`): it may still
 
 | Kind | Purpose |
 |------|---------|
-| Workload | One container: image, command, environment, networks, ports (host ports or HTTP(S) routes), mounts, health check, resources, logging, security, update strategy. |
+| Workload | One container: image, command, environment, networks, named ports it listens on, mounts, health check, resources, logging, security, update and stop timeouts. It publishes nothing; its name is not a DNS name (Docker still resolves the container name on the release's networks). |
+| Service | A stable name for one workload in the release: ports mapped to the workload's ports, and exposures on gateway listeners (tcp, or HTTP(S) by host and path). |
 | Volume | A named Docker volume; `retention: retain` (default) keeps it across uninstalls. |
-| Network | A bridge network; workloads are reachable by their name on it. |
+| Network | A bridge network; Services of the workloads on it are reachable by name on it. |
 | Config | Files mounted read-only. |
 | Secret | Values mounted read-only as files; the state keeps only keyed digests. |
 
-`resource.Decode` applies defaults (host IP 127.0.0.1, 1024 processes, log rotation 10m×3,
-`no-new-privileges`, health check port and path) and validates each resource; `ValidateSet`
-checks references across the set (mounted volumes, configs and secrets, networks, TLS secrets with
-`tls.crt` and `tls.key`, duplicate host ports). Because defaults are written into the spec, a new
+`resource.Decode` applies defaults (1024 processes, log rotation 10m×3, `no-new-privileges`, health
+check port and path, a Service's target port and path) and validates each resource; a Workload that
+still uses the removed `hostPort`, `hostIP` or `routes` gets an error pointing to Services.
+`ValidateSet` checks references across the set (mounted volumes, configs and secrets, networks, a
+Service's workload and target ports, TLS secrets with `tls.crt` and `tls.key`) and that a Service
+port number and a listener's host and path are used once per release. Specs karga stored itself are
+read with `resource.DecodeStored`, which ignores fields an older karga wrote. Because defaults are written into the spec, a new
 default shows up in the plan as a field change.
 
 ## 5. Releases and state
@@ -110,8 +117,9 @@ guessed offline from the database.
 `deployment.Diff` compares the desired resources with the applied ones by digest. Applied
 workloads, networks and volumes that no longer exist in the runtime are left out first, so the plan
 creates them again (removed by hand, or a state restored on another host). A workload's
-digest covers its spec and the content of the Configs and Secrets it mounts or serves TLS with, so
-changing a config file re-applies the workloads using it. Changing a Network or a Volume is refused
+digest covers its spec, whether a Service targets it and the content of the Configs and Secrets it
+mounts, so changing a config file re-applies the workloads using it; a Service's digest covers the
+Secrets it serves TLS with. A plan with Services is refused without the gateway capability. Changing a Network or a Volume is refused
 (uninstall or rename instead). Each change gets an action (create, update, delete, unchanged) and,
 for workloads, a strategy with the reason when it falls back. The CLI shows a summary; `--verbose`
 shows every changed field.
@@ -146,34 +154,44 @@ Progress events (pull, create, wait, switch, drain, stop, done) are reported as 
   check and read-only volumes (two writers on the same data are unsafe); otherwise the plan falls
   back to recreate and says why. An interrupted replace is repaired before the next plan.
 
-## 8. Traffic: the gateway and the release proxy (Linux)
+## 8. Traffic: Services, the release proxy and the gateway (ADR-0011)
 
-With a local Docker daemon on Linux (runtime capability `karga.host-gateway`), traffic goes through
-karga-managed Envoys (ADR-0010):
+Karga's Envoys need the runtime capability `karga.host-gateway` (Linux with a local Docker daemon:
+bind-mounted configuration and admin sockets, inotify, the host network). Without it a plan with
+Services is refused.
 
-- **Gateway** (`karga-gateway`, one per host, host network) serves every tcp `hostPort` and every
-  HTTP(S) route of every release. Workload containers publish only a loopback upstream port chosen
-  by karga and recorded in a container label. The gateway configuration is rebuilt from those labels
-  under `$KARGA_HOME/gateway.lock`: TCP listeners, HTTP listeners with virtual hosts by `Host` and
-  path prefix, TLS listeners with one filter chain per host (SNI) and a redirect from port 80.
-  During a replace the gateway is pointed at `<name>-next`; that switch is stored
-  (`gateway-routing.json`) so another release's update does not undo it.
-- **Release proxy** (`<release>-karga-proxy`) carries the network aliases of the release's replace
-  workloads and routes each port to the alias of the current revision's container, so clients on
-  the network switch without loss as well.
+- **Release proxy** (`<release>-karga-proxy`, one per release with Services) joins the networks of
+  the Services' workloads and carries the Service names as aliases on them. It listens on every
+  Service port and forwards to the backend alias of the container currently running the Service's
+  workload (`karga-<workload>-r<revision>`). Workloads carry no alias of their own name (Docker
+  still resolves the container name, `<release>-<workload>`). One proxy has one address, so a port number belongs to one Service of the release. The
+  exposed Service ports are published on loopback upstream ports chosen by karga and recorded in a
+  container label (`io.karga.gateway`); adding one recreates the proxy. What the release exposes
+  (listener, host, path, certificate directory) is written to `$KARGA_HOME/proxies/<release>/expose.json`,
+  so changing a host or path needs no recreate.
+- **Gateway** (`karga-gateway`, one per host, host network) is configured by the host's
+  administrator in `$KARGA_HOME/gateway.json`: the addresses it listens on (default `127.0.0.1`) and
+  its listeners (name, port, protocol `tcp`, `http` or `https`). Packages only name listeners. The
+  configuration is rebuilt under `$KARGA_HOME/gateway.lock` from the settings, the proxies' labels and
+  the releases' expose files: one Envoy listener per used listener and address; HTTP listeners with
+  virtual hosts by `Host` and path prefix; HTTPS listeners with one filter chain per host (SNI); a
+  redirect to HTTPS on the port-80 http listener; clusters to the proxies' upstreams. Pre-flight
+  (`gateway.Check`) refuses exposures on unknown listeners or listeners of another protocol, tcp
+  listeners, hosts and paths or certificates another release holds, and listeners a host process holds.
 
-Configuration is built from Envoy's protobuf types, validated, and written atomically as files that
-Envoy watches; listeners are written only once Envoy knows their clusters. karga waits for Envoy's
-admin API (a unix socket) to report the new backend healthy and used by an active listener before
-it continues, and reverts on failure. Without the capability (macOS, a remote Docker host), Docker
-publishes host ports, routes are refused, and replace switches network clients by DNS.
+A replace switches only the release proxy: the gateway forwards to the proxy, which stays. A workload
+no Service targets receives no traffic and is replaced without a switch. Configuration is built from
+Envoy's protobuf types, validated, and written atomically as files that Envoy watches; listeners are
+written only once Envoy knows their clusters. karga waits for Envoy's admin API (a unix socket) to
+report the new backend healthy and used by an active listener before it continues, and reverts on
+failure.
 
 ## 9. Health checks
 
 - `exec`: Docker's healthcheck runs a command in the container.
-- `tcp` and `http`: karga checks the port from the host (through the gateway upstream, a published
-  port, or on Linux the container's address), so the image needs no tool. Behind the proxies Envoy
-  checks the same HTTP path before routing to a new container.
+- `tcp` and `http`: karga checks the port from the host at the container's address, so the image
+  needs no tool. Behind the release proxy Envoy checks the same HTTP path before routing to a new
+  container.
 
 All take `interval`, `timeout`, `retries` and `startPeriod`; failures during the start period do not
 count.
@@ -184,7 +202,9 @@ count.
 - Containers are never privileged and run with `no-new-privileges` by default; the `security` block
   adds a read-only root filesystem, capability changes and a user. The gateway runs as root with only
   `NET_BIND_SERVICE` and `DAC_OVERRIDE`.
-- Host ports bind to 127.0.0.1 unless `hostIP` says otherwise.
+- Packages cannot open ports: workloads publish nothing, release proxies publish only loopback
+  upstreams, and the gateway serves only the listeners the administrator defines, on `127.0.0.1`
+  unless told otherwise.
 - Secret files are mounted read-only from a 0700 directory; secret values never appear in output,
   logs or the database (only keyed digests); `writeOnly` values are stored as `<redacted>`.
 - Memory limits also cap swap; every container has a process limit and log rotation.
@@ -195,7 +215,7 @@ count.
 - Unit tests with the fake runtime (`make test`, with `-race`).
 - The runtime contract suite against Docker, including what Docker actually enforces (limits,
   logging, security options).
-- Integration tests against Docker (`make test-integration`), run in parallel with one shared
-  `KARGA_HOME`; the gateway, proxy and TLS tests run on Linux (`make test-linux` uses a VM).
+- Integration tests against Docker on Linux (`make test-integration`, or `make test-linux` in a VM),
+  run in parallel with one shared `KARGA_HOME`.
   Zero-loss claims are measured with clients on the host and on the release network.
 - End-to-end tests drive the built binary (`make test-e2e`).

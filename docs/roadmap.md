@@ -14,8 +14,10 @@ What karga does not do yet, what it does with known limits, and the open questio
 | Drift repair (`karga reconcile`) | An upgrade recreates resources that are missing in Docker, but does not detect objects changed outside karga, and repairing needs an upgrade. Also re-allocating a loopback upstream port taken by another process after a reboot. |
 | Private registries | Image pulls are anonymous today; credentials from the Docker configuration. |
 | Encrypted secret store | Values that are not `writeOnly` are stored as written. |
-| Gateway: UDP and client IP for TCP | UDP host ports are published by Docker directly; TCP backends do not see the client address (HTTP routes pass `x-forwarded-for`). |
-| Podman adapter | REST API or Quadlet; the runtime contract suite defines what it must do. |
+| UDP and client IP for TCP | Services carry TCP only; TCP backends do not see the client address (HTTP and HTTPS listeners pass `x-forwarded-for`). |
+| Network policy | Workloads of a release on the same network can reach each other by IP; only Service names are resolved. |
+| Services across releases | A Service is reachable only inside its release; other releases go through the gateway. |
+| Podman adapter | REST API or Quadlet; the runtime contract suite defines what it must do. It also needs the gateway and release proxy to work with it. |
 | Package distribution | OCI artifacts or a repository index, signing and provenance. |
 | Package dependencies | One package is one release today. |
 | Runtime-specific extensions | A namespaced block for settings outside the portable model. |
@@ -23,17 +25,15 @@ What karga does not do yet, what it does with known limits, and the open questio
 
 ## Known limitations
 
-- **Linux-only traffic features.** The gateway, routes, TLS and the release proxy need Linux with a
-  local Docker daemon. Elsewhere Docker publishes host ports, routes are refused and replace
-  switches network clients by DNS (a request racing the switch can fail).
-- **Gateway.** One container serves every release's host traffic; it restarts automatically but is a
-  single point. Local users can reach the loopback upstream ports directly. Image or limit changes
-  recreate it (a short interruption).
-- **Release proxy.** Replace workloads of one release cannot share a container port behind it (the
-  later one falls back to DNS switching). Adding or removing a replace workload reconnects it to its
-  networks, briefly interrupting proxied connections on them.
+- **Linux only.** Services need the gateway and the release proxy, which need Linux with a local
+  Docker daemon; elsewhere a plan with Services is refused.
+- **Gateway.** One container serves every release's outside traffic; it restarts automatically but
+  is a single point. Local users can reach the loopback upstream ports directly. Image or limit
+  changes recreate it (a short interruption).
+- **Release proxy.** One per release with Services (about 15 MB). A service port number belongs to
+  one Service of the release. Adding or removing a Service reconnects it to its networks, and
+  exposing a new port recreates it, briefly interrupting its connections.
 - **Replace** needs a health check and read-only volumes; stateful workloads are recreated.
-- **Health checks** `tcp`/`http` need the port published on macOS or with a remote Docker host.
 - **Volume backups** go through a workload that mounts the volume; a live backup is not consistent
   for databases (use `--stop` or the database's own dump). Restore overwrites files with the same
   names and keeps the others.

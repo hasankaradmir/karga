@@ -11,14 +11,12 @@ import (
 	"strconv"
 	"time"
 
-	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
 // tcp and http health checks are run by karga itself, from the host, so the image needs no tool:
-// karga connects to the workload's port through its gateway upstream, a port Docker publishes, or
-// (Linux with a local Docker) the container's network address.
+// karga connects to the container's network address, which needs Linux with a local Docker.
 
 // readyTarget is a container to wait for; spec decides how its health is checked.
 type readyTarget struct {
@@ -35,31 +33,13 @@ func probeReachable(s *resource.WorkloadSpec) string {
 	if !kargaProbes(s) || proxySupported.Load() {
 		return ""
 	}
-	port := s.HealthCheck.Port
-	if slices.ContainsFunc(s.Ports, func(p resource.Port) bool { return p.ContainerPort == port && p.HostPort != 0 }) {
-		return ""
-	}
-	return fmt.Sprintf("healthCheck type %s needs port %d published here (Docker is not local Linux): add a hostPort or use type exec", s.HealthCheck.Type, port)
+	return fmt.Sprintf("healthCheck type %s needs Linux with a local Docker (karga checks the container's address); use type exec", s.HealthCheck.Type)
 }
 
 // probeAddr is where karga reaches the health check port of a running container.
 func probeAddr(st ports.WorkloadStatus, s *resource.WorkloadSpec) (string, error) {
 	port := s.HealthCheck.Port
-	for _, g := range gateway.ParseLabel(st.Labels) {
-		if g.ContainerPort == port {
-			return net.JoinHostPort("127.0.0.1", strconv.Itoa(g.Upstream)), nil
-		}
-	}
 	if !proxySupported.Load() {
-		for _, p := range s.Ports {
-			if p.ContainerPort == port && p.HostPort != 0 {
-				ip := p.HostIP
-				if a := net.ParseIP(ip); a == nil || a.IsUnspecified() {
-					ip = "127.0.0.1"
-				}
-				return net.JoinHostPort(ip, strconv.Itoa(p.HostPort)), nil
-			}
-		}
 		return "", errors.New(probeReachable(s))
 	}
 	for _, n := range slices.Sorted(maps.Keys(st.IPs)) {

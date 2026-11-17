@@ -4,7 +4,6 @@ package integration
 
 import (
 	"context"
-	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -13,7 +12,6 @@ import (
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/ports"
-	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )
 
 // service returns a release service on real Docker and a fresh state directory. Everything the
@@ -23,9 +21,8 @@ func TestRedisReleaseLifecycle(t *testing.T) {
 	ctx := context.Background()
 	name := releaseName("it-rel")
 	s, rt := service(t, name)
-	port := runtimetest.FreePort(t)
 	values := func(tag string) packages.Options {
-		return packages.Options{Sets: []string{"network.port=" + strconv.Itoa(port), "image.tag=" + tag}}
+		return packages.Options{Sets: []string{"image.tag=" + tag}}
 	}
 
 	// Install an older Redis, then upgrade forward (downgrading would hit RDB format changes).

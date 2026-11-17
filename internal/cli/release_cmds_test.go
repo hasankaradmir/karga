@@ -18,6 +18,7 @@ import (
 
 	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
 	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
+	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/ports"
 	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )
@@ -34,7 +35,7 @@ type cliEnv struct {
 func (e *cliEnv) lastStderr() string { return e.stderr }
 
 func newCLIEnv(t *testing.T) *cliEnv {
-	return &cliEnv{t: t, home: t.TempDir(), rt: fakeruntime.New(), port: strconv.Itoa(runtimetest.FreePort(t))}
+	return &cliEnv{t: t, home: t.TempDir(), rt: fakeruntime.New().WithGateway(), port: strconv.Itoa(runtimetest.FreePort(t))}
 }
 
 func (e *cliEnv) run(args ...string) (string, error) {
@@ -58,9 +59,12 @@ func (e *cliEnv) mustRun(args ...string) string {
 
 const redis = "../../examples/redis"
 
+// Tests run without Envoy: proxy and gateway configuration is written, readiness is assumed.
+func init() { deployment.Proxies = fakeruntime.Proxies{} }
+
 func TestReleaseLifecycleCLI(t *testing.T) {
 	e := newCLIEnv(t)
-	port := "network.port=" + e.port
+	port := "service.enabled=false"
 
 	out := e.mustRun("install", "r", redis, "--set", port)
 	if !strings.Contains(out, `Release "r" installed (revision 1)`) || !strings.Contains(out, "create workload redis") {
@@ -140,9 +144,9 @@ func TestReleaseCLIErrors(t *testing.T) {
 			t.Errorf("karga %v: expected error", args)
 		}
 	}
-	e.mustRun("install", "r", redis, "--set", "network.port="+e.port)
+	e.mustRun("install", "r", redis, "--set", "service.enabled=false")
 	e.rt.Health = ports.HealthUnhealthy
-	_, err := e.run("upgrade", "r", redis, "--set", "network.port="+e.port, "--set", "image.tag=7.2", "--timeout", "100ms")
+	_, err := e.run("upgrade", "r", redis, "--set", "service.enabled=false", "--set", "image.tag=7.2", "--timeout", "100ms")
 	if err == nil || !strings.Contains(err.Error(), "revision 1 stays current") || !strings.Contains(err.Error(), "karga rollback r") {
 		t.Fatalf("failed upgrade hint: %v", err)
 	}
@@ -158,9 +162,6 @@ func TestStrategyFlag(t *testing.T) {
 	}
 	if out := e.mustRun("upgrade", "w", web, "--set", "content=v2", "--dry-run", "--strategy", "recreate"); !strings.Contains(out, "WORKLOAD web (recreate)") {
 		t.Fatalf("override:\n%s", out)
-	}
-	if out := e.mustRun("upgrade", "w", web, "--set", "content=v2", "--set", "publish=true", "--dry-run"); !strings.Contains(out, "(recreate: publishes hostPort 18080/tcp without the gateway (Linux, tcp))") {
-		t.Fatalf("fallback:\n%s", out)
 	}
 	if out := e.mustRun("upgrade", "w", web, "--set", "content=v2"); !strings.Contains(out, "update workload web (replace)") {
 		t.Fatalf("upgrade:\n%s", out)
@@ -208,15 +209,19 @@ func TestLogs(t *testing.T) {
 	if _, err := e.run("logs"); err == nil || !strings.Contains(err.Error(), "--gateway") {
 		t.Fatalf("no release: %v", err)
 	}
-	if _, err := e.run("logs", "w", "--proxy"); err == nil || !strings.Contains(err.Error(), "has no proxy") {
-		t.Fatalf("no proxy off Linux: %v", err)
+	if _, err := e.run("logs", "w", "--proxy"); err != nil {
+		t.Fatalf("release proxy logs: %v", err)
+	}
+	e.mustRun("install", "r", redis, "--set", "service.enabled=false")
+	if _, err := e.run("logs", "r", "--proxy"); err == nil || !strings.Contains(err.Error(), "has no proxy") {
+		t.Fatalf("no services, no proxy: %v", err)
 	}
 }
 
 func TestGatewayStatusAndSettings(t *testing.T) {
 	e := newCLIEnv(t)
 	out := e.mustRun("gateway", "status")
-	if !strings.Contains(out, "Gateway:    not running (no release uses it)") || !strings.Contains(out, "Access log: off") {
+	if !strings.Contains(out, "Gateway:    not running (nothing is exposed)") || !strings.Contains(out, "Access log: off") {
 		t.Fatalf("status:\n%s", out)
 	}
 	e.mustRun("gateway", "set", "access-log", "on")
@@ -231,6 +236,40 @@ func TestGatewayStatusAndSettings(t *testing.T) {
 	}
 }
 
+func TestGatewayListeners(t *testing.T) {
+	e := newCLIEnv(t)
+	if out := e.mustRun("gateway", "listener", "list"); !strings.Contains(out, "web        80    http") || !strings.Contains(out, "websecure  443   https") {
+		t.Fatalf("default listeners:\n%s", out)
+	}
+	pgPort := strconv.Itoa(runtimetest.FreePort(t))
+	e.mustRun("gateway", "listener", "add", "pg", "--port", pgPort, "--protocol", "tcp")
+	if _, err := e.run("gateway", "listener", "add", "alt", "--port", "80", "--protocol", "http"); err == nil || !strings.Contains(err.Error(), `port 80 is used by listener "web"`) {
+		t.Fatalf("duplicate port: %v", err)
+	}
+	if _, err := e.run("install", "r", redis, "--set", "service.listener=nope"); err == nil || !strings.Contains(err.Error(), "no such gateway listener") {
+		t.Fatalf("unknown listener: %v", err)
+	}
+	e.mustRun("install", "r", redis, "--set", "service.listener=pg")
+	if out := e.mustRun("gateway", "status"); !strings.Contains(out, "pg:"+pgPort) || !strings.Contains(out, "redis:6379") || !strings.Contains(out, "Listen:     127.0.0.1") {
+		t.Fatalf("status:\n%s", out)
+	}
+	if out := e.mustRun("gateway", "listener", "list"); !strings.Contains(out, "r/redis") {
+		t.Fatalf("users:\n%s", out)
+	}
+	if _, err := e.run("gateway", "listener", "remove", "pg"); err == nil || !strings.Contains(err.Error(), "is used by r/redis") {
+		t.Fatalf("remove in use: %v", err)
+	}
+	e.mustRun("gateway", "set", "listen", "127.0.0.1,::1")
+	if out := e.mustRun("gateway", "status", "-o", "json"); !strings.Contains(out, `"::1"`) {
+		t.Fatalf("listen:\n%s", out)
+	}
+	if _, err := e.run("gateway", "set", "listen", "localhost"); err == nil || !strings.Contains(err.Error(), "not an IP address") {
+		t.Fatalf("bad address: %v", err)
+	}
+	e.mustRun("uninstall", "r")
+	e.mustRun("gateway", "listener", "remove", "pg")
+}
+
 func TestStatusShowsRestartsAndOOM(t *testing.T) {
 	e := newCLIEnv(t)
 	e.mustRun("install", "w", "../../tests/integration/testdata/web")
@@ -243,7 +282,7 @@ func TestStatusShowsRestartsAndOOM(t *testing.T) {
 
 func TestVolumeBackupRestore(t *testing.T) {
 	e := newCLIEnv(t)
-	e.mustRun("install", "r", redis, "--set", "network.port="+e.port)
+	e.mustRun("install", "r", redis, "--set", "service.enabled=false")
 	e.rt.Files = map[string]map[string][]byte{"r-redis": {"/data/dump.rdb": []byte("snapshot"), "/data/appendonly/a.aof": []byte("log")}}
 	file := filepath.Join(t.TempDir(), "data.tar.gz")
 
@@ -314,8 +353,8 @@ func TestExec(t *testing.T) {
 
 func TestDiffAndHistory(t *testing.T) {
 	e := newCLIEnv(t)
-	e.mustRun("install", "r", redis, "--set", "network.port="+e.port)
-	e.mustRun("upgrade", "r", redis, "--set", "network.port="+e.port, "--set", "image.tag=7.2")
+	e.mustRun("install", "r", redis, "--set", "service.enabled=false")
+	e.mustRun("upgrade", "r", redis, "--set", "service.enabled=false", "--set", "image.tag=7.2")
 	out := e.mustRun("diff", "r", "1")
 	for _, want := range []string{"revision 1 -> 2", `image.tag: "7.4" -> "7.2"`, "~ WORKLOAD redis", `spec.image: "redis:7.4" -> "redis:7.2"`} {
 		if !strings.Contains(out, want) {
@@ -331,7 +370,7 @@ func TestDiffAndHistory(t *testing.T) {
 
 	// Secret values and writeOnly values never show, only that they changed.
 	pg := "../../examples/postgres"
-	pgPort := "network.port=" + strconv.Itoa(runtimetest.FreePort(t))
+	pgPort := "service.enabled=false"
 	e.mustRun("install", "db", pg, "--set", pgPort, "--set", "database.password=first-secret")
 	e.mustRun("upgrade", "db", pg, "--set", pgPort, "--set", "database.password=second-secret")
 	out = e.mustRun("diff", "db", "1")
@@ -350,8 +389,20 @@ func TestCreateLintInstallNotes(t *testing.T) {
 	if _, err := e.run("create", dir); err == nil {
 		t.Fatal("create over an existing directory must fail")
 	}
-	// The fake runtime runs nothing: once the container "exists" (after the port pre-flight), answer
-	// karga's http health check on the published port.
+	// The fake runtime runs nothing: the container's address is 127.0.0.1 and, once it "exists",
+	// a server answers karga's http health check on the port the package listens on.
+	for _, f := range []string{"templates/web.yaml"} {
+		p := filepath.Join(dir, f)
+		b, err := os.ReadFile(p)
+		if err != nil {
+			t.Fatal(err)
+		}
+		b = []byte(strings.ReplaceAll(strings.ReplaceAll(string(b), "containerPort: 80", "containerPort: "+e.port), "port: 80", "port: "+e.port))
+		if err := os.WriteFile(p, b, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	e.rt.IPs = map[string]map[string]string{"s-web": {"s-net": "127.0.0.1"}}
 	srv := &http.Server{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), ReadHeaderTimeout: time.Second}
 	t.Cleanup(func() { _ = srv.Close() })
 	go func() {
@@ -365,7 +416,7 @@ func TestCreateLintInstallNotes(t *testing.T) {
 			time.Sleep(5 * time.Millisecond)
 		}
 	}()
-	out := e.mustRun("install", "s", dir, "--set", "service.port="+e.port)
+	out := e.mustRun("install", "s", dir, "--set", "expose.host=shop.local")
 	if !strings.Contains(out, "NOTES:") || !strings.Contains(out, "s (revision 1) runs nginx") {
 		t.Fatalf("notes after install:\n%s", out)
 	}
@@ -423,7 +474,7 @@ func TestDynamicCompletion(t *testing.T) {
 		t.Fatal("completion created the state database")
 	}
 	e.mustRun("install", "web1", "../../tests/integration/testdata/web", "--set", "second=true")
-	e.mustRun("install", "redis1", redis, "--set", "network.port="+e.port)
+	e.mustRun("install", "redis1", redis, "--set", "service.enabled=false")
 	e.mustRun("upgrade", "web1", "../../tests/integration/testdata/web", "--set", "second=true", "--set", "content=v2")
 	for _, tc := range []struct {
 		args []string

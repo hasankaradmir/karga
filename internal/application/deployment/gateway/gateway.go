@@ -1,6 +1,6 @@
-// Package gateway runs the host gateway (ADR-010): one Envoy in the host network namespace that
-// serves every release's tcp host ports and HTTP(S) routes and forwards to the workloads'
-// loopback upstream ports.
+// Package gateway runs the host gateway (ADR-011): one Envoy in the host network namespace that
+// serves the listeners the host's administrator defines and forwards to the release proxies'
+// loopback upstream ports. Packages only attach Services to listeners; they cannot open one.
 package gateway
 
 import (
@@ -21,17 +21,18 @@ import (
 	"syscall"
 
 	"github.com/hasankaradmir/karga/internal/application/deployment/runtimeops"
+	"github.com/hasankaradmir/karga/internal/domain/pkg"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
-// The gateway is the host's single Envoy (ADR-010): it holds every tcp hostPort and HTTP route of
-// every release on Linux and forwards to the workloads' loopback upstream ports. It belongs to no
-// release; karga creates it when something needs it and removes it when nothing does.
+// The gateway is the host's single Envoy: it belongs to no release; karga creates it when a Service
+// is exposed and removes it when none is.
 const (
 	ContainerName = "karga-gateway"
-	// LabelPorts on a workload container lists its gateway ports as JSON ([]Port).
+	// LabelPorts on a release proxy container lists the loopback upstream ports it publishes its
+	// exposed service ports on, as JSON ([]Port).
 	LabelPorts     = "io.karga.gateway"
 	LabelComponent = "io.karga.component"
 )
@@ -39,32 +40,30 @@ const (
 // Dir holds the gateway's configuration and admin socket.
 func Dir(home string) string { return filepath.Join(home, "gateway") }
 
-// Port is a workload port served by the gateway: as tcp on HostIP:HostPort, or as HTTP routes.
-// Upstream is the loopback port the container publishes it on.
+// ExposeFile lists what a release exposes ([]Route). It lives in the release proxy's directory, so
+// changing a host or path rewrites a file instead of recreating the proxy container.
+func ExposeFile(home, rel string) string { return filepath.Join(home, "proxies", rel, "expose.json") }
+
+// Port is a service port a release proxy publishes on a loopback upstream port for the gateway.
 type Port struct {
-	ContainerPort int              `json:"containerPort"`
-	Upstream      int              `json:"upstream"`
-	HostIP        string           `json:"hostIP,omitempty"`
-	HostPort      int              `json:"hostPort,omitempty"`
-	Routes        []resource.Route `json:"routes,omitempty"`
-	// CertDirs maps each TLS route's Secret to its materialized directory (tls.crt, tls.key).
-	CertDirs map[string]string `json:"certDirs,omitempty"`
-	// HealthPath is checked by HTTP instead of a TCP connect (the workload's http health check).
-	HealthPath string `json:"healthPath,omitempty"`
+	Service  string `json:"service"`
+	Port     int    `json:"port"`
+	Upstream int    `json:"upstream"`
 }
 
-// Ports returns the ports of w the gateway serves (none off Linux).
-func Ports(w *resource.WorkloadSpec) []resource.Port {
-	if !runtimeops.Supported.Load() {
-		return nil
-	}
-	var out []resource.Port
-	for _, p := range w.Ports {
-		if p.Protocol == "tcp" && (p.HostPort != 0 || len(p.Routes) > 0) {
-			out = append(out, p)
-		}
-	}
-	return out
+// Route attaches a service port to a gateway listener: by Host and Path (a prefix) on an http or
+// https listener, or alone on a tcp one.
+type Route struct {
+	Service  string `json:"service"`
+	Port     int    `json:"port"`
+	Listener string `json:"listener"`
+	Host     string `json:"host,omitempty"`
+	Path     string `json:"path,omitempty"`
+	// TLSSecret and CertDir (its materialized directory, with tls.crt and tls.key) serve HTTPS.
+	TLSSecret string `json:"tlsSecret,omitempty"`
+	CertDir   string `json:"certDir,omitempty"`
+	// HealthPath is checked by HTTP instead of a TCP connect (the workload's http health check).
+	HealthPath string `json:"healthPath,omitempty"`
 }
 
 // allocatePort picks a free loopback port for an upstream. Docker binds it right after; a race
@@ -78,223 +77,224 @@ func allocatePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-// Cluster names the cluster of one workload port. Release and workload names are DNS
-// labels, so "_" cannot occur in them.
-func Cluster(rel, workload string, port int) string {
-	return fmt.Sprintf("%s_%s_p%d", rel, workload, port)
+// Cluster names the cluster of one service port. Release and service names are DNS labels, so
+// "_" cannot occur in them.
+func Cluster(rel, service string, port int) string {
+	return fmt.Sprintf("%s_%s_p%d", rel, service, port)
 }
 
-// Target is one workload container the gateway forwards to.
+// Target is one release proxy the gateway forwards to, with what its release exposes.
 type Target struct {
-	Release, Workload, Container string
-	Ports                        []Port
+	Release, Container string
+	Ports              []Port
+	Routes             []Route
 }
 
+func (t Target) upstream(service string, port int) (int, bool) {
+	i := slices.IndexFunc(t.Ports, func(p Port) bool { return p.Service == service && p.Port == port })
+	if i < 0 {
+		return 0, false
+	}
+	return t.Ports[i].Upstream, true
+}
+
+// ParseLabel reads the upstream ports of a proxy container.
 func ParseLabel(labels map[string]string) []Port {
 	var out []Port
 	_ = json.Unmarshal([]byte(labels[LabelPorts]), &out) // karga writes it; a broken label means no ports
 	return out
 }
 
-// findTargets finds, per release workload, the container the gateway routes to: the one named in
-// prefer ("release/workload" -> container) if it exists, else the canonical one. Others (a
-// replace's -next before its switch, a stopped leftover) are ignored.
-func findTargets(ctx context.Context, rt ports.Runtime, prefer map[string]string) ([]Target, error) {
+// ReadExpose reads what a release exposes; a release without the file exposes nothing.
+func ReadExpose(home, rel string) ([]Route, error) {
+	data, err := os.ReadFile(ExposeFile(home, rel))
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var out []Route
+	if err := json.Unmarshal(data, &out); err != nil {
+		return nil, fmt.Errorf("%s: %w", ExposeFile(home, rel), err)
+	}
+	return out, nil
+}
+
+// WriteExpose stores what a release exposes (none removes the file).
+func WriteExpose(home, rel string, routes []Route) error {
+	if len(routes) == 0 {
+		if err := os.Remove(ExposeFile(home, rel)); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	}
+	js, err := json.Marshal(routes)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(filepath.Dir(ExposeFile(home, rel)), 0o700); err != nil {
+		return err
+	}
+	return writeFile(ExposeFile(home, rel), js)
+}
+
+// findTargets lists every release proxy that publishes upstream ports, with its release's routes.
+func findTargets(ctx context.Context, rt ports.Runtime, home string) ([]Target, error) {
 	objs, err := rt.ListLabeled(ctx, LabelPorts)
 	if err != nil {
 		return nil, err
 	}
-	byName := map[string]ports.Object{}
-	for _, o := range objs {
-		byName[o.Name] = o
-	}
 	var out []Target
 	for _, o := range objs {
-		rel, name := o.Labels[ports.LabelRelease], o.Labels[ports.LabelName]
-		want := runtimeops.RuntimeName(rel, name)
-		if p, ok := prefer[rel+"/"+name]; ok {
-			if _, exists := byName[p]; exists {
-				want = p
-			}
+		rel := o.Labels[ports.LabelRelease]
+		routes, err := ReadExpose(home, rel)
+		if err != nil {
+			return nil, err
 		}
-		if o.Name != want {
-			continue
-		}
-		out = append(out, Target{Release: rel, Workload: name, Container: o.Name, Ports: ParseLabel(o.Labels)})
+		out = append(out, Target{Release: rel, Container: o.Name, Ports: ParseLabel(o.Labels), Routes: routes})
 	}
-	sort.Slice(out, func(i, j int) bool { return out[i].Container < out[j].Container })
+	sort.Slice(out, func(i, j int) bool { return out[i].Release < out[j].Release })
 	return out, nil
 }
 
-// routingFile keeps the switches of replaces in progress ("release/workload" -> container), so a
-// gateway update by another release does not send their traffic back to the old container.
-func routingFile(home string) string { return filepath.Join(home, "gateway-routing.json") }
-
-// updateRouting applies changes (an empty container removes the entry) to the stored switches and
-// returns them. Called under the gateway lock.
-func updateRouting(home string, changes map[string]string) (map[string]string, error) {
-	routing := map[string]string{}
-	data, err := os.ReadFile(routingFile(home))
-	switch {
-	case err == nil:
-		if err := json.Unmarshal(data, &routing); err != nil {
-			return nil, fmt.Errorf("%s: %w", routingFile(home), err)
-		}
-	case !errors.Is(err, os.ErrNotExist):
-		return nil, err
-	}
-	if len(changes) == 0 {
-		return routing, nil
-	}
-	for k, v := range changes {
-		if v == "" {
-			delete(routing, k)
-		} else {
-			routing[k] = v
-		}
-	}
-	if len(routing) == 0 {
-		if err := os.Remove(routingFile(home)); err != nil && !errors.Is(err, os.ErrNotExist) {
-			return nil, err
-		}
-		return routing, nil
-	}
-	js, err := json.Marshal(routing)
-	if err != nil {
-		return nil, err
-	}
-	return routing, writeFile(routingFile(home), js)
-}
-
-// ReleaseRouting clears the switches of every workload of a release once its operation is over.
-func ReleaseRouting(rel string, names []string) map[string]string {
-	out := map[string]string{}
-	for _, n := range names {
-		out[rel+"/"+n] = ""
-	}
-	return out
-}
-
 // certName is the file name (without extension) of a TLS host's certificate in the gateway
-// directory. It includes a digest of the revision directory the certificate comes from: Envoy reads
+// directory. It includes a digest of the directory the certificate comes from: Envoy reads
 // certificate files only when the listener changes, so a new certificate needs a new name.
-func certName(rel string, port int, host, src string) string {
+func certName(rel, listener, host, src string) string {
 	sum := sha256.Sum256([]byte(src))
-	return fmt.Sprintf("%s_%d_%s_%x", rel, port, host, sum[:4])
+	return fmt.Sprintf("%s_%s_%s_%x", rel, listener, host, sum[:4])
 }
 
-// buildConfig builds the gateway's listeners and clusters. Conflicts are refused by Preflight; if
-// one slips through anyway (two releases applied at once) the first target in name order wins.
-// TLS hosts also get a redirect from plain HTTP on port 80 of their address, unless that port
-// already serves the host or is taken otherwise.
-func buildConfig(targets []Target) envoy.Config {
+// use is what the targets attach to one listener.
+type use struct {
+	tcp    string // cluster
+	routes []envoy.HTTPRoute
+	certs  map[string]envoy.Cert
+	seen   map[string]bool
+}
+
+// buildConfig builds the gateway's listeners and clusters: every listener in use, on every listen
+// address. A listener nobody uses is not opened. Conflicts are refused by Check; if one slips
+// through anyway (two releases applied at once) the first release in name order wins. A host
+// served on an https listener also gets a redirect on the http listeners of port 80.
+func buildConfig(settings Settings, targets []Target) envoy.Config {
 	var cfg envoy.Config
-	type addr struct {
-		ip   string
-		port int
-	}
-	tcp := map[addr]bool{}
-	httpIdx := map[addr]int{}
-	routes := map[string]bool{}
-	listener := func(a addr) int {
-		i, ok := httpIdx[a]
-		if !ok {
-			i = len(cfg.HTTP)
-			httpIdx[a] = i
-			cfg.HTTP = append(cfg.HTTP, envoy.HTTPListener{Address: a.ip, Port: a.port})
-		}
-		return i
-	}
-	type tlsHost struct {
-		a    addr
-		host string
-	}
-	var tlsHosts []tlsHost
+	uses := map[string]*use{}
 	for _, t := range targets {
 		for _, p := range t.Ports {
-			cluster := Cluster(t.Release, t.Workload, p.ContainerPort)
-			cfg.Clusters = append(cfg.Clusters, envoy.Cluster{Name: cluster, Host: "127.0.0.1", Port: p.Upstream, HealthPath: p.HealthPath})
-			if p.HostPort != 0 {
-				a := addr{p.HostIP, p.HostPort}
-				if _, isHTTP := httpIdx[a]; !tcp[a] && !isHTTP {
-					tcp[a] = true
-					cfg.TCP = append(cfg.TCP, envoy.TCPListener{Address: p.HostIP, Port: p.HostPort, Cluster: cluster})
-				}
+			cfg.Clusters = append(cfg.Clusters, envoy.Cluster{Name: Cluster(t.Release, p.Service, p.Port), Host: "127.0.0.1", Port: p.Upstream,
+				HealthPath: healthPath(t.Routes, p)})
+		}
+		for _, r := range t.Routes {
+			l, ok := settings.Listener(r.Listener)
+			if _, published := t.upstream(r.Service, r.Port); !ok || !published {
+				continue
 			}
-			for _, r := range p.Routes {
-				a := addr{r.HostIP, r.HostPort}
-				key := fmt.Sprintf("%s:%d %s%s", r.HostIP, r.HostPort, r.Host, r.Path)
-				if tcp[a] || routes[key] {
-					continue
+			u := uses[l.Name]
+			if u == nil {
+				u = &use{certs: map[string]envoy.Cert{}, seen: map[string]bool{}}
+				uses[l.Name] = u
+			}
+			cluster := Cluster(t.Release, r.Service, r.Port)
+			switch {
+			case l.Protocol == ProtocolTCP:
+				if u.tcp == "" {
+					u.tcp = cluster
 				}
-				i := listener(a)
-				l := &cfg.HTTP[i]
-				if (r.TLS != nil) != (len(l.Certs) > 0) && len(l.Routes) > 0 {
-					continue // a listener is TLS or plain, never both
-				}
-				routes[key] = true
-				l.Routes = append(l.Routes, envoy.HTTPRoute{Host: r.Host, Path: r.Path, Cluster: cluster})
-				if r.TLS != nil {
-					if l.Certs == nil {
-						l.Certs = map[string]envoy.Cert{}
-					}
-					if _, ok := l.Certs[r.Host]; !ok {
-						n := envoy.MountPath + "/certs/" + certName(t.Release, r.HostPort, r.Host, p.CertDirs[r.TLS.Secret])
-						l.Certs[r.Host] = envoy.Cert{Chain: n + ".crt", Key: n + ".key"}
-						tlsHosts = append(tlsHosts, tlsHost{a, r.Host})
-					}
+			case !u.seen[r.Host+r.Path]:
+				u.seen[r.Host+r.Path] = true
+				u.routes = append(u.routes, envoy.HTTPRoute{Host: r.Host, Path: r.Path, Cluster: cluster})
+				if _, ok := u.certs[r.Host]; l.Protocol == ProtocolHTTPS && !ok {
+					n := envoy.MountPath + "/certs/" + certName(t.Release, l.Name, r.Host, r.CertDir)
+					u.certs[r.Host] = envoy.Cert{Chain: n + ".crt", Key: n + ".key"}
 				}
 			}
 		}
 	}
-	for _, th := range tlsHosts {
-		plain := addr{th.a.ip, 80}
-		if tcp[plain] || slices.ContainsFunc(cfg.TCP, func(l envoy.TCPListener) bool {
-			return l.Port == 80 && l.Address != plain.ip && runtimeops.IPOverlap(l.Address, plain.ip)
-		}) ||
-			slices.ContainsFunc(cfg.HTTP, func(l envoy.HTTPListener) bool {
-				return l.Port == 80 && l.Address != plain.ip && runtimeops.IPOverlap(l.Address, plain.ip)
-			}) {
-			continue // the address cannot get a plain listener
+	for _, l := range settings.Listeners {
+		u := uses[l.Name]
+		var redirects []string
+		redirectPort := 0
+		if l.Protocol == ProtocolHTTP && l.Port == 80 {
+			redirects, redirectPort = settings.redirects(uses, u)
 		}
-		l := &cfg.HTTP[listener(plain)]
-		if len(l.Certs) > 0 || slices.ContainsFunc(l.Routes, func(r envoy.HTTPRoute) bool { return r.Host == th.host }) || slices.Contains(l.Redirects, th.host) {
+		if u == nil && len(redirects) == 0 {
 			continue
 		}
-		l.Redirects, l.RedirectPort = append(l.Redirects, th.host), th.a.port
+		for _, ip := range settings.Listen {
+			if l.Protocol == ProtocolTCP {
+				cfg.TCP = append(cfg.TCP, envoy.TCPListener{Address: ip, Port: l.Port, Cluster: u.tcp})
+			} else {
+				hl := envoy.HTTPListener{Address: ip, Port: l.Port, Redirects: redirects, RedirectPort: redirectPort}
+				if u != nil {
+					hl.Routes = u.routes
+					if l.Protocol == ProtocolHTTPS {
+						hl.Certs = u.certs
+					}
+				}
+				cfg.HTTP = append(cfg.HTTP, hl)
+			}
+		}
 	}
 	return cfg
 }
 
-// syncCerts copies the certificates of the targets' TLS routes into the gateway directory and
+// redirects returns the hosts served on an https listener but not on the http listener u, and the
+// port of the first https listener, so plain HTTP on port 80 redirects to HTTPS.
+func (s Settings) redirects(uses map[string]*use, u *use) ([]string, int) {
+	var hosts []string
+	port := 0
+	for _, l := range s.Listeners {
+		su := uses[l.Name]
+		if l.Protocol != ProtocolHTTPS || su == nil {
+			continue
+		}
+		for _, h := range slices.Sorted(maps.Keys(su.certs)) {
+			if u != nil && slices.ContainsFunc(u.routes, func(r envoy.HTTPRoute) bool { return r.Host == h }) || slices.Contains(hosts, h) {
+				continue
+			}
+			hosts = append(hosts, h)
+			if port == 0 {
+				port = l.Port
+			}
+		}
+	}
+	return hosts, port
+}
+
+func healthPath(routes []Route, p Port) string {
+	for _, r := range routes {
+		if r.Service == p.Service && r.Port == p.Port && r.HealthPath != "" {
+			return r.HealthPath
+		}
+	}
+	return ""
+}
+
+// syncCerts copies the certificates of the targets' HTTPS routes into the gateway directory and
 // removes the ones no longer used. Files are 0600; the gateway reads them as root.
 func syncCerts(dir string, targets []Target, prune bool) error {
 	certs := filepath.Join(dir, "certs")
 	want := map[string]bool{}
 	for _, t := range targets {
-		for _, p := range t.Ports {
-			for _, r := range p.Routes {
-				if r.TLS == nil {
-					continue
+		for _, r := range t.Routes {
+			if r.TLSSecret == "" {
+				continue
+			}
+			name := certName(t.Release, r.Listener, r.Host, r.CertDir)
+			for ext, key := range map[string]string{".crt": resource.TLSCertKey, ".key": resource.TLSKeyKey} {
+				data, err := os.ReadFile(filepath.Join(r.CertDir, key))
+				if err != nil {
+					return fmt.Errorf("%s/%s: certificate for %s: %w", t.Release, r.Service, r.Host, err)
 				}
-				src, ok := p.CertDirs[r.TLS.Secret]
-				if !ok {
-					return fmt.Errorf("%s/%s: no certificate for route %s", t.Release, t.Workload, r.Host)
+				if err := os.MkdirAll(certs, 0o700); err != nil {
+					return err
 				}
-				name := certName(t.Release, r.HostPort, r.Host, src)
-				for ext, key := range map[string]string{".crt": resource.TLSCertKey, ".key": resource.TLSKeyKey} {
-					data, err := os.ReadFile(filepath.Join(src, key))
-					if err != nil {
-						return fmt.Errorf("%s/%s: certificate for %s: %w", t.Release, t.Workload, r.Host, err)
-					}
-					if err := os.MkdirAll(certs, 0o700); err != nil {
-						return err
-					}
-					if err := writeFile(filepath.Join(certs, name+ext), data); err != nil {
-						return err
-					}
-					want[name+ext] = true
+				if err := writeFile(filepath.Join(certs, name+ext), data); err != nil {
+					return err
 				}
+				want[name+ext] = true
 			}
 		}
 	}
@@ -338,7 +338,7 @@ func Want(targets []Target, keep func(Target) bool) map[string]string {
 			continue
 		}
 		for _, p := range t.Ports {
-			want[Cluster(t.Release, t.Workload, p.ContainerPort)] = net.JoinHostPort("127.0.0.1", strconv.Itoa(p.Upstream))
+			want[Cluster(t.Release, p.Service, p.Port)] = net.JoinHostPort("127.0.0.1", strconv.Itoa(p.Upstream))
 		}
 	}
 	return want
@@ -390,30 +390,29 @@ func request(dir string) ports.WorkloadRequest {
 	}
 }
 
-// Sync rewrites the gateway from every release's workload containers and creates or removes
-// the gateway container as needed. switches routes workloads to another container (a replace's
-// -next) until switched back with an empty name; they are stored, so concurrent updates by other
-// releases keep them. It returns the targets it routes to.
-func Sync(ctx context.Context, rt ports.Runtime, px runtimeops.ProxyControl, home string, switches map[string]string) ([]Target, error) {
+// Sync rewrites the gateway from the settings and every release's proxy, and creates or removes
+// the gateway container as needed. It returns the targets it routes to.
+func Sync(ctx context.Context, rt ports.Runtime, px runtimeops.ProxyControl, home string) ([]Target, error) {
 	unlock, err := Lock(home)
 	if err != nil {
 		return nil, err
 	}
 	defer unlock()
-	prefer, err := updateRouting(home, switches)
-	if err != nil {
-		return nil, err
-	}
-	targets, err := findTargets(ctx, rt, prefer)
+	targets, err := findTargets(ctx, rt, home)
 	if err != nil {
 		return nil, err
 	}
 	dir := Dir(home)
-	if len(targets) == 0 {
+	exposed := slices.ContainsFunc(targets, func(t Target) bool { return len(t.Routes) > 0 })
+	if !exposed {
 		if err := runtimeops.RemoveWorkload(ctx, rt, ContainerName); err != nil && !errors.Is(err, ports.ErrNotFound) {
 			return nil, err
 		}
 		return nil, os.RemoveAll(dir)
+	}
+	settings, err := ReadSettings(home)
+	if err != nil {
+		return nil, err
 	}
 	// Certificates go first: a listener referencing a missing file would be rejected.
 	if err := os.MkdirAll(dir, 0o700); err != nil {
@@ -422,11 +421,7 @@ func Sync(ctx context.Context, rt ports.Runtime, px runtimeops.ProxyControl, hom
 	if err := syncCerts(dir, targets, false); err != nil {
 		return nil, err
 	}
-	cfg := buildConfig(targets)
-	settings, err := ReadSettings(home)
-	if err != nil {
-		return nil, err
-	}
+	cfg := buildConfig(settings, targets)
 	cfg.AccessLog = settings.AccessLog
 	// The socket is created by root in the 0700 directory, which keeps other users out.
 	if err := px.Write(dir, "gateway", 0o666, cfg); err != nil {
@@ -457,40 +452,119 @@ func Sync(ctx context.Context, rt ports.Runtime, px runtimeops.ProxyControl, hom
 	return targets, err
 }
 
-// Wait waits until the gateway routes to every target of release rel.
+// Wait waits until the gateway routes to every exposed port of release rel.
 func Wait(ctx context.Context, px runtimeops.ProxyControl, home, rel string, targets []Target) error {
-	want := Want(targets, func(t Target) bool { return t.Release == rel })
+	want := Want(targets, func(t Target) bool { return t.Release == rel && len(t.Routes) > 0 })
 	if len(want) == 0 {
 		return nil
 	}
 	return px.WaitReady(ctx, Dir(home), want, runtimeops.ProxyReadyTimeout)
 }
 
-// Settings are the user's gateway choices; they outlive the gateway itself.
+// Listener protocols.
+const (
+	ProtocolTCP   = "tcp"
+	ProtocolHTTP  = "http"
+	ProtocolHTTPS = "https"
+)
+
+// Listener is a port the gateway serves on every listen address. A tcp listener belongs to one
+// service; http and https listeners are shared by host and path.
+type Listener struct {
+	Name     string `json:"name"`
+	Port     int    `json:"port"`
+	Protocol string `json:"protocol"`
+}
+
+// Settings are the host administrator's gateway: where it listens and on which listeners. They
+// outlive the gateway container. Packages cannot change them.
 type Settings struct {
-	AccessLog bool `json:"accessLog"`
+	// Listen are the host addresses every listener binds (default 127.0.0.1: nothing is reachable
+	// from other machines until the administrator says so).
+	Listen    []string   `json:"listen,omitempty"`
+	Listeners []Listener `json:"listeners"`
+	AccessLog bool       `json:"accessLog"`
+}
+
+// DefaultListen is where the gateway listens until the administrator sets addresses.
+const DefaultListen = "127.0.0.1"
+
+// DefaultListeners are the listeners a new host starts with.
+func DefaultListeners() []Listener {
+	return []Listener{{Name: "web", Port: 80, Protocol: ProtocolHTTP}, {Name: "websecure", Port: 443, Protocol: ProtocolHTTPS}}
+}
+
+// Listener returns the listener called name.
+func (s Settings) Listener(name string) (Listener, bool) {
+	i := slices.IndexFunc(s.Listeners, func(l Listener) bool { return l.Name == name })
+	if i < 0 {
+		return Listener{}, false
+	}
+	return s.Listeners[i], true
+}
+
+// Validate checks the settings.
+func (s Settings) Validate() error {
+	var errs []error
+	for _, ip := range s.Listen {
+		if net.ParseIP(ip) == nil {
+			errs = append(errs, fmt.Errorf("listen: %q is not an IP address", ip))
+		}
+	}
+	names, portsUsed := map[string]bool{}, map[int]string{}
+	for _, l := range s.Listeners {
+		switch {
+		case !pkg.IsDNSLabel(l.Name):
+			errs = append(errs, fmt.Errorf("listener %q: the name must be a DNS label", l.Name))
+		case names[l.Name]:
+			errs = append(errs, fmt.Errorf("listener %q is defined twice", l.Name))
+		}
+		names[l.Name] = true
+		if l.Port < 1 || l.Port > 65535 {
+			errs = append(errs, fmt.Errorf("listener %q: port %d out of range 1-65535", l.Name, l.Port))
+		} else if other, dup := portsUsed[l.Port]; dup {
+			errs = append(errs, fmt.Errorf("listener %q: port %d is used by listener %q", l.Name, l.Port, other))
+		}
+		portsUsed[l.Port] = l.Name
+		if l.Protocol != ProtocolTCP && l.Protocol != ProtocolHTTP && l.Protocol != ProtocolHTTPS {
+			errs = append(errs, fmt.Errorf("listener %q: protocol %q must be tcp, http or https", l.Name, l.Protocol))
+		}
+	}
+	return errors.Join(errs...)
 }
 
 func settingsPath(home string) string { return filepath.Join(home, "gateway.json") }
 
-// ReadSettings returns the stored settings (defaults when none are stored).
+// ReadSettings returns the stored settings, with defaults for what was never set.
 func ReadSettings(home string) (Settings, error) {
 	var s Settings
 	data, err := os.ReadFile(settingsPath(home))
-	if errors.Is(err, os.ErrNotExist) {
-		return s, nil
-	}
-	if err != nil {
+	switch {
+	case errors.Is(err, os.ErrNotExist):
+	case err != nil:
 		return s, err
+	default:
+		if err := json.Unmarshal(data, &s); err != nil {
+			return s, fmt.Errorf("%s: %w", settingsPath(home), err)
+		}
 	}
-	if err := json.Unmarshal(data, &s); err != nil {
-		return s, fmt.Errorf("%s: %w", settingsPath(home), err)
+	if len(s.Listen) == 0 {
+		s.Listen = []string{DefaultListen}
+	}
+	if s.Listeners == nil { // never set (an empty list is the administrator's choice)
+		s.Listeners = DefaultListeners()
 	}
 	return s, nil
 }
 
-// WriteSettings stores settings; the next Sync applies them.
+// WriteSettings validates and stores settings; the next Sync applies them.
 func WriteSettings(home string, s Settings) error {
+	if err := s.Validate(); err != nil {
+		return err
+	}
+	if s.Listeners == nil {
+		s.Listeners = []Listener{}
+	}
 	data, err := json.Marshal(s)
 	if err != nil {
 		return err
@@ -504,11 +578,12 @@ func WriteSettings(home string, s Settings) error {
 // State is the health part of `karga gateway status`.
 type State struct {
 	// Container is the gateway container's state, or "missing" when no release needs it.
-	Container string `json:"container"`
-	Ready     bool   `json:"ready"`
-	Version   string `json:"version,omitempty"`
-	Image     string `json:"image,omitempty"`
-	AccessLog bool   `json:"accessLog"`
+	Container string   `json:"container"`
+	Ready     bool     `json:"ready"`
+	Version   string   `json:"version,omitempty"`
+	Image     string   `json:"image,omitempty"`
+	Listen    []string `json:"listen"`
+	AccessLog bool     `json:"accessLog"`
 	// Error says why the admin API could not be read, if it could not.
 	Error string `json:"error,omitempty"`
 }
@@ -519,7 +594,7 @@ func Health(ctx context.Context, rt ports.Runtime, home string) (State, error) {
 	if err != nil {
 		return State{}, err
 	}
-	st := State{AccessLog: settings.AccessLog}
+	st := State{AccessLog: settings.AccessLog, Listen: settings.Listen}
 	ws, err := rt.GetWorkload(ctx, ContainerName)
 	switch {
 	case errors.Is(err, ports.ErrNotFound):
@@ -541,31 +616,39 @@ func Health(ctx context.Context, rt ports.Runtime, home string) (State, error) {
 	return st, nil
 }
 
-// Route is one line of `karga gateway status`.
-type Route struct {
-	Listener string `json:"listener"` // ip:port
+// Exposed is one line of `karga gateway status`: a service port served on a listener.
+type Exposed struct {
+	Listener string `json:"listener"` // name:port
 	Route    string `json:"route"`    // "tcp" or host+path
 	Release  string `json:"release"`
-	Workload string `json:"workload"`
+	Service  string `json:"service"` // name:port
 	Upstream string `json:"upstream"`
 }
 
-// Routes lists what the gateway serves, as computed from the running workloads.
-func Routes(ctx context.Context, rt ports.Runtime) ([]Route, error) {
-	targets, err := findTargets(ctx, rt, nil)
+// Routes lists what the gateway serves, as computed from the release proxies.
+func Routes(ctx context.Context, rt ports.Runtime, home string) ([]Exposed, error) {
+	settings, err := ReadSettings(home)
 	if err != nil {
 		return nil, err
 	}
-	var out []Route
+	targets, err := findTargets(ctx, rt, home)
+	if err != nil {
+		return nil, err
+	}
+	var out []Exposed
 	for _, t := range targets {
-		for _, p := range t.Ports {
-			up := net.JoinHostPort("127.0.0.1", strconv.Itoa(p.Upstream))
-			if p.HostPort != 0 {
-				out = append(out, Route{net.JoinHostPort(p.HostIP, strconv.Itoa(p.HostPort)), "tcp", t.Release, t.Workload, up})
+		for _, r := range t.Routes {
+			up, ok := t.upstream(r.Service, r.Port)
+			l, defined := settings.Listener(r.Listener)
+			if !ok || !defined {
+				continue
 			}
-			for _, r := range p.Routes {
-				out = append(out, Route{net.JoinHostPort(r.HostIP, strconv.Itoa(r.HostPort)), r.Host + r.Path, t.Release, t.Workload, up})
+			route := "tcp"
+			if r.Host != "" {
+				route = r.Host + r.Path
 			}
+			out = append(out, Exposed{fmt.Sprintf("%s:%d", l.Name, l.Port), route, t.Release,
+				fmt.Sprintf("%s:%d", r.Service, r.Port), net.JoinHostPort("127.0.0.1", strconv.Itoa(up))})
 		}
 	}
 	sort.Slice(out, func(i, j int) bool {
@@ -577,176 +660,123 @@ func Routes(ctx context.Context, rt ports.Runtime) ([]Route, error) {
 	return out, nil
 }
 
-// claimT is a host address the gateway serves for a release.
-type claim struct {
-	release string
-	ip      string
-	tcp     bool
-	tls     bool
-	routes  map[string]bool   // host+path
-	certs   map[string]string // TLS host -> "release/secret" its certificate comes from
+// Users returns, per listener, the release/service names that expose something on it.
+func Users(ctx context.Context, rt ports.Runtime, home string) (map[string][]string, error) {
+	targets, err := findTargets(ctx, rt, home)
+	if err != nil {
+		return nil, err
+	}
+	out := map[string][]string{}
+	for _, t := range targets {
+		for _, r := range t.Routes {
+			if u := t.Release + "/" + r.Service; !slices.Contains(out[r.Listener], u) {
+				out[r.Listener] = append(out[r.Listener], u)
+			}
+		}
+	}
+	return out, nil
 }
 
-// Check refuses gateway ports that clash with other releases (or within the release), and
-// binds unclaimed ones once to see that no other process holds them.
-func Check(ctx context.Context, rt ports.Runtime, rel string, rs []resource.Resource) []error {
-	objs, err := rt.ListLabeled(ctx, LabelPorts)
+// Check refuses exposures of release rel that the gateway cannot serve: an unknown listener, a
+// listener of another protocol, or a tcp listener, host and path or certificate another release
+// already holds. It binds a listener nobody uses yet once, to see that no other process holds it.
+func Check(ctx context.Context, rt ports.Runtime, home, rel string, rs []resource.Resource) []error {
+	settings, err := ReadSettings(home)
 	if err != nil {
 		return []error{err}
 	}
-	claims := map[int][]*claim{}
-	claim := func(owner, ip string, port int) *claim {
-		for _, c := range claims[port] {
-			if c.release == owner && c.ip == ip {
-				return c
-			}
-		}
-		c := &claim{release: owner, ip: ip, routes: map[string]bool{}, certs: map[string]string{}}
-		claims[port] = append(claims[port], c)
-		return c
+	targets, err := findTargets(ctx, rt, home)
+	if err != nil {
+		return []error{err}
 	}
-	for _, o := range objs {
-		owner := o.Labels[ports.LabelRelease]
-		if owner == rel {
-			continue
-		}
-		for _, p := range ParseLabel(o.Labels) {
-			if p.HostPort != 0 {
-				claim(owner, p.HostIP, p.HostPort).tcp = true
+	type owner struct{ release, service string }
+	tcp := map[string]owner{}    // listener -> owner
+	routes := map[string]owner{} // listener host+path -> owner
+	certs := map[string]string{} // https host -> release/secret
+	inUse := map[string]bool{}   // listeners the gateway serves already
+	for _, t := range targets {
+		for _, r := range t.Routes {
+			inUse[r.Listener] = true
+			if t.Release == rel {
+				continue
 			}
-			for _, r := range p.Routes {
-				addRouteClaim(claim(owner, r.HostIP, r.HostPort), owner, r)
+			o := owner{t.Release, r.Service}
+			if r.Host == "" {
+				tcp[r.Listener] = o
+			} else {
+				routes[r.Listener+" "+r.Host+r.Path] = o
 			}
-		}
-	}
-	held := map[int]bool{} // ports the gateway already listens on for this release
-	for _, o := range objs {
-		if o.Labels[ports.LabelRelease] != rel {
-			continue
-		}
-		for _, p := range ParseLabel(o.Labels) {
-			held[p.HostPort] = true
-			for _, r := range p.Routes {
-				held[r.HostPort] = true
+			if r.TLSSecret != "" {
+				certs[r.Host] = t.Release + "/" + r.TLSSecret
 			}
 		}
 	}
-
 	var errs []error
+	tested := map[string]bool{}
 	for _, r := range rs {
-		w, ok := r.Spec.(*resource.WorkloadSpec)
+		s, ok := r.Spec.(*resource.ServiceSpec)
 		if !ok {
 			continue
 		}
-		for _, p := range Ports(w) {
-			if p.HostPort != 0 {
-				where := fmt.Sprintf("%s %q: hostPort %s:%d", resource.KindWorkload, r.Metadata.Name, p.HostIP, p.HostPort)
-				if err := free(claims[p.HostPort], p.HostIP, true, "", where); err != nil {
-					errs = append(errs, err)
-				} else if !held[p.HostPort] && !bindable(p.HostIP, p.HostPort) {
-					errs = append(errs, fmt.Errorf("%s is taken by another process on this host: %w", where, ports.ErrPortInUse))
-				}
-				claim(rel+" ("+r.Metadata.Name+")", p.HostIP, p.HostPort).tcp = true
+		for _, e := range s.Expose {
+			where := fmt.Sprintf("%s %q: expose %s on listener %s", resource.KindService, r.Metadata.Name, e.Port, e.Listener)
+			l, ok := settings.Listener(e.Listener)
+			if !ok {
+				errs = append(errs, fmt.Errorf("%s: no such gateway listener; the host's administrator adds it with 'karga gateway listener add %s --port <port> --protocol tcp|http|https'", where, e.Listener))
+				continue
 			}
-			for _, rt := range p.Routes {
-				where := fmt.Sprintf("%s %q: route %s%s on %s:%d", resource.KindWorkload, r.Metadata.Name, rt.Host, rt.Path, rt.HostIP, rt.HostPort)
-				if err := freeRoute(claims[rt.HostPort], rel, rt, where); err != nil {
-					errs = append(errs, err)
-				} else if !held[rt.HostPort] && len(claims[rt.HostPort]) == 0 && !bindable(rt.HostIP, rt.HostPort) {
-					errs = append(errs, fmt.Errorf("%s: the port is taken by another process on this host: %w", where, ports.ErrPortInUse))
+			switch {
+			case l.Protocol == ProtocolTCP && e.Host != "":
+				errs = append(errs, fmt.Errorf("%s: %s is a tcp listener and takes no host, path or tls", where, l.Name))
+				continue
+			case l.Protocol != ProtocolTCP && e.Host == "":
+				errs = append(errs, fmt.Errorf("%s: %s is an %s listener and needs a host", where, l.Name, l.Protocol))
+				continue
+			case l.Protocol == ProtocolHTTPS && e.TLS == nil:
+				errs = append(errs, fmt.Errorf("%s: %s is an https listener and needs tls.secret", where, l.Name))
+				continue
+			case l.Protocol == ProtocolHTTP && e.TLS != nil:
+				errs = append(errs, fmt.Errorf("%s: %s is a plain http listener; use an https listener for tls", where, l.Name))
+				continue
+			}
+			if o, taken := tcp[l.Name]; taken {
+				errs = append(errs, fmt.Errorf("%s: the listener is used by %s/%s: %w", where, o.release, o.service, ports.ErrPortInUse))
+			}
+			if o, taken := routes[l.Name+" "+e.Host+e.Path]; taken && e.Host != "" {
+				errs = append(errs, fmt.Errorf("%s: %s%s is already routed to %s/%s: %w", where, e.Host, e.Path, o.release, o.service, ports.ErrPortInUse))
+			}
+			if e.TLS != nil && certs[e.Host] != "" && certs[e.Host] != rel+"/"+e.TLS.Secret {
+				errs = append(errs, fmt.Errorf("%s: %s already serves HTTPS for %s with another certificate: %w", where, strings.SplitN(certs[e.Host], "/", 2)[0], e.Host, ports.ErrPortInUse))
+			}
+			if !inUse[l.Name] && !tested[l.Name] {
+				tested[l.Name] = true
+				for _, ip := range settings.Listen {
+					if runtimeops.PortTaken("tcp", ip, l.Port) {
+						errs = append(errs, fmt.Errorf("%s: %s:%d is taken by another process on this host: %w", where, ip, l.Port, ports.ErrPortInUse))
+					}
 				}
-				if rt.TLS != nil && !held[80] && len(claims[80]) == 0 && !bindable(rt.HostIP, 80) {
-					errs = append(errs, fmt.Errorf("%s: port 80 for the HTTPS redirect is taken by another process on this host: %w", where, ports.ErrPortInUse))
-				}
-				addRouteClaim(claim(rel+" ("+r.Metadata.Name+")", rt.HostIP, rt.HostPort), rel, rt)
 			}
 		}
 	}
 	return errs
 }
 
-// free checks a tcp port (route == "") or an HTTP route against existing claims of a port.
-func free(existing []*claim, ip string, tcp bool, route, where string) error {
-	for _, c := range existing {
-		if !runtimeops.IPOverlap(c.ip, ip) {
-			continue
-		}
-		switch {
-		case tcp || c.tcp:
-			return fmt.Errorf("%s is used by %s: %w", where, c.release, ports.ErrPortInUse)
-		case c.ip != ip:
-			return fmt.Errorf("%s: %s serves HTTP on this port with hostIP %s: %w", where, c.release, c.ip, ports.ErrPortInUse)
-		case c.routes[route]:
-			return fmt.Errorf("%s is already routed to %s: %w", where, c.release, ports.ErrPortInUse)
-		}
-	}
-	return nil
-}
-
-func addRouteClaim(c *claim, rel string, r resource.Route) {
-	c.routes[r.Host+r.Path], c.tls = true, r.TLS != nil
-	if r.TLS != nil {
-		c.certs[r.Host] = rel + "/" + r.TLS.Secret
-	}
-}
-
-// freeRoute checks an HTTP route of release rel against the existing claims of its port.
-func freeRoute(existing []*claim, rel string, r resource.Route, where string) error {
-	if err := free(existing, r.HostIP, false, r.Host+r.Path, where); err != nil {
-		return err
-	}
-	tls := r.TLS != nil
-	for _, c := range existing {
-		if !runtimeops.IPOverlap(c.ip, r.HostIP) || len(c.routes) == 0 {
-			continue
-		}
-		switch {
-		case c.tls != tls:
-			return fmt.Errorf("%s: %s serves %s on this port: %w", where, c.release, map[bool]string{true: "HTTPS", false: "plain HTTP"}[c.tls], ports.ErrPortInUse)
-		case tls && c.certs[r.Host] != "" && c.certs[r.Host] != rel+"/"+r.TLS.Secret:
-			return fmt.Errorf("%s: %s already serves HTTPS for %s with another certificate: %w", where, c.release, r.Host, ports.ErrPortInUse)
-		}
-	}
-	return nil
-}
-
-func bindable(ip string, port int) bool { return !runtimeops.PortTaken("tcp", ip, port) }
-
-// Label publishes the gateway ports of a workload request on fresh loopback upstream ports
-// and records them in its labels.
-func Label(wr *ports.WorkloadRequest, s *resource.WorkloadSpec, certDir func(secret string) (string, bool)) error {
-	gw := Ports(s)
-	if len(gw) == 0 {
-		return nil
-	}
+// Publish publishes service ports of a release proxy request on fresh loopback upstream ports and
+// records them in its labels.
+func Publish(wr *ports.WorkloadRequest, published map[string][]int) error {
 	var label []Port
-	for i := range wr.Ports {
-		p := &wr.Ports[i]
-		j := slices.IndexFunc(gw, func(g resource.Port) bool { return g.ContainerPort == p.ContainerPort && g.Protocol == p.Protocol })
-		if j < 0 {
-			continue
-		}
-		up, err := allocatePort()
-		if err != nil {
-			return err
-		}
-		gp := Port{ContainerPort: p.ContainerPort, Upstream: up, HostIP: gw[j].HostIP, HostPort: gw[j].HostPort, Routes: gw[j].Routes,
-			HealthPath: runtimeops.HTTPHealthPath(s, p.ContainerPort)}
-		for _, r := range gw[j].Routes {
-			if r.TLS == nil {
-				continue
+	for _, svc := range slices.Sorted(maps.Keys(published)) {
+		for _, port := range published[svc] {
+			up, err := allocatePort()
+			if err != nil {
+				return err
 			}
-			dir, ok := certDir(r.TLS.Secret)
-			if !ok {
-				return fmt.Errorf("tls secret %q was not materialized", r.TLS.Secret)
-			}
-			if gp.CertDirs == nil {
-				gp.CertDirs = map[string]string{}
-			}
-			gp.CertDirs[r.TLS.Secret] = dir
+			wr.Ports = append(wr.Ports, ports.PortBinding{ContainerPort: port, HostPort: up, HostIP: "127.0.0.1", Protocol: "tcp"})
+			label = append(label, Port{Service: svc, Port: port, Upstream: up})
 		}
-		label = append(label, gp)
-		p.HostIP, p.HostPort = "127.0.0.1", up
+	}
+	if len(label) == 0 {
+		return nil
 	}
 	js, err := json.Marshal(label)
 	if err != nil {

@@ -28,28 +28,18 @@ metadata:
   name: web
 spec:
   image: busybox:1.37
-  command: [sh, -c, "sleep {{ .Values.startDelay }}; {{ if .Values.echoPort }}nc -ll -p 9000 -e cat & {{ end }}exec httpd -f -p {{ .Values.listenPort }} -h /www"]
+  command: [sh, -c, "sleep {{ .Values.startDelay }}; {{ if .Values.echo }}nc -ll -p 9000 -e cat & {{ end }}exec httpd -f -p {{ .Values.listenPort }} -h /www"]
   networks: [web-net]
   mounts:
     - config: site
       mountPath: /www
   ports:
-    {{- if .Values.echoPort }}
-    - containerPort: 9000
-      hostPort: {{ .Values.echoPort }}
+    - name: http
+      containerPort: {{ .Values.listenPort }}
+    {{- if .Values.echo }}
+    - name: echo
+      containerPort: 9000
     {{- end }}
-    - containerPort: {{ .Values.listenPort }}
-      {{- if .Values.publish }}
-      hostPort: {{ .Values.port }}
-      {{- end }}
-      {{- if .Values.route }}
-      routes:
-        - host: {{ .Values.route }}
-          hostPort: {{ .Values.port }}
-          {{- if .Values.tls.cert }}
-          tls: {secret: site-tls}
-          {{- end }}
-      {{- end }}
   healthCheck:
     type: {{ .Values.health }}
     {{- if eq .Values.health "exec" }}
@@ -85,7 +75,8 @@ spec:
     - config: site
       mountPath: /www
   ports:
-    - containerPort: {{ add .Values.listenPort 1 }}
+    - name: http
+      containerPort: {{ add .Values.listenPort 1 }}
   healthCheck:
     type: exec
     command: [wget, -q, -O, /dev/null, "http://127.0.0.1:{{ add .Values.listenPort 1 }}/"]
@@ -96,4 +87,49 @@ spec:
   updateStrategy:
     type: {{ .Values.strategy }}
     drainTimeout: {{ .Values.drain }}
+{{- end }}
+---
+apiVersion: karga.io/v1alpha1
+kind: Service
+metadata:
+  name: web
+spec:
+  workload: web
+  ports:
+    - name: http
+      port: {{ .Values.servicePort | default .Values.listenPort }}
+    {{- if .Values.echo }}
+    - name: echo
+      port: 9000
+    {{- end }}
+  {{- if or .Values.listener .Values.route .Values.echoListener }}
+  expose:
+    {{- if .Values.listener }}
+    - port: http
+      listener: {{ .Values.listener }}
+    {{- end }}
+    {{- if .Values.route }}
+    - port: http
+      listener: {{ .Values.routeListener }}
+      host: {{ .Values.route }}
+      {{- if .Values.tls.cert }}
+      tls: {secret: site-tls}
+      {{- end }}
+    {{- end }}
+    {{- if .Values.echoListener }}
+    - port: echo
+      listener: {{ .Values.echoListener }}
+    {{- end }}
+  {{- end }}
+{{- if .Values.second }}
+---
+apiVersion: karga.io/v1alpha1
+kind: Service
+metadata:
+  name: api
+spec:
+  workload: api
+  ports:
+    - name: http
+      port: {{ add .Values.listenPort 1 }}
 {{- end }}

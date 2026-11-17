@@ -13,7 +13,7 @@ directory.
 | D6 | Secrets | Secret values become files mounted read-only from a 0700 directory; stored manifests keep only keyed digests (D22). |
 | D7 | Naming | Template context `.Values`, `.Release`, `.Package`, `.Files`; values flags `-f`, `--set`, `--set-string`. |
 | D8 | Determinism | Non-deterministic template functions are removed; `keys`/`values` are sorted. |
-| D9 | Host ports | `hostIP` defaults to 127.0.0.1. |
+| D9 | Host ports | `hostIP` defaulted to 127.0.0.1; replaced by D26 (the gateway listens on 127.0.0.1 unless the administrator says otherwise). |
 | D10 | Pull policy | `pullPolicy: always \| if-not-present \| never`, default if-not-present. |
 | D11 | Config and Secret delivery | Bind mounts from `$KARGA_HOME/releases/<rel>/<rev>/` (0700 directory, 0644 files). |
 | D12 | Network and Volume changes | Refused in an upgrade (uninstall or rename instead). |
@@ -29,5 +29,6 @@ directory.
 | D22 | Production, round 2 | TLS routes with redirects, `karga logs`, gateway health and access log, keyed (HMAC) digests of secrets. |
 | D24 | Production, round 3 | Swap and process limits, OOM reporting, log rotation, `tcp`/`http` health checks, `no-new-privileges` and the security block, volume backup and restore. |
 | D25 | Developer and user experience | Parallel integration tests, `make test-linux`, live progress, `exec`, `diff`, `create` and notes, `status --watch`, colors, completion, gateway package, release automation. |
+| D26 | Services and the host gateway | Workloads expose nothing; Services served by the release proxy; gateway listeners and listen addresses owned by the administrator; Linux only (ADR-0011). |
 
 D23 was not used.

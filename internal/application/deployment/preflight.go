@@ -12,9 +12,9 @@ import (
 )
 
 // Preflight finds problems before anything is created: runtime support, missing capabilities and
-// host ports or gateway routes taken by other releases, containers or host processes. Ports already
-// held by the same release are allowed (an upgrade will replace those containers).
-func Preflight(ctx context.Context, rt ports.Runtime, info ports.RuntimeInfo, release string, supported []string, rs []resource.Resource) error {
+// exposures the gateway cannot serve (unknown listeners, or ones other releases or host processes
+// hold). What the same release already holds is allowed (an upgrade keeps it).
+func Preflight(ctx context.Context, rt ports.Runtime, info ports.RuntimeInfo, home, release string, supported []string, rs []resource.Resource) error {
 	var errs []error
 	if !slices.Contains(supported, info.Name) {
 		errs = append(errs, fmt.Errorf("package does not support runtime %q (runtime.supported: %v)", info.Name, supported))
@@ -46,47 +46,8 @@ func Preflight(ctx context.Context, rt ports.Runtime, info ports.RuntimeInfo, re
 		}
 	}
 
-	published, err := rt.PublishedPorts(ctx)
-	if err != nil {
-		return errors.Join(append(errs, err)...)
-	}
-	for _, r := range rs {
-		w, ok := r.Spec.(*resource.WorkloadSpec)
-		if !ok {
-			continue
-		}
-		for _, p := range w.Ports {
-			if p.HostPort == 0 || slices.ContainsFunc(gateway.Ports(w), func(g resource.Port) bool { return g.ContainerPort == p.ContainerPort }) {
-				continue // the gateway holds it, checked below
-			}
-			if err := checkHostPort(release, r.Metadata.Name, p, published); err != nil {
-				errs = append(errs, err)
-			}
-		}
-	}
 	if proxySupported.Load() {
-		errs = append(errs, gateway.Check(ctx, rt, release, rs)...)
+		errs = append(errs, gateway.Check(ctx, rt, home, release, rs)...)
 	}
 	return errors.Join(errs...)
-}
-
-func checkHostPort(release, workload string, p resource.Port, published []ports.PublishedPort) error {
-	where := fmt.Sprintf("%s %q: hostPort %s:%d/%s", resource.KindWorkload, workload, p.HostIP, p.HostPort, p.Protocol)
-	for _, pub := range published {
-		if pub.Port != p.HostPort || pub.Protocol != p.Protocol || !ipOverlap(pub.HostIP, p.HostIP) {
-			continue
-		}
-		switch pub.Release {
-		case release:
-			return nil
-		case "":
-			return fmt.Errorf("%s is used by container %s: %w", where, pub.Workload, ports.ErrPortInUse)
-		default:
-			return fmt.Errorf("%s is used by release %s (%s): %w", where, pub.Release, pub.Workload, ports.ErrPortInUse)
-		}
-	}
-	if portTaken(p.Protocol, p.HostIP, p.HostPort) {
-		return fmt.Errorf("%s is taken by another process on this host: %w", where, ports.ErrPortInUse)
-	}
-	return nil
 }

@@ -27,9 +27,11 @@ import (
 	"github.com/hasankaradmir/karga/internal/adapters/docker"
 	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
 	"github.com/hasankaradmir/karga/internal/application/deployment"
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/ports"
+	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )
 
 // webPkg is a small HTTP server package; see testdata/web/values.yaml for its knobs.
@@ -48,6 +50,11 @@ func TestMain(m *testing.M) {
 		os.Exit(1)
 	}
 	sharedHome = dir
+	if runtime.GOOS != "linux" {
+		// Services need karga's gateway and release proxy: Linux with a local Docker.
+		fmt.Fprintln(os.Stderr, "integration tests run on Linux with a local Docker: use make test-linux")
+		os.Exit(1)
+	}
 	code := m.Run()
 	_ = os.RemoveAll(dir)
 	os.Exit(code)
@@ -163,6 +170,28 @@ func serviceIn(t *testing.T, home, name string) (*releases.Service, ports.Runtim
 		_ = store.Close()
 	})
 	return releases.New(store, func(context.Context) (ports.Runtime, error) { return rt, nil }, home, nil, nil), rt
+}
+
+// listener adds a gateway listener of protocol on a free port to the shared KARGA_HOME, as the
+// host's administrator would, and returns its name and port. Listeners outlive the test.
+func listener(t *testing.T, protocol string) (string, int) {
+	t.Helper()
+	port := runtimetest.FreePort(t)
+	name := fmt.Sprintf("l%d", port)
+	unlock, err := gateway.Lock(sharedHome)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer unlock()
+	settings, err := gateway.ReadSettings(sharedHome)
+	if err == nil {
+		settings.Listeners = append(settings.Listeners, gateway.Listener{Name: name, Port: port, Protocol: protocol})
+		err = gateway.WriteSettings(sharedHome, settings)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	return name, port
 }
 
 func opts() releases.CommonOptions {

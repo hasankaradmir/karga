@@ -162,14 +162,20 @@ func (s *Service) Status(ctx context.Context, name string) (*StatusReport, error
 				return nil, err
 			default:
 				st.Actual, st.Health, st.Restarts, st.OOMKilled = ws.State, ws.Health, ws.RestartCount, ws.OOMKilled
-				if r, derr := resource.Decode(a.Spec); a.Kind == resource.KindWorkload && derr == nil { // JSON is YAML
+				if r, derr := resource.DecodeStored(a.Spec); a.Kind == resource.KindWorkload && derr == nil {
 					if w, ok := r.Spec.(*resource.WorkloadSpec); ok {
 						st.Health = deployment.ProbeHealth(ctx, ws, w) // tcp/http checks are karga's
 					}
 				}
 			}
 			if a.Kind == deployment.KindProxy {
-				st.Backend = backends(deployment.ProxyDir(s.Home, name))
+				st.Backend = backends(deployment.ProxyDir(s.Home, name), "")
+			}
+		case resource.KindService:
+			// A Service has no container: it is routed when the release proxy sends its ports somewhere.
+			st.Actual = "not routed"
+			if b := backends(deployment.ProxyDir(s.Home, name), a.Name+"-p"); b != "" {
+				st.Actual, st.Backend = "routed", b
 			}
 		case resource.KindNetwork, resource.KindVolume:
 			kind := ports.ObjectNetwork
@@ -195,11 +201,15 @@ func (s *Service) Status(ctx context.Context, name string) (*StatusReport, error
 	return rep, nil
 }
 
-// backends lists the aliases a release proxy routes to, e.g. "karga-api-r2, karga-web-r3".
-func backends(dir string) string {
+// backends lists the aliases a release proxy routes to, e.g. "karga-api-r2, karga-web-r3", for the
+// clusters whose name starts with prefix.
+func backends(dir, prefix string) string {
 	eps, _ := envoy.Endpoints(dir)
 	var out []string
-	for _, ep := range eps {
+	for cluster, ep := range eps {
+		if !strings.HasPrefix(cluster, prefix) {
+			continue
+		}
 		host, _, _ := net.SplitHostPort(ep)
 		out = append(out, host)
 	}
@@ -208,12 +218,26 @@ func backends(dir string) string {
 }
 
 // Gateway lists what the host gateway serves, across releases.
-func (s *Service) Gateway(ctx context.Context) ([]gateway.Route, error) {
+func (s *Service) Gateway(ctx context.Context) ([]gateway.Exposed, error) {
 	rt, err := s.Runtime(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return gateway.Routes(ctx, rt)
+	return gateway.Routes(ctx, rt, s.Home)
+}
+
+// GatewaySettings returns the host's gateway settings and, per listener, the services using it.
+func (s *Service) GatewaySettings(ctx context.Context) (gateway.Settings, map[string][]string, error) {
+	settings, err := gateway.ReadSettings(s.Home)
+	if err != nil {
+		return settings, nil, err
+	}
+	rt, err := s.Runtime(ctx)
+	if err != nil {
+		return settings, nil, err
+	}
+	users, err := gateway.Users(ctx, rt, s.Home)
+	return settings, users, err
 }
 
 // GatewayHealth reports the gateway container and whether its Envoy is ready.
@@ -227,23 +251,84 @@ func (s *Service) GatewayHealth(ctx context.Context) (gateway.State, error) {
 
 // SetGatewayAccessLog stores the access log setting and applies it to a running gateway.
 func (s *Service) SetGatewayAccessLog(ctx context.Context, on bool) error {
-	settings, err := gateway.ReadSettings(s.Home)
-	if err != nil {
-		return err
-	}
-	settings.AccessLog = on
-	if err := gateway.WriteSettings(s.Home, settings); err != nil {
-		return err
-	}
+	return s.updateGateway(ctx, func(g *gateway.Settings, _ map[string][]string) error {
+		g.AccessLog = on
+		return nil
+	})
+}
+
+// SetGatewayListen sets the host addresses every gateway listener binds.
+func (s *Service) SetGatewayListen(ctx context.Context, addrs []string) error {
+	return s.updateGateway(ctx, func(g *gateway.Settings, _ map[string][]string) error {
+		g.Listen = addrs
+		return nil
+	})
+}
+
+// AddGatewayListener defines a listener services can expose ports on.
+func (s *Service) AddGatewayListener(ctx context.Context, l gateway.Listener) error {
+	return s.updateGateway(ctx, func(g *gateway.Settings, _ map[string][]string) error {
+		g.Listeners = append(g.Listeners, l)
+		return nil
+	})
+}
+
+// RemoveGatewayListener removes a listener no service uses.
+func (s *Service) RemoveGatewayListener(ctx context.Context, name string) error {
+	return s.updateGateway(ctx, func(g *gateway.Settings, users map[string][]string) error {
+		i := slices.IndexFunc(g.Listeners, func(l gateway.Listener) bool { return l.Name == name })
+		switch {
+		case i < 0:
+			return fmt.Errorf("gateway listener %q: %w", name, ports.ErrNotFound)
+		case len(users[name]) > 0:
+			return fmt.Errorf("gateway listener %q is used by %s; remove those exposures first", name, strings.Join(users[name], ", "))
+		}
+		g.Listeners = slices.Delete(g.Listeners, i, i+1)
+		return nil
+	})
+}
+
+// updateGateway changes the gateway settings under the gateway lock, stores them and applies them
+// to a running gateway, waiting until it routes again.
+func (s *Service) updateGateway(ctx context.Context, change func(*gateway.Settings, map[string][]string) error) error {
 	rt, err := s.runtime(ctx)
 	if err != nil {
 		return err
 	}
-	if _, err := rt.GetWorkload(ctx, gateway.ContainerName); errors.Is(err, ports.ErrNotFound) {
-		return nil // applied when a release next needs the gateway
+	err = func() error {
+		unlock, err := gateway.Lock(s.Home)
+		if err != nil {
+			return err
+		}
+		defer unlock()
+		settings, err := gateway.ReadSettings(s.Home)
+		if err != nil {
+			return err
+		}
+		users, err := gateway.Users(ctx, rt, s.Home)
+		if err != nil {
+			return err
+		}
+		if err := change(&settings, users); err != nil {
+			return err
+		}
+		return gateway.WriteSettings(s.Home, settings)
+	}()
+	if err != nil {
+		return err
 	}
-	_, err = gateway.Sync(ctx, rt, deployment.EnvoyProxies{}, s.Home, nil)
-	return err
+	if _, err := rt.GetWorkload(ctx, gateway.ContainerName); errors.Is(err, ports.ErrNotFound) {
+		return nil // applied when a release next exposes something
+	}
+	targets, err := gateway.Sync(ctx, rt, deployment.Proxies, s.Home)
+	if err != nil {
+		return err
+	}
+	want := gateway.Want(targets, func(t gateway.Target) bool { return len(t.Routes) > 0 })
+	if len(want) == 0 {
+		return nil
+	}
+	return deployment.Proxies.WaitReady(ctx, gateway.Dir(s.Home), want, deployment.ProxyReadyTimeout)
 }
 
 // Exec runs a command in a running workload of a release and returns its exit code.

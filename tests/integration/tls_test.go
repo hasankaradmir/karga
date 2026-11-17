@@ -24,9 +24,9 @@ import (
 
 	"go.yaml.in/yaml/v3"
 
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/application/packages"
 	"github.com/hasankaradmir/karga/internal/application/releases"
-	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )
 
 // selfSigned returns a certificate for host and a values file serving it.
@@ -85,10 +85,10 @@ func TestGatewayTLS(t *testing.T) {
 	ctx := context.Background()
 	name := releaseName("it-gw-tls")
 	s, _ := service(t, name)
-	port := runtimetest.FreePort(t)
+	l, port := listener(t, gateway.ProtocolHTTPS)
 	const host = "secure.local"
 	cert1, vals1 := selfSigned(t, host, 1)
-	sets := []string{"route=" + host, "port=" + strconv.Itoa(port)}
+	sets := []string{"route=" + host, "routeListener=" + l}
 	if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: webPkg,
 		Values: packages.Options{ValueFiles: []string{vals1}, Sets: sets}}); err != nil {
 		t.Fatal(err)

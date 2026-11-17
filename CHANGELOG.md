@@ -7,10 +7,21 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 
 First release.
 
+### Breaking (compared with earlier builds)
+- Workloads no longer expose ports: `hostPort`, `hostIP` and `routes` are gone from the Workload
+  (a clear error points to Services). Ports are named, and a `kind: Service` gives a workload a name
+  inside its release and exposes it on gateway listeners.
+- The gateway's listen addresses and listeners belong to the host's administrator: `karga gateway
+  listener add|remove|list`, `karga gateway set listen` (default `127.0.0.1`). Whoever used
+  `hostIP: 0.0.0.0` sets `karga gateway set listen 0.0.0.0`.
+- Linux only: without karga's gateway and release proxy (macOS, a remote Docker host) a plan with
+  Services is refused. Upgrading an installed release with its new package recreates its workloads
+  once.
+
 ### Packages and releases
 - Packages: Go templates with Sprig, `values.yaml` and JSON Schema (writeOnly values are never
   stored), `karga create` to start one, `lint`, `template`, notes (`NOTES.txt`).
-- Resources: Workload, Volume, Network, Config, Secret.
+- Resources: Workload, Service, Volume, Network, Config, Secret.
 - Releases: install, upgrade (`--reuse-values`, `--install`), rollback, uninstall; immutable
   revisions in SQLite; `history`, `diff`, `status --watch`, `get values|manifest|notes`.
 - Plans as a summary (`--verbose` for fields) and live progress while applying.
@@ -23,10 +34,11 @@ First release.
 - An upgrade or rollback that would delete a `retention: delete` volume stops unless given
   `--delete-volumes`; the plan marks what happens to a removed volume's data.
 
-### Upgrades without downtime (Linux)
-- `updateStrategy: replace` starts the new container next to the old one and switches over.
-- A host gateway (Envoy) serves tcp host ports and HTTP(S) routes by host and path, with TLS from
-  a Secret and redirects from port 80; a release proxy switches network clients.
+### Services and upgrades without downtime
+- A release proxy (Envoy) serves the release's Services; `updateStrategy: replace` starts the new
+  container next to the old one and switches the proxy over, so no client loses a request.
+- A host gateway (Envoy) serves the administrator's listeners: tcp, and HTTP(S) by host and path,
+  with TLS from a Secret and redirects from port 80.
 - `tcp`/`http` health checks need no tool in the image.
 
 ### Operations

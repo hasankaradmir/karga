@@ -19,7 +19,7 @@ const leak = "hunter2-LEAK"
 func TestSecretsDoNotLeak(t *testing.T) {
 	e := newCLIEnv(t)
 	pg := "../../examples/postgres"
-	set := []string{"--set", "network.port=" + e.port, "--set", "database.password=" + leak}
+	set := []string{"--set", "service.enabled=false", "--set", "database.password=" + leak}
 	debug := []string{"--debug", "--log-format", "json"}
 
 	cmds := [][]string{

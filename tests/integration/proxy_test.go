@@ -24,7 +24,6 @@ import (
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
 	"github.com/hasankaradmir/karga/internal/ports"
-	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )
 
 func TestGatewayReplaceWithoutLoss(t *testing.T) {
@@ -33,11 +32,11 @@ func TestGatewayReplaceWithoutLoss(t *testing.T) {
 	ctx := context.Background()
 	name := releaseName("it-gw")
 	s, rt := service(t, name)
-	port := runtimetest.FreePort(t)
+	l, port := listener(t, gateway.ProtocolTCP)
 	common := opts()
 	common.Timeout = 30 * time.Second
 	sets := func(extra ...string) packages.Options {
-		return packages.Options{Sets: append([]string{startDelay, "publish=true", "second=true", "port=" + strconv.Itoa(port)}, extra...)}
+		return packages.Options{Sets: append([]string{startDelay, "listener=" + l, "second=true"}, extra...)}
 	}
 
 	res, err := s.Install(ctx, releases.InstallRequest{CommonOptions: common, Name: name, Package: webPkg, Values: sets()})
@@ -56,16 +55,16 @@ func TestGatewayReplaceWithoutLoss(t *testing.T) {
 		t.Fatal(err)
 	}
 	for _, p := range pub {
-		if p.Release == name && p.HostIP != "127.0.0.1" {
-			t.Fatalf("workloads may only publish loopback upstreams: %+v", p)
+		if p.Release == name && (p.HostIP != "127.0.0.1" || p.Workload != deployment.ProxyName(name)) {
+			t.Fatalf("only the release proxy publishes, and only loopback upstreams: %+v", p)
 		}
 		if p.Port == port {
 			t.Fatalf("the host port must be held by the gateway, not a container: %+v", p)
 		}
 	}
 	routes, err := s.Gateway(ctx)
-	if err != nil || !slices.ContainsFunc(routes, func(r gateway.Route) bool {
-		return r.Release == name && r.Listener == "127.0.0.1:"+strconv.Itoa(port) && r.Route == "tcp"
+	if err != nil || !slices.ContainsFunc(routes, func(r gateway.Exposed) bool {
+		return r.Release == name && r.Listener == l+":"+strconv.Itoa(port) && r.Route == "tcp" && r.Service == "web:8080"
 	}) {
 		t.Fatalf("gateway routes: %+v %v", routes, err)
 	}
@@ -139,10 +138,10 @@ func TestGatewayHTTPRoutes(t *testing.T) {
 	a, b := releaseName("it-gw-a"), releaseName("it-gw-b")
 	s, rt := service(t, a)
 	t.Cleanup(func() { _ = deployment.Delete(context.Background(), rt, s.Home, b, true) })
-	port := runtimetest.FreePort(t)
+	l, port := listener(t, gateway.ProtocolHTTP)
 	install := func(rel, host, content string) error {
 		_, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: rel, Package: webPkg,
-			Values: packages.Options{Sets: []string{"route=" + host, "content=" + content, "port=" + strconv.Itoa(port)}}})
+			Values: packages.Options{Sets: []string{"route=" + host, "routeListener=" + l, "content=" + content}}})
 		return err
 	}
 	if err := install(a, "a.local", "from-a"); err != nil {
@@ -204,29 +203,33 @@ func TestGatewayHTTPRoutes(t *testing.T) {
 	}
 }
 
-// TestGatewayRecreateWorkload: a recreate workload (no proxy) still gets its host port from the gateway.
+// TestGatewayRecreateWorkload: a recreate workload is served through its Service like any other,
+// and its own container publishes nothing.
 func TestGatewayRecreateWorkload(t *testing.T) {
 	t.Parallel()
 	requireLinux(t)
 	ctx := context.Background()
 	name := releaseName("it-gw-rc")
 	s, rt := service(t, name)
-	port := runtimetest.FreePort(t)
-	res, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: webPkg,
-		Values: packages.Options{Sets: []string{"strategy=recreate", "publish=true", "listenPort=80", "port=" + strconv.Itoa(port)}}})
-	if err != nil {
+	l, port := listener(t, gateway.ProtocolTCP)
+	if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: webPkg,
+		Values: packages.Options{Sets: []string{"strategy=recreate", "listener=" + l, "listenPort=80"}}}); err != nil {
 		t.Fatal(err)
-	}
-	for _, c := range res.Plan.Changes {
-		if c.Kind == deployment.KindProxy {
-			t.Fatalf("recreate workloads need no proxy: %+v", c)
-		}
 	}
 	if code, body := hostGet(t, port, "x"); code != http.StatusOK || body != "v1" {
 		t.Fatalf("through the gateway: %d %q", code, body)
 	}
-	if _, err := rt.GetWorkload(ctx, deployment.ProxyName(name)); err == nil {
-		t.Fatal("unexpected proxy container")
+	if w := workload(t, rt, name+"-web"); len(w.IPs) == 0 {
+		t.Fatalf("workload: %+v", w)
+	}
+	pub, err := rt.PublishedPorts(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range pub {
+		if p.Workload == name+"-web" {
+			t.Fatalf("the workload published a port: %+v", p)
+		}
 	}
 }
 
@@ -256,11 +259,11 @@ func TestGatewayKeepsLongConnections(t *testing.T) {
 	ctx := context.Background()
 	name := releaseName("it-gw-long")
 	s, _ := service(t, name)
-	echo := runtimetest.FreePort(t)
+	l, echo := listener(t, gateway.ProtocolTCP)
 	common := opts()
 	common.Timeout = 30 * time.Second
 	sets := func(extra ...string) packages.Options {
-		return packages.Options{Sets: append([]string{"echoPort=" + strconv.Itoa(echo), "drain=60s"}, extra...)}
+		return packages.Options{Sets: append([]string{"echo=true", "echoListener=" + l, "drain=60s"}, extra...)}
 	}
 	if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: common, Name: name, Package: webPkg, Values: sets()}); err != nil {
 		t.Fatal(err)
@@ -282,16 +285,17 @@ func TestGatewayKeepsLongConnections(t *testing.T) {
 		}
 	}
 	roundTrip("before")
+	// The gateway forwards to the release proxy; the proxy switches between containers.
 	upstream := func() string {
-		eps, err := envoy.Endpoints(gateway.Dir(s.Home))
+		eps, err := envoy.Endpoints(deployment.ProxyDir(s.Home, name))
 		if err != nil {
 			t.Fatal(err)
 		}
-		return eps[name+"_web_p9000"]
+		return eps["web-p9000"]
 	}
 	initial := upstream()
 	if initial == "" {
-		t.Fatal("echo port not on the gateway")
+		t.Fatal("echo port not on the release proxy")
 	}
 
 	done := make(chan error, 1)
@@ -304,7 +308,7 @@ func TestGatewayKeepsLongConnections(t *testing.T) {
 	deadline := time.Now().Add(30 * time.Second)
 	for upstream() == initial {
 		if time.Now().After(deadline) {
-			t.Fatal("the gateway never switched to the new container")
+			t.Fatal("the release proxy never switched to the new container")
 		}
 		time.Sleep(200 * time.Millisecond)
 	}
@@ -340,7 +344,7 @@ func TestGatewayConcurrentInstalls(t *testing.T) {
 	a, b := releaseName("it-gw-ca"), releaseName("it-gw-cb")
 	sa, _ := serviceIn(t, home, a)
 	sb, _ := serviceIn(t, home, b)
-	port := runtimetest.FreePort(t)
+	l, port := listener(t, gateway.ProtocolHTTP)
 	var wg sync.WaitGroup
 	errs := make([]error, 2)
 	for i, x := range []struct {
@@ -351,7 +355,7 @@ func TestGatewayConcurrentInstalls(t *testing.T) {
 		go func() {
 			defer wg.Done()
 			_, errs[i] = x.s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: x.name, Package: webPkg,
-				Values: packages.Options{Sets: []string{"route=" + x.name + ".local", "content=" + x.name, "port=" + strconv.Itoa(port)}}})
+				Values: packages.Options{Sets: []string{"route=" + x.name + ".local", "routeListener=" + l, "content=" + x.name}}})
 		}()
 	}
 	wg.Wait()
@@ -375,9 +379,9 @@ func TestGatewaySurvivesDockerRestart(t *testing.T) {
 	ctx := context.Background()
 	name := releaseName("it-gw-boot")
 	s, _ := service(t, name)
-	port := runtimetest.FreePort(t)
+	l, port := listener(t, gateway.ProtocolHTTP)
 	if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: webPkg,
-		Values: packages.Options{Sets: []string{"second=true", "route=boot.local", "port=" + strconv.Itoa(port)}}}); err != nil {
+		Values: packages.Options{Sets: []string{"second=true", "route=boot.local", "routeListener=" + l}}}); err != nil {
 		t.Fatal(err)
 	}
 	if out, err := exec.Command("sudo", "-n", "systemctl", "restart", "docker").CombinedOutput(); err != nil {

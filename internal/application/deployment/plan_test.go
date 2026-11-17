@@ -184,7 +184,6 @@ func TestStrategyResolution(t *testing.T) {
 	}
 	eligible := func(w *resource.WorkloadSpec) {
 		w.UpdateStrategy = &resource.UpdateStrategy{Type: resource.StrategyReplace}
-		w.Ports[0].HostPort, w.Ports[0].HostIP = 0, ""
 		w.Mounts[0].ReadOnly = true
 	}
 	tests := []struct {
@@ -197,7 +196,6 @@ func TestStrategyResolution(t *testing.T) {
 		{"eligible replace", eligible, "", "replace"},
 		{"override to recreate", eligible, "recreate", "recreate"},
 		{"override to replace", func(w *resource.WorkloadSpec) { eligible(w); w.UpdateStrategy = nil }, "replace", "replace"},
-		{"host port", func(w *resource.WorkloadSpec) { eligible(w); w.Ports[0].HostPort = 6379 }, "", "recreate: publishes hostPort 6379/tcp without the gateway (Linux, tcp)"},
 		{"rw volume", func(w *resource.WorkloadSpec) { eligible(w); w.Mounts[0].ReadOnly = false }, "", "recreate: mounts volume data read-write"},
 		{"no healthcheck", func(w *resource.WorkloadSpec) { eligible(w); w.HealthCheck = nil }, "", "recreate: no healthCheck to verify readiness"},
 		{"anonymous volume", func(w *resource.WorkloadSpec) { eligible(w); w.AnonymousVolumes = []string{"/cache"} }, "replace", "recreate: keeps image VOLUME /cache in an anonymous volume"},
@@ -212,26 +210,34 @@ func TestStrategyResolution(t *testing.T) {
 	}
 }
 
-func TestTLSSecretChangeReappliesWorkload(t *testing.T) {
+func TestTLSSecretChangeUpdatesService(t *testing.T) {
 	withProxySupport(t, true)
 	tlsManifest := func(cert string) []resource.Resource {
-		rs := manifest(0)
-		rs[0].Spec.(*resource.WorkloadSpec).Ports[0].Routes = []resource.Route{{Host: "a.example", Path: "/", HostPort: 443, HostIP: "127.0.0.1", TLS: &resource.RouteTLS{Secret: "cert"}}}
+		rs := append(manifest(6379), serviceRes("redis", "redis", 443, "redis",
+			resource.Exposure{Port: "p", Listener: "websecure", Host: "a.example", Path: "/", TLS: &resource.ExposureTLS{Secret: "cert"}}))
 		return append(rs, secretRes("cert", map[string]string{resource.TLSCertKey: cert, resource.TLSKeyKey: "k"}))
 	}
 	ordered, err := Order(tlsManifest("c1"))
 	if err != nil {
 		t.Fatal(err)
 	}
-	if names(ordered) == "" || strings.Index(names(ordered), "Secret/cert") > strings.Index(names(ordered), "Workload/redis") {
-		t.Fatalf("the tls secret must come before the workload: %s", names(ordered))
+	if n := names(ordered); strings.Index(n, "Secret/cert") > strings.Index(n, "Service/redis") || strings.Index(n, "Workload/redis") > strings.Index(n, "Service/redis") {
+		t.Fatalf("the tls secret and the workload come before the service: %s", n)
 	}
 	p, err := Diff("cache", tlsManifest("c2"), appliedFrom(t, tlsManifest("c1")), "")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got := actions(p); !strings.Contains(got, "update:Workload/redis") || !strings.Contains(got, "update:Secret/cert") {
-		t.Fatalf("a new certificate must re-apply the workload: %s", got)
+	if got := actions(p); !strings.Contains(got, "update:Service/redis") || !strings.Contains(got, "update:Secret/cert") || strings.Contains(got, "update:Workload/redis") {
+		t.Fatalf("a new certificate updates the service only: %s", got)
+	}
+}
+
+func TestServicesNeedTheGateway(t *testing.T) {
+	withProxySupport(t, false)
+	_, err := Diff("cache", append(manifest(6379), serviceRes("redis", "redis", 6379, "redis")), nil, "")
+	if err == nil || !strings.Contains(err.Error(), "services redis need karga's gateway") {
+		t.Fatalf("got %v", err)
 	}
 }
 

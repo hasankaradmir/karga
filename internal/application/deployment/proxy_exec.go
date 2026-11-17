@@ -27,60 +27,95 @@ func revisionOf(ctx context.Context, rt ports.Runtime, name string) (int, error)
 	return strconv.Atoi(st.Labels[ports.LabelRevision])
 }
 
-// proxyWant is what the release proxy must route to for workload name to be served via alias.
-func proxyWant(name string, w *resource.WorkloadSpec, alias string) map[string]string {
+// proxyWant is what the release proxy must route to for workload's services to reach it via alias.
+func proxyWant(svcs services, workload, alias string) map[string]string {
 	want := map[string]string{}
-	for _, p := range w.Ports {
-		want[proxyCluster(name, p.ContainerPort)] = alias
+	for _, n := range svcs.targeting(workload) {
+		for _, p := range svcs.svc[n].Ports {
+			if _, ok := svcs.target(n, p); ok {
+				want[proxyCluster(n, p.Port)] = alias // Envoy reports a DNS cluster's host by name
+			}
+		}
 	}
 	return want
 }
 
-func proxyClusters(name string, w *resource.WorkloadSpec) []string {
+// proxyClusters are the clusters of the services that send traffic to workload.
+func proxyClusters(svcs services, workload string) []string {
 	var out []string
-	for _, p := range w.Ports {
-		out = append(out, proxyCluster(name, p.ContainerPort))
+	for _, n := range svcs.targeting(workload) {
+		for _, p := range svcs.svc[n].Ports {
+			out = append(out, proxyCluster(n, p.Port))
+		}
 	}
 	return out
 }
 
-// proxyConfig routes each proxied workload's ports to the backend alias of the container running it
-// (override names another alias per workload, for a replace). A workload without a container is
-// left out until it has one.
-func proxyConfig(ctx context.Context, rt ports.Runtime, rel string, set map[string]*resource.WorkloadSpec, override map[string]string) envoy.Config {
+// proxyConfig listens on every service port and routes it to the backend alias of the container
+// running the service's workload (override names another alias per workload, for a replace). A
+// service whose workload has no container yet is left out until it has one.
+func proxyConfig(ctx context.Context, rt ports.Runtime, rel string, svcs services, override map[string]string) envoy.Config {
 	var cfg envoy.Config
-	names := make([]string, 0, len(set))
-	for n := range set {
-		names = append(names, n)
-	}
-	sort.Strings(names)
-	for _, name := range names {
-		alias, ok := override[name]
+	for _, n := range svcs.names() {
+		s := svcs.svc[n]
+		w := svcs.wl[s.Workload]
+		if w == nil {
+			continue
+		}
+		alias, ok := override[s.Workload]
 		if !ok {
-			rev, err := revisionOf(ctx, rt, RuntimeName(rel, name))
+			rev, err := revisionOf(ctx, rt, RuntimeName(rel, s.Workload))
 			if err != nil {
 				continue
 			}
-			alias = BackendAlias(name, rev)
+			alias = BackendAlias(s.Workload, rev)
 		}
-		for _, p := range set[name].Ports {
-			cluster := proxyCluster(name, p.ContainerPort)
-			cfg.TCP = append(cfg.TCP, envoy.TCPListener{Address: "0.0.0.0", Port: p.ContainerPort, Cluster: cluster})
-			cfg.Clusters = append(cfg.Clusters, envoy.Cluster{Name: cluster, Host: alias, Port: p.ContainerPort, DNS: true,
-				HealthPath: httpHealthPath(set[name], p.ContainerPort)})
+		for _, p := range s.Ports {
+			port, ok := svcs.target(n, p)
+			if !ok {
+				continue
+			}
+			cluster := proxyCluster(n, p.Port)
+			cfg.TCP = append(cfg.TCP, envoy.TCPListener{Address: "0.0.0.0", Port: p.Port, Cluster: cluster})
+			cfg.Clusters = append(cfg.Clusters, envoy.Cluster{Name: cluster, Host: alias, Port: port, DNS: true,
+				HealthPath: httpHealthPath(w, port)})
 		}
 	}
 	return cfg
 }
 
-func writeProxy(ctx context.Context, rt ports.Runtime, px ProxyControl, req ExecRequest, set map[string]*resource.WorkloadSpec, override map[string]string) error {
-	return px.Write(ProxyDir(req.Home, req.Release), req.Release, 0o600, proxyConfig(ctx, rt, req.Release, set, override))
+func writeProxy(ctx context.Context, rt ports.Runtime, px ProxyControl, req ExecRequest, svcs services, override map[string]string) error {
+	return px.Write(ProxyDir(req.Home, req.Release), req.Release, 0o600, proxyConfig(ctx, rt, req.Release, svcs, override))
+}
+
+// exposeRoutes is what the release exposes on the gateway, written next to the proxy's
+// configuration for the gateway to read.
+func exposeRoutes(svcs services, paths map[Key]string) []gateway.Route {
+	var out []gateway.Route
+	for _, n := range svcs.names() {
+		s := svcs.svc[n]
+		for _, e := range s.Expose {
+			p, ok := s.PortNamed(e.Port)
+			if !ok {
+				continue
+			}
+			r := gateway.Route{Service: n, Port: p.Port, Listener: e.Listener, Host: e.Host, Path: e.Path}
+			if port, ok := svcs.target(n, p); ok {
+				r.HealthPath = httpHealthPath(svcs.wl[s.Workload], port)
+			}
+			if e.TLS != nil {
+				r.TLSSecret, r.CertDir = e.TLS.Secret, paths[Key{resource.KindSecret, e.TLS.Secret}]
+			}
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // proxyRequest is the release's Envoy container. It runs as the karga user so it can read its 0700
 // directory and karga can reach its admin socket. It joins its first network at creation; the
 // others are connected with their own aliases (connectProxy).
-func proxyRequest(rel string, revision int, spec ProxySpec, dir, user string) ports.WorkloadRequest {
+func proxyRequest(rel string, revision int, spec ProxySpec, dir, user string) (ports.WorkloadRequest, error) {
 	wr := ports.WorkloadRequest{
 		Name:          ProxyName(rel),
 		Labels:        labels(rel, revision, KindProxy, ProxyResource),
@@ -99,7 +134,7 @@ func proxyRequest(rel string, revision int, spec ProxySpec, dir, user string) po
 	if nets := sortedNetworks(spec); len(nets) > 0 {
 		wr.Networks, wr.Aliases = []string{RuntimeName(rel, nets[0])}, spec.Networks[nets[0]]
 	}
-	return wr
+	return wr, gateway.Publish(&wr, spec.Published)
 }
 
 func sortedNetworks(spec ProxySpec) []string {
@@ -112,11 +147,14 @@ func sortedNetworks(spec ProxySpec) []string {
 }
 
 // createProxy writes the configuration for what runs now and starts the release proxy.
-func createProxy(ctx context.Context, rt ports.Runtime, px ProxyControl, req ExecRequest, c Change, set map[string]*resource.WorkloadSpec) error {
-	if err := writeProxy(ctx, rt, px, req, set, nil); err != nil {
+func createProxy(ctx context.Context, rt ports.Runtime, px ProxyControl, req ExecRequest, c Change, svcs services) error {
+	if err := writeProxy(ctx, rt, px, req, svcs, nil); err != nil {
 		return err
 	}
-	wr := proxyRequest(req.Release, req.Revision, *c.Proxy, ProxyDir(req.Home, req.Release), req.ProxyUser)
+	wr, err := proxyRequest(req.Release, req.Revision, *c.Proxy, ProxyDir(req.Home, req.Release), req.ProxyUser)
+	if err != nil {
+		return err
+	}
 	if err := rt.CreateWorkload(ctx, wr); err != nil {
 		return err
 	}
@@ -158,7 +196,7 @@ func removeProxy(ctx context.Context, rt ports.Runtime, home, rel string, c Chan
 	if c.Name != ProxyResource {
 		return os.RemoveAll(filepath.Join(ProxyDir(home, rel), c.Name))
 	}
-	for _, f := range []string{"envoy.json", "lds.json", "cds.json", "admin.sock"} {
+	for _, f := range []string{"envoy.json", "lds.json", "cds.json", "admin.sock", "expose.json"} {
 		if err := os.Remove(filepath.Join(ProxyDir(home, rel), f)); err != nil && !errors.Is(err, os.ErrNotExist) {
 			return err
 		}
@@ -166,24 +204,20 @@ func removeProxy(ctx context.Context, rt ports.Runtime, home, rel string, c Chan
 	return nil
 }
 
-// routedTo reports whether the proxy or the gateway routes workload name to container next: then an
+// routedTo reports whether the release proxy routes workload name to container next: then an
 // interrupted replace switched over and next is the one to keep.
 func routedTo(ctx context.Context, rt ports.Runtime, home, rel, name, next string) bool {
 	st, err := rt.GetWorkload(ctx, next)
 	if err != nil {
 		return false
 	}
-	if rev, err := strconv.Atoi(st.Labels[ports.LabelRevision]); err == nil {
-		eps, _ := envoy.Endpoints(ProxyDir(home, rel))
-		for cluster, ep := range eps {
-			if strings.HasPrefix(cluster, name+"-p") && strings.HasPrefix(ep, BackendAlias(name, rev)+":") {
-				return true
-			}
-		}
+	rev, err := strconv.Atoi(st.Labels[ports.LabelRevision])
+	if err != nil {
+		return false
 	}
-	eps, _ := envoy.Endpoints(gateway.Dir(home))
-	for _, p := range gateway.ParseLabel(st.Labels) {
-		if eps[gateway.Cluster(rel, name, p.ContainerPort)] == "127.0.0.1:"+strconv.Itoa(p.Upstream) {
+	eps, _ := envoy.Endpoints(ProxyDir(home, rel))
+	for _, ep := range eps {
+		if strings.HasPrefix(ep, BackendAlias(name, rev)+":") {
 			return true
 		}
 	}

@@ -8,13 +8,14 @@ import (
 	"testing"
 
 	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
 func webWithPort(port int) resource.Resource {
 	return resource.Resource{Kind: resource.KindWorkload, Metadata: resource.Metadata{Name: "web"}, Spec: &resource.WorkloadSpec{
-		Image: "x", Ports: []resource.Port{{ContainerPort: 80, HostPort: port, HostIP: "127.0.0.1", Protocol: "tcp"}},
+		Image: "x", Ports: []resource.Port{{Name: "http", ContainerPort: port, Protocol: "tcp"}},
 		Resources:   &resource.Resources{Memory: "64Mi", CPU: "1"},
 		HealthCheck: &resource.HealthCheck{Type: "exec", Command: []string{"true"}},
 	}}
@@ -36,7 +37,7 @@ func preflight(t *testing.T, rt *fakeruntime.Runtime, release string, rs ...reso
 	if err != nil {
 		t.Fatal(err)
 	}
-	return Preflight(context.Background(), rt, info, release, []string{"docker"}, rs)
+	return Preflight(context.Background(), rt, info, t.TempDir(), release, []string{"docker"}, rs)
 }
 
 func TestPreflightOK(t *testing.T) {
@@ -53,7 +54,7 @@ func TestPreflightRuntimeAndCapabilities(t *testing.T) {
 	info, _ := rt.Info(context.Background())
 	vol := resource.Resource{Kind: resource.KindVolume, Metadata: resource.Metadata{Name: "d"},
 		Spec: &resource.VolumeSpec{Driver: "nfs", MountOptions: []string{"nocopy"}}}
-	err := Preflight(context.Background(), rt, info, "web", []string{"podman"}, []resource.Resource{vol, webWithPort(0)})
+	err := Preflight(context.Background(), rt, info, t.TempDir(), "web", []string{"podman"}, []resource.Resource{vol, webWithPort(80)})
 	for _, want := range []string{`does not support runtime "docker"`, "volume driver nfs", "mountOptions", "memory limit", "cpu limit", "exec healthcheck"} {
 		if err == nil || !strings.Contains(err.Error(), want) {
 			t.Errorf("missing %q in %v", want, err)
@@ -61,38 +62,28 @@ func TestPreflightRuntimeAndCapabilities(t *testing.T) {
 	}
 }
 
-func TestPreflightHostPorts(t *testing.T) {
-	ctx := context.Background()
-	port := freePort(t)
-	rt := fakeruntime.New("img")
-	other := ports.WorkloadRequest{
-		Name: "other-web", Image: "img", Labels: map[string]string{ports.LabelRelease: "other"},
-		Ports: []ports.PortBinding{{ContainerPort: 80, HostPort: port, HostIP: "0.0.0.0", Protocol: "tcp"}},
+func TestPreflightExposures(t *testing.T) {
+	withProxySupport(t, true)
+	svc := serviceRes("web", "web", 80, "http", resource.Exposure{Port: "p", Listener: "nope", Host: "a.example", Path: "/"})
+	err := preflight(t, fakeruntime.New(), "web", webWithPort(80), svc)
+	if err == nil || !strings.Contains(err.Error(), "no such gateway listener") {
+		t.Fatalf("unknown listener: %v", err)
 	}
-	if err := rt.CreateWorkload(ctx, other); err != nil {
-		t.Fatal(err)
-	}
-	if err := rt.StartWorkload(ctx, other.Name); err != nil {
-		t.Fatal(err)
-	}
-
-	err := preflight(t, rt, "web", webWithPort(port))
-	if !errors.Is(err, ports.ErrPortInUse) || !strings.Contains(err.Error(), "used by release other") {
-		t.Fatalf("other release: %v", err)
-	}
-	// The release that owns the port may reuse it.
-	if err := preflight(t, rt, "other", webWithPort(port)); err != nil {
-		t.Fatalf("same release: %v", err)
-	}
-
-	// A host process holding a port.
+	// A listener nobody serves yet is bound once to see that no host process holds it.
 	l, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
 	defer func() { _ = l.Close() }()
-	busy := l.Addr().(*net.TCPAddr).Port
-	if err := preflight(t, fakeruntime.New(), "web", webWithPort(busy)); !errors.Is(err, ports.ErrPortInUse) || !strings.Contains(err.Error(), "another process on this host") {
+	home := t.TempDir()
+	if err := gateway.WriteSettings(home, gateway.Settings{Listeners: []gateway.Listener{{Name: "busy", Port: l.Addr().(*net.TCPAddr).Port, Protocol: gateway.ProtocolTCP}}}); err != nil {
+		t.Fatal(err)
+	}
+	rt := fakeruntime.New()
+	info, _ := rt.Info(context.Background())
+	svc = serviceRes("web", "web", 80, "http", resource.Exposure{Port: "p", Listener: "busy"})
+	err = Preflight(context.Background(), rt, info, home, "web", []string{"docker"}, []resource.Resource{webWithPort(80), svc})
+	if !errors.Is(err, ports.ErrPortInUse) || !strings.Contains(err.Error(), "another process on this host") {
 		t.Fatalf("host process: %v", err)
 	}
 }

@@ -524,7 +524,10 @@ func newGetCmd(a *app) *cobra.Command {
 func newGatewayCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gateway",
-		Short: "Inspect and configure the host gateway (Linux)",
+		Short: "Configure the host gateway: where it listens and on which listeners",
+		Long: "The gateway is the host's single entry point. Its administrator decides where it listens\n" +
+			"(set listen, default 127.0.0.1) and on which ports (listeners); packages only attach their\n" +
+			"Services to listeners by name and can open nothing themselves.",
 	}
 	cmd.AddCommand(&cobra.Command{
 		Use:   "status",
@@ -542,14 +545,14 @@ func newGatewayCmd(a *app) *cobra.Command {
 				}
 				if a.output == outputJSON {
 					if routes == nil {
-						routes = []gateway.Route{}
+						routes = []gateway.Exposed{}
 					}
 					return writeJSON(a.stdout, map[string]any{"gateway": health, "routes": routes})
 				}
 				state := health.Container
 				switch {
 				case health.Container == "missing":
-					state = "not running (no release uses it)"
+					state = "not running (nothing is exposed)"
 				case health.Ready:
 					state += ", ready (Envoy " + health.Version + ")"
 				case health.Error != "":
@@ -565,12 +568,13 @@ func newGatewayCmd(a *app) *cobra.Command {
 				if health.Image != "" {
 					_, _ = fmt.Fprintf(a.stdout, "Image:      %s\n", health.Image)
 				}
+				_, _ = fmt.Fprintf(a.stdout, "Listen:     %s\n", strings.Join(health.Listen, ", "))
 				_, _ = fmt.Fprintf(a.stdout, "Access log: %s\n\n", access)
 				var rows [][]string
 				for _, r := range routes {
-					rows = append(rows, []string{r.Listener, r.Route, r.Release, r.Workload, r.Upstream})
+					rows = append(rows, []string{r.Listener, r.Route, r.Release, r.Service, r.Upstream})
 				}
-				return a.table("LISTENER\tROUTE\tRELEASE\tWORKLOAD\tUPSTREAM", rows)
+				return a.table("LISTENER\tROUTE\tRELEASE\tSERVICE\tUPSTREAM", rows)
 			})
 		},
 	})
@@ -590,7 +594,82 @@ func newGatewayCmd(a *app) *cobra.Command {
 			})
 		},
 	})
-	cmd.AddCommand(set)
+	set.AddCommand(&cobra.Command{
+		Use:   "listen <ip>[,<ip>...]",
+		Short: "Set the host addresses every listener binds (default 127.0.0.1; 0.0.0.0 is every interface)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			addrs := strings.Split(args[0], ",")
+			return a.withService(cmd.Context(), func(s *releases.Service) error {
+				if err := s.SetGatewayListen(cmd.Context(), addrs); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(a.stdout, "gateway listens on %s\n", strings.Join(addrs, ", "))
+				return err
+			})
+		},
+	})
+	cmd.AddCommand(set, newListenerCmd(a))
+	return cmd
+}
+
+func newListenerCmd(a *app) *cobra.Command {
+	cmd := &cobra.Command{Use: "listener", Short: "Define the ports services can be exposed on"}
+	cmd.AddCommand(&cobra.Command{
+		Use:   "list",
+		Short: "List the listeners and the services using them",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			return a.withService(cmd.Context(), func(s *releases.Service) error {
+				settings, users, err := s.GatewaySettings(cmd.Context())
+				if err != nil {
+					return err
+				}
+				if a.output == outputJSON {
+					return writeJSON(a.stdout, map[string]any{"listen": settings.Listen, "listeners": settings.Listeners, "users": users})
+				}
+				var rows [][]string
+				for _, l := range settings.Listeners {
+					rows = append(rows, []string{l.Name, strconv.Itoa(l.Port), l.Protocol, strings.Join(users[l.Name], ", ")})
+				}
+				return a.table("NAME\tPORT\tPROTOCOL\tSERVICES", rows)
+			})
+		},
+	})
+	var l gateway.Listener
+	add := &cobra.Command{
+		Use:   "add <name> --port <port> --protocol tcp|http|https",
+		Short: "Define a listener (a tcp listener belongs to one service; http and https are shared by host)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			l.Name = args[0]
+			return a.withService(cmd.Context(), func(s *releases.Service) error {
+				if err := s.AddGatewayListener(cmd.Context(), l); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(a.stdout, "listener %s added (%s on port %d)\n", l.Name, l.Protocol, l.Port)
+				return err
+			})
+		},
+	}
+	add.Flags().IntVar(&l.Port, "port", 0, "host port")
+	add.Flags().StringVar(&l.Protocol, "protocol", "", "tcp, http or https")
+	_ = add.MarkFlagRequired("port")
+	_ = add.MarkFlagRequired("protocol")
+	cmd.AddCommand(add, &cobra.Command{
+		Use:   "remove <name>",
+		Short: "Remove a listener no service uses",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.withService(cmd.Context(), func(s *releases.Service) error {
+				if err := s.RemoveGatewayListener(cmd.Context(), args[0]); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(a.stdout, "listener %s removed\n", args[0])
+				return err
+			})
+		},
+	})
 	return cmd
 }
 
