@@ -310,3 +310,7 @@ changelog section as notes. `goreleaser release --snapshot --clean` builds the s
 
 Architecture decisions are in [`docs/adr/`](docs/adr/), with the implementation decisions in
 [`docs/adr/decisions.md`](docs/adr/decisions.md).
+
+## License
+
+Apache License 2.0; see [LICENSE](LICENSE).
