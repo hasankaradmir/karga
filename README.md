@@ -294,4 +294,5 @@ and provisions the VM on first use (`KARGA_VM` names it) and runs `TARGETS` ther
 `KARGA_TEST_DAEMON_RESTART=1 make test-integration` additionally restarts the Docker daemon (needs
 passwordless sudo).
 
-The design is in `docs/` (tech design and execution plan, kept outside version control).
+Architecture decisions are in [`docs/adr/`](docs/adr/), with the implementation decisions in
+[`docs/adr/decisions.md`](docs/adr/decisions.md).
