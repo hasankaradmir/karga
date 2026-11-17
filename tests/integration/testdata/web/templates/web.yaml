@@ -51,11 +51,18 @@ spec:
           {{- end }}
       {{- end }}
   healthCheck:
-    type: exec
+    type: {{ .Values.health }}
+    {{- if eq .Values.health "exec" }}
     {{- if .Values.healthy }}
     command: [wget, -q, -O, /dev/null, "http://127.0.0.1:{{ .Values.listenPort }}/"]
     {{- else }}
     command: ["false"]
+    {{- end }}
+    {{- else }}
+    port: {{ .Values.listenPort }}
+    {{- if eq .Values.health "http" }}
+    path: {{ if .Values.healthy }}/{{ else }}/missing{{ end }}
+    {{- end }}
     {{- end }}
     interval: 1s
     timeout: 1s

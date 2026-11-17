@@ -17,6 +17,8 @@ import (
 
 // Config tells the suite which image and commands to use.
 type Config struct {
+	// ReportsIPs: GetWorkload returns the workload's network addresses.
+	ReportsIPs bool
 	// Image must provide SleepCommand and HealthyCommand.
 	Image          string
 	SleepCommand   []string
@@ -144,6 +146,9 @@ func Run(t *testing.T, rt ports.Runtime, cfg Config) {
 		})
 		if st.Labels[ports.LabelRelease] != release || st.Labels[ports.LabelName] != "app" {
 			t.Fatalf("labels: %v", st.Labels)
+		}
+		if cfg.ReportsIPs && st.IPs[netReq.Name] == "" {
+			t.Fatalf("no address on %s: %v", netReq.Name, st.IPs)
 		}
 		assertListed(t, rt, release, ports.ObjectWorkload, req.Name, true)
 		var logBuf strings.Builder

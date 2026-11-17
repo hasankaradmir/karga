@@ -24,6 +24,7 @@ import (
 	tcpv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/network/tcp_proxy/v3"
 	tlsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/transport_sockets/tls/v3"
 	discoveryv3 "github.com/envoyproxy/go-control-plane/envoy/service/discovery/v3"
+	typev3 "github.com/envoyproxy/go-control-plane/envoy/type/v3"
 	"google.golang.org/protobuf/encoding/protojson"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/anypb"
@@ -255,6 +256,12 @@ func (c Config) ClustersJSON() ([]byte, error) {
 				HealthyThreshold:   wrapperspb.UInt32(1),
 				HealthChecker:      &corev3.HealthCheck_TcpHealthCheck_{TcpHealthCheck: &corev3.HealthCheck_TcpHealthCheck{}},
 			}},
+		}
+		if cl.HealthPath != "" {
+			item.HealthChecks[0].HealthChecker = &corev3.HealthCheck_HttpHealthCheck_{HttpHealthCheck: &corev3.HealthCheck_HttpHealthCheck{
+				Path:             cl.HealthPath,
+				ExpectedStatuses: []*typev3.Int64Range{{Start: 200, End: 400}},
+			}}
 		}
 		if cl.DNS {
 			// The DnsCluster extension replaces the deprecated type/dns_refresh_rate fields.

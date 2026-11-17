@@ -71,7 +71,15 @@
           "interval": "0.500s",
           "unhealthy_threshold": 1,
           "healthy_threshold": 1,
-          "tcp_health_check": {}
+          "http_health_check": {
+            "path": "/healthz",
+            "expected_statuses": [
+              {
+                "start": "200",
+                "end": "400"
+              }
+            ]
+          }
         }
       ]
     }

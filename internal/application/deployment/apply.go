@@ -440,7 +440,7 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 		}
 		return cause
 	}
-	if err := waitReady(ctx, rt, []string{next}, req.Timeout); err != nil {
+	if _, err := waitReady(ctx, rt, []readyTarget{{next, s}}, req.Timeout); err != nil {
 		return false, stopNext(err)
 	}
 
@@ -545,11 +545,12 @@ func Reconcile(ctx context.Context, rt ports.Runtime, home, rel string, applied 
 // waitChanged waits for every changed workload. On failure the ones that are not ready are stopped
 // (kept for inspection) and reported as failed, so the next plan recreates them.
 func waitChanged(ctx context.Context, rt ports.Runtime, rel string, changed []Change, timeout time.Duration, report func(Change, string, error) error) error {
-	names := make([]string, len(changed))
+	targets := make([]readyTarget, len(changed))
 	for i, c := range changed {
-		names[i] = RuntimeName(rel, c.Name)
+		w, _ := workloadOf(c)
+		targets[i] = readyTarget{RuntimeName(rel, c.Name), w}
 	}
-	werr := waitReady(ctx, rt, names, timeout)
+	notReady, werr := waitReady(ctx, rt, targets, timeout)
 	if werr == nil {
 		return nil
 	}
@@ -557,7 +558,7 @@ func waitChanged(ctx context.Context, rt ports.Runtime, rel string, changed []Ch
 	for _, c := range changed {
 		name := RuntimeName(rel, c.Name)
 		st, err := rt.GetWorkload(ctx, name)
-		if err == nil && st.State == ports.StateRunning && st.Health != ports.HealthUnhealthy && st.Health != ports.HealthStarting {
+		if err == nil && !slices.Contains(notReady, name) && st.State == ports.StateRunning && st.Health != ports.HealthUnhealthy && st.Health != ports.HealthStarting {
 			continue
 		}
 		if err := rt.StopWorkload(ctx, name, stopTimeout); err != nil && !errors.Is(err, ports.ErrNotFound) {
@@ -604,10 +605,10 @@ func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[str
 		rev, _ := strconv.Atoi(lbl[ports.LabelRevision])
 		wr.Aliases = []string{BackendAlias(name, rev)}
 	}
-	if err := gatewayLabel(&wr, gatewayPorts(s), paths); err != nil {
+	if err := gatewayLabel(&wr, s, paths); err != nil {
 		return wr, err
 	}
-	if hc := s.HealthCheck; hc != nil {
+	if hc := s.HealthCheck; hc != nil && hc.Type == resource.HealthExec {
 		// Durations were validated when the resource was decoded.
 		interval, _ := time.ParseDuration(hc.Interval)
 		timeout, _ := time.ParseDuration(hc.Timeout)
@@ -636,42 +637,6 @@ func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[str
 
 // pollInterval is how often waitReady checks workload status.
 var pollInterval = 500 * time.Millisecond
-
-// waitReady waits until every workload is healthy (with a healthcheck) or running (without one).
-func waitReady(ctx context.Context, rt ports.Runtime, names []string, timeout time.Duration) error {
-	deadline := time.NewTimer(timeout)
-	defer deadline.Stop()
-	pending := slices.Clone(names)
-	var last ports.WorkloadStatus
-	for {
-		var still []string
-		for _, n := range pending {
-			st, err := rt.GetWorkload(ctx, n)
-			if err != nil {
-				return err
-			}
-			switch {
-			case st.State == ports.StateExited || st.State == "dead":
-				return fmt.Errorf("workload %s exited with code %d before becoming ready", n, st.ExitCode)
-			case st.Health == ports.HealthUnhealthy:
-				return fmt.Errorf("workload %s is unhealthy", n)
-			case st.State == ports.StateRunning && (st.Health == ports.HealthHealthy || st.Health == ports.HealthNone):
-			default:
-				still, last = append(still, n), st
-			}
-		}
-		if pending = still; len(pending) == 0 {
-			return nil
-		}
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		case <-deadline.C:
-			return fmt.Errorf("workload %s not ready after %s (state %q, health %q)", last.Name, timeout, last.State, last.Health)
-		case <-time.After(pollInterval):
-		}
-	}
-}
 
 // stopTimeout gives workloads a graceful shutdown before they are removed.
 const stopTimeout = 10 * time.Second

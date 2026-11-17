@@ -27,7 +27,7 @@ var sample = Config{
 	}, Certs: map[string]Cert{"secure.example": {Chain: "/etc/karga-proxy/certs/app_443_secure.example.crt", Key: "/etc/karga-proxy/certs/app_443_secure.example.key"}}}},
 	Clusters: []Cluster{
 		{Name: "db_pg_p5432", Host: "127.0.0.1", Port: 41001},
-		{Name: "web-p8080", Host: "karga-web-r2", Port: 8080, DNS: true},
+		{Name: "web-p8080", Host: "karga-web-r2", Port: 8080, DNS: true, HealthPath: "/healthz"},
 	},
 }
 

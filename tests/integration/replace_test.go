@@ -26,6 +26,9 @@ const maxRaceFailures = 2
 
 // startPinger runs a client on the release network that requests http://web:8080/ every 100ms and
 // prints the body, or FAIL when a request fails.
+// startPinger measures what other workloads see during an upgrade. It has to be a container on the
+// release network: Docker resolves aliases such as "web" only there, never from the host. It is
+// test-only; karga's own health checks start no container.
 func startPinger(t *testing.T, rt ports.Runtime, rel string) string {
 	t.Helper()
 	return startURLPinger(t, rt, rel, "pinger", "http://web:8080/")

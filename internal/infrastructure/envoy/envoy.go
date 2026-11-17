@@ -57,6 +57,8 @@ type Cluster struct {
 	Host string
 	Port int
 	DNS  bool
+	// HealthPath makes the health check an HTTP GET of that path (2xx/3xx); empty: a TCP connect.
+	HealthPath string
 }
 
 // TCPListener proxies every connection on Address:Port to Cluster.

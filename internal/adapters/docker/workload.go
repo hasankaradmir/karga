@@ -200,6 +200,16 @@ func (r *Runtime) GetWorkload(ctx context.Context, name string) (ports.WorkloadS
 			st.Health = string(s.Health.Status)
 		}
 	}
+	if ns := res.Container.NetworkSettings; ns != nil {
+		for n, ep := range ns.Networks {
+			if ep != nil && ep.IPAddress.IsValid() {
+				if st.IPs == nil {
+					st.IPs = map[string]string{}
+				}
+				st.IPs[n] = ep.IPAddress.String()
+			}
+		}
+	}
 	if h := res.Container.HostConfig; h != nil {
 		st.Limits = ports.Limits{MemoryBytes: h.Memory, MemorySwapBytes: h.MemorySwap, NanoCPUs: h.NanoCPUs}
 		if h.PidsLimit != nil {

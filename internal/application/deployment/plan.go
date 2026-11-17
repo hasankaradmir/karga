@@ -178,11 +178,16 @@ func Diff(releaseName string, desired []resource.Resource, applied []release.App
 
 	var plan Plan
 	var errs []string
-	if !proxySupported.Load() {
-		for _, r := range ordered {
-			if w, ok := r.Spec.(*resource.WorkloadSpec); ok && slices.ContainsFunc(w.Ports, func(p resource.Port) bool { return len(p.Routes) > 0 }) {
-				errs = append(errs, fmt.Sprintf("workload %q: routes need the gateway (Linux with a local Docker)", r.Metadata.Name))
-			}
+	for _, r := range ordered {
+		w, ok := r.Spec.(*resource.WorkloadSpec)
+		if !ok {
+			continue
+		}
+		if !proxySupported.Load() && slices.ContainsFunc(w.Ports, func(p resource.Port) bool { return len(p.Routes) > 0 }) {
+			errs = append(errs, fmt.Sprintf("workload %q: routes need the gateway (Linux with a local Docker)", r.Metadata.Name))
+		}
+		if why := probeReachable(w); why != "" {
+			errs = append(errs, fmt.Sprintf("workload %q: %s", r.Metadata.Name, why))
 		}
 	}
 	for _, r := range ordered {

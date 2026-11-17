@@ -42,7 +42,7 @@ func Preflight(ctx context.Context, rt ports.Runtime, info ports.RuntimeInfo, re
 			if s.Resources != nil && s.Resources.CPU != "" {
 				need(r, ports.CapResourcesCPU, "a cpu limit")
 			}
-			if s.HealthCheck != nil {
+			if s.HealthCheck != nil && s.HealthCheck.Type == resource.HealthExec {
 				need(r, ports.CapHealthcheckExec, "an exec healthcheck")
 			}
 		}

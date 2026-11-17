@@ -19,5 +19,6 @@ func TestContract(t *testing.T) {
 		Image:          "busybox:1.37",
 		SleepCommand:   []string{"sleep", "300"},
 		HealthyCommand: []string{"true"},
+		ReportsIPs:     true,
 	})
 }

@@ -202,6 +202,8 @@ type WorkloadStatus struct {
 	RestartCount int
 	// Limits is what the runtime enforces, as it reports it.
 	Limits Limits
+	// IPs maps each attached network to the workload's address on it.
+	IPs map[string]string
 }
 
 // Limits are the enforced resource and logging limits of a workload.

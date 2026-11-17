@@ -45,6 +45,8 @@ type GatewayPort struct {
 	Routes        []resource.Route `json:"routes,omitempty"`
 	// CertDirs maps each TLS route's Secret to its materialized directory (tls.crt, tls.key).
 	CertDirs map[string]string `json:"certDirs,omitempty"`
+	// HealthPath is checked by HTTP instead of a TCP connect (the workload's http health check).
+	HealthPath string `json:"healthPath,omitempty"`
 }
 
 // gatewayPorts returns the ports of w the gateway serves (none off Linux).
@@ -152,7 +154,7 @@ func gatewayConfig(targets []gatewayTarget) envoy.Config {
 	for _, t := range targets {
 		for _, p := range t.Ports {
 			cluster := gatewayCluster(t.Release, t.Workload, p.ContainerPort)
-			cfg.Clusters = append(cfg.Clusters, envoy.Cluster{Name: cluster, Host: "127.0.0.1", Port: p.Upstream})
+			cfg.Clusters = append(cfg.Clusters, envoy.Cluster{Name: cluster, Host: "127.0.0.1", Port: p.Upstream, HealthPath: p.HealthPath})
 			if p.HostPort != 0 {
 				a := addr{p.HostIP, p.HostPort}
 				if _, isHTTP := httpIdx[a]; !tcp[a] && !isHTTP {
@@ -659,7 +661,8 @@ func bindable(ip string, port int) bool { return !portTaken("tcp", ip, port) }
 
 // gatewayLabel publishes the gateway ports of a workload request on fresh loopback upstream ports
 // and records them in its labels.
-func gatewayLabel(wr *ports.WorkloadRequest, gw []resource.Port, paths map[Key]string) error {
+func gatewayLabel(wr *ports.WorkloadRequest, s *resource.WorkloadSpec, paths map[Key]string) error {
+	gw := gatewayPorts(s)
 	if len(gw) == 0 {
 		return nil
 	}
@@ -674,7 +677,8 @@ func gatewayLabel(wr *ports.WorkloadRequest, gw []resource.Port, paths map[Key]s
 		if err != nil {
 			return err
 		}
-		gp := GatewayPort{ContainerPort: p.ContainerPort, Upstream: up, HostIP: gw[j].HostIP, HostPort: gw[j].HostPort, Routes: gw[j].Routes}
+		gp := GatewayPort{ContainerPort: p.ContainerPort, Upstream: up, HostIP: gw[j].HostIP, HostPort: gw[j].HostPort, Routes: gw[j].Routes,
+			HealthPath: httpHealthPath(s, p.ContainerPort)}
 		for _, r := range gw[j].Routes {
 			if r.TLS == nil {
 				continue

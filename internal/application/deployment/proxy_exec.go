@@ -97,7 +97,8 @@ func proxyConfig(ctx context.Context, rt ports.Runtime, rel string, set map[stri
 		for _, p := range set[name].Ports {
 			cluster := proxyCluster(name, p.ContainerPort)
 			cfg.TCP = append(cfg.TCP, envoy.TCPListener{Address: "0.0.0.0", Port: p.ContainerPort, Cluster: cluster})
-			cfg.Clusters = append(cfg.Clusters, envoy.Cluster{Name: cluster, Host: alias, Port: p.ContainerPort, DNS: true})
+			cfg.Clusters = append(cfg.Clusters, envoy.Cluster{Name: cluster, Host: alias, Port: p.ContainerPort, DNS: true,
+				HealthPath: httpHealthPath(set[name], p.ContainerPort)})
 		}
 	}
 	return cfg
@@ -240,4 +241,12 @@ func envoyErr(ctx context.Context, rt ports.Runtime, container string, err error
 		return err
 	}
 	return fmt.Errorf("%w; %s logged:\n  %s", err, container, strings.Join(why[max(0, len(why)-3):], "\n  "))
+}
+
+// httpHealthPath is the path Envoy checks on port when the workload's health check is http there.
+func httpHealthPath(w *resource.WorkloadSpec, port int) string {
+	if hc := w.HealthCheck; hc != nil && hc.Type == resource.HealthHTTP && hc.Port == port {
+		return hc.Path
+	}
+	return ""
 }

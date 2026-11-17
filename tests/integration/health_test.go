@@ -1,0 +1,106 @@
+//go:build integration
+
+package integration
+
+import (
+	"context"
+	"strconv"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/hasankaradmir/karga/internal/application/packages"
+	"github.com/hasankaradmir/karga/internal/application/releases"
+	"github.com/hasankaradmir/karga/internal/ports"
+	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
+)
+
+// TestKargaHealthChecks: tcp and http health checks need no tool in the image; karga runs them.
+// The port is published so karga can reach it on every platform.
+func TestKargaHealthChecks(t *testing.T) {
+	ctx := context.Background()
+	for _, health := range []string{"tcp", "http"} {
+		t.Run(health, func(t *testing.T) {
+			name := releaseName("it-hc-" + health)
+			s, _ := service(t, name)
+			port := runtimetest.FreePort(t)
+			sets := []string{"health=" + health, "publish=true", "port=" + strconv.Itoa(port), "strategy=recreate"}
+			if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: webPkg,
+				Values: packages.Options{Sets: sets}}); err != nil {
+				t.Fatal(err)
+			}
+			rep, err := s.Status(ctx, name)
+			if err != nil {
+				t.Fatal(err)
+			}
+			for _, r := range rep.Resources {
+				if r.Kind == "Workload" && r.Health != ports.HealthHealthy {
+					t.Fatalf("status health: %+v", r)
+				}
+			}
+			if health != "http" {
+				return
+			}
+			short := opts()
+			short.Timeout = 20 * time.Second
+			_, err = s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: short, Name: name, Package: webPkg,
+				Values: packages.Options{Sets: append(sets, "healthy=false")}})
+			if err == nil || !strings.Contains(err.Error(), "GET /missing") {
+				t.Fatalf("want the failing http check in the error, got %v", err)
+			}
+		})
+	}
+}
+
+// TestHealthCheckByContainerAddress: on Linux karga reaches an unpublished port at the container's
+// network address.
+func TestHealthCheckByContainerAddress(t *testing.T) {
+	requireLinux(t)
+	ctx := context.Background()
+	name := releaseName("it-hc-ip")
+	s, _ := service(t, name)
+	if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: webPkg,
+		Values: packages.Options{Sets: []string{"health=http"}}}); err != nil {
+		t.Fatal(err)
+	}
+	rep, err := s.Status(ctx, name)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, r := range rep.Resources {
+		if r.Kind == "Workload" && r.Health != ports.HealthHealthy {
+			t.Fatalf("status health: %+v", r)
+		}
+	}
+}
+
+// TestReplaceWithHTTPHealth: on Linux the proxies switch to the new container only once its HTTP
+// health check passes; no request is lost.
+func TestReplaceWithHTTPHealth(t *testing.T) {
+	requireLinux(t)
+	ctx := context.Background()
+	name := releaseName("it-hc-replace")
+	s, rt := service(t, name)
+	port := runtimetest.FreePort(t)
+	common := opts()
+	common.Timeout = 30 * time.Second
+	sets := func(extra ...string) packages.Options {
+		return packages.Options{Sets: append([]string{startDelay, "health=http", "publish=true", "port=" + strconv.Itoa(port)}, extra...)}
+	}
+	if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: common, Name: name, Package: webPkg, Values: sets()}); err != nil {
+		t.Fatal(err)
+	}
+	host := startHostPinger(port)
+	defer host.halt()
+	net := startPinger(t, rt, name)
+	time.Sleep(time.Second)
+	if _, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: common, Name: name, Package: webPkg, Values: sets("content=v2")}); err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(time.Second)
+	out := logs(t, net)
+	t.Logf("host: %d ok, %d failed; network: %d failed", host.ok.Load(), host.failed.Load(), failures(out))
+	if host.failed.Load() != 0 || failures(out) != 0 || host.seen()["v2"] == 0 {
+		t.Fatalf("requests failed or v2 never served: %v\n%s", host.seen(), out)
+	}
+}

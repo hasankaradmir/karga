@@ -123,7 +123,7 @@ func (s *Service) Status(ctx context.Context, name string) (*StatusReport, error
 	if err != nil {
 		return nil, err
 	}
-	rt, err := s.Runtime(ctx)
+	rt, err := s.runtime(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -152,6 +152,11 @@ func (s *Service) Status(ctx context.Context, name string) (*StatusReport, error
 				return nil, err
 			default:
 				st.Actual, st.Health, st.Restarts, st.OOMKilled = ws.State, ws.Health, ws.RestartCount, ws.OOMKilled
+				if r, derr := resource.Decode(a.Spec); a.Kind == resource.KindWorkload && derr == nil { // JSON is YAML
+					if w, ok := r.Spec.(*resource.WorkloadSpec); ok {
+						st.Health = deployment.ProbeHealth(ctx, ws, w) // tcp/http checks are karga's
+					}
+				}
 			}
 			if a.Kind == deployment.KindProxy {
 				st.Backend = backends(deployment.ProxyDir(s.Home, name))

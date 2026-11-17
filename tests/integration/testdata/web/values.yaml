@@ -23,3 +23,6 @@ drain: 2s
 tls:
   cert: ""
   key: ""
+# health is the web workload's health check type: exec (wget in the image), tcp or http (karga checks).
+# With http, healthy=false checks a missing path.
+health: exec
