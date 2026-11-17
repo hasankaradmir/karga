@@ -165,6 +165,7 @@ spec:
     capAdd: [NET_BIND_SERVICE]
     user: "1000:1000"
   updateStrategy: {type: recreate, drainTimeout: 10s}   # recreate | replace
+  stopTimeout: 10s                                # default; time to shut down after SIGTERM before a kill (1s-1h)
 ```
 
 **Health checks:** `exec` runs a command inside the container (Docker's healthcheck), so the image

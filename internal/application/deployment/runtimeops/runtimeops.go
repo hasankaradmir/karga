@@ -23,7 +23,7 @@ func RuntimeName(release, name string) string { return release + "-" + name }
 // RemoveWorkload stops a container gracefully and deletes it with its anonymous volumes; a missing
 // one is fine.
 func RemoveWorkload(ctx context.Context, rt ports.Runtime, name string) error {
-	if err := rt.StopWorkload(ctx, name, StopTimeout); err != nil && !errors.Is(err, ports.ErrNotFound) {
+	if err := rt.StopWorkload(ctx, name, 0); err != nil && !errors.Is(err, ports.ErrNotFound) {
 		return err
 	}
 	return DeleteWorkload(ctx, rt, name)
@@ -48,9 +48,6 @@ func DeleteWorkload(ctx context.Context, rt ports.Runtime, name string) error {
 	}
 	return errors.Join(errs...)
 }
-
-// StopTimeout gives workloads a graceful shutdown before they are removed.
-const StopTimeout = 10 * time.Second
 
 // IPOverlap reports whether two bind addresses can conflict: equal, or either binds every address.
 func IPOverlap(a, b string) bool {

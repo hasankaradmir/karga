@@ -18,6 +18,8 @@ First release.
   fails before creating anything leaves no release behind.
 - Data in an image's `VOLUME` path that no Volume covers survives upgrades (the anonymous volume
   moves to the new container), with a warning to mount a Volume there.
+- `stopTimeout` on a workload: how long it gets to shut down before it is killed (default 10s);
+  the Postgres example uses 60s.
 - An upgrade or rollback that would delete a `retention: delete` volume stops unless given
   `--delete-volumes`; the plan marks what happens to a removed volume's data.
 

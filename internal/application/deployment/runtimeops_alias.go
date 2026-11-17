@@ -18,7 +18,6 @@ var (
 )
 
 const (
-	stopTimeout       = runtimeops.StopTimeout
 	proxyReadyTimeout = runtimeops.ProxyReadyTimeout
 	envoyMemory       = runtimeops.EnvoyMemory
 	envoyMilliCPU     = runtimeops.EnvoyMilliCPU

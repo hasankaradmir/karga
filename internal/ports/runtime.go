@@ -67,6 +67,8 @@ type Runtime interface {
 	// CreateWorkload creates a container without starting it.
 	CreateWorkload(ctx context.Context, req WorkloadRequest) error
 	StartWorkload(ctx context.Context, name string) error
+	// StopWorkload stops a container: SIGTERM, then SIGKILL after timeout. A timeout of 0 uses the
+	// container's own StopTimeout (the runtime default when it has none).
 	StopWorkload(ctx context.Context, name string, timeout time.Duration) error
 	// DeleteWorkload removes the container (stopping it if needed). Its volumes, named and anonymous,
 	// are kept.
@@ -156,6 +158,8 @@ type WorkloadRequest struct {
 	LogMaxSize    string
 	LogMaxFiles   int
 	RestartPolicy string
+	// StopTimeout is how long a stop waits after SIGTERM before killing the container (0: runtime default).
+	StopTimeout time.Duration
 }
 
 // PortBinding publishes ContainerPort. HostPort 0 means the port is not published.

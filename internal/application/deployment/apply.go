@@ -417,7 +417,7 @@ func takeOver(ctx context.Context, rt ports.Runtime, name string, mounts []ports
 	if err != nil {
 		return mounts, err
 	}
-	if err := rt.StopWorkload(ctx, name, stopTimeout); err != nil && !errors.Is(err, ports.ErrNotFound) {
+	if err := rt.StopWorkload(ctx, name, 0); err != nil && !errors.Is(err, ports.ErrNotFound) {
 		return mounts, err
 	}
 	if err := rt.DeleteWorkload(ctx, name); err != nil {
@@ -473,7 +473,7 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 		return false, err
 	}
 	stopNext := func(cause error) error {
-		if serr := rt.StopWorkload(ctx, next, stopTimeout); serr != nil && !errors.Is(serr, ports.ErrNotFound) {
+		if serr := rt.StopWorkload(ctx, next, 0); serr != nil && !errors.Is(serr, ports.ErrNotFound) {
 			return errors.Join(cause, serr)
 		}
 		return cause
@@ -519,13 +519,13 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 	}
 
 	_, drain := s.Strategy()
-	stopWait := drain
+	stopWait := max(drain, s.StopGrace())
 	progress(ctx, c.Kind, c.Name, PhaseDrain, "waiting up to %s for connections to %s to finish", drain, c.Applied.RuntimeName)
 	if behind {
 		if _, err := req.Proxies.WaitDrained(ctx, ProxyDir(req.Home, req.Release), proxyClusters(c.Name, s), drain); err != nil {
 			return true, err
 		}
-		stopWait = stopTimeout
+		stopWait = 0 // the container's own stopTimeout
 	}
 	if viaGateway {
 		var clusters []string
@@ -610,7 +610,7 @@ func waitChanged(ctx context.Context, rt ports.Runtime, rel string, changed []Ch
 		if err == nil && !slices.Contains(notReady, name) && st.State == ports.StateRunning && st.Health != ports.HealthUnhealthy && st.Health != ports.HealthStarting {
 			continue
 		}
-		if err := rt.StopWorkload(ctx, name, stopTimeout); err != nil && !errors.Is(err, ports.ErrNotFound) {
+		if err := rt.StopWorkload(ctx, name, 0); err != nil && !errors.Is(err, ports.ErrNotFound) {
 			errs = append(errs, err)
 		}
 		_ = report(c, "wait", werr)
@@ -631,6 +631,7 @@ func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[str
 		Env:           s.Environment,
 		Aliases:       []string{name},
 		RestartPolicy: s.RestartPolicy,
+		StopTimeout:   s.StopGrace(),
 	}
 	for _, p := range s.Ports {
 		wr.Ports = append(wr.Ports, ports.PortBinding{ContainerPort: p.ContainerPort, HostPort: p.HostPort, HostIP: p.HostIP, Protocol: p.Protocol})
@@ -712,7 +713,7 @@ func Delete(ctx context.Context, rt ports.Runtime, home, release string, deleteV
 			}
 			switch kind {
 			case ports.ObjectWorkload:
-				if err := rt.StopWorkload(ctx, o.Name, stopTimeout); err != nil && !errors.Is(err, ports.ErrNotFound) {
+				if err := rt.StopWorkload(ctx, o.Name, 0); err != nil && !errors.Is(err, ports.ErrNotFound) {
 					errs = append(errs, err)
 				}
 				errs = append(errs, deleteWorkload(ctx, rt, o.Name))

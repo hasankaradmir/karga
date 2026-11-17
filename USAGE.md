@@ -476,6 +476,10 @@ Release "s" rolled back (revision 3).
 - A Volume is named `<release>-<volume>` in Docker (`db-postgres-data`), whatever the revision.
   The new container mounts the same volume, so upgrades, rollbacks and reinstalls under the same
   release name see the same data. Changing a Volume's settings is refused by the plan.
+- The old container is stopped before the new one starts: it gets SIGTERM (or the image's stop
+  signal) and `stopTimeout` (default 10s) to shut down before it is killed. Databases that write a
+  checkpoint on shutdown need more; `examples/postgres` sets `stopTimeout: 60s`. The same time
+  applies to `uninstall`, `volume backup --stop` and `docker stop`.
 - Data written anywhere else in the container is lost when it is recreated, unless the image
   declares that path as a `VOLUME`. Docker then keeps it in an anonymous volume, which karga moves
   to the new container on every upgrade. It is not a karga Volume: `uninstall` deletes it and

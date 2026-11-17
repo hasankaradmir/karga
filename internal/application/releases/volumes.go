@@ -100,7 +100,7 @@ func pause(ctx context.Context, rt ports.Runtime, ms []mounter) (func() error, e
 		if st.State != ports.StateRunning {
 			continue
 		}
-		if err := rt.StopWorkload(ctx, m.runtime, 30*time.Second); err != nil {
+		if err := rt.StopWorkload(ctx, m.runtime, 0); err != nil {
 			return resume, err
 		}
 		stopped = append(stopped, m.runtime)

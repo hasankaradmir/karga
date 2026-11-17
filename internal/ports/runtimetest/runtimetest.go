@@ -85,6 +85,21 @@ func Run(t *testing.T, rt ports.Runtime, cfg Config) {
 		must(t, rt.DeleteVolume(ctx, req.Name))
 	})
 
+	t.Run("stop timeout", func(t *testing.T) {
+		must(t, rt.EnsureImage(ctx, cfg.Image, "if-not-present"))
+		// The sleep command ignores SIGTERM, so stopping takes the whole stop timeout.
+		req := ports.WorkloadRequest{Name: name("stop"), Labels: labels("Workload", "stop"), Image: cfg.Image,
+			Command: cfg.SleepCommand, StopTimeout: time.Second}
+		must(t, rt.CreateWorkload(ctx, req))
+		t.Cleanup(func() { _ = rt.DeleteWorkload(ctx, req.Name) })
+		must(t, rt.StartWorkload(ctx, req.Name))
+		start := time.Now()
+		must(t, rt.StopWorkload(ctx, req.Name, 0))
+		if d := time.Since(start); d > 5*time.Second {
+			t.Fatalf("stop with the workload's 1s StopTimeout took %s", d)
+		}
+	})
+
 	t.Run("anonymous volume", func(t *testing.T) {
 		if cfg.VolumeImage == "" {
 			t.Skip("no VolumeImage")

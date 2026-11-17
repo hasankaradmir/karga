@@ -138,7 +138,9 @@ Progress events (pull, create, wait, switch, drain, stop, done) are reported as 
 
 ### Update strategies
 
-- **recreate** (default): stop the old container, start the new one. Short outage.
+- **recreate** (default): stop the old container (SIGTERM, then a kill after the workload's
+  `stopTimeout`, default 10s, which is also set on the container for `docker stop`), start the new
+  one. Short outage.
 - **replace:** start `<name>-next` next to the old container, wait until healthy, switch traffic,
   let the old one drain for `drainTimeout`, remove it and rename `<name>-next`. Needs a health
   check and read-only volumes (two writers on the same data are unsafe); otherwise the plan falls

@@ -74,6 +74,10 @@ func (r *Runtime) CreateWorkload(ctx context.Context, req ports.WorkloadRequest)
 		User:         req.User,
 		ExposedPorts: network.PortSet{},
 	}
+	if req.StopTimeout > 0 {
+		secs := int(req.StopTimeout.Seconds())
+		cfg.StopTimeout = &secs
+	}
 	host := &container.HostConfig{
 		PortBindings:  network.PortMap{},
 		RestartPolicy: container.RestartPolicy{Name: mode},
@@ -176,8 +180,12 @@ func (r *Runtime) StartWorkload(ctx context.Context, name string) error {
 
 // StopWorkload implements ports.Runtime.
 func (r *Runtime) StopWorkload(ctx context.Context, name string, timeout time.Duration) error {
-	secs := int(timeout.Seconds())
-	_, err := r.c.ContainerStop(ctx, name, client.ContainerStopOptions{Timeout: &secs})
+	var opts client.ContainerStopOptions
+	if timeout > 0 {
+		secs := int(timeout.Seconds())
+		opts.Timeout = &secs
+	}
+	_, err := r.c.ContainerStop(ctx, name, opts)
 	return wrap(err, "stop workload "+name)
 }
 
