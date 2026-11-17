@@ -179,17 +179,27 @@ func (s *Service) loadKey() error {
 	return nil
 }
 
+// writeNewFile creates path with data atomically: the data is written to a temporary file that is
+// then linked into place, so a concurrent reader never sees it half written. It fails with
+// os.ErrExist when path exists.
 func writeNewFile(path string, data []byte) error {
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0o600)
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".*")
 	if err != nil {
 		return err
 	}
-	if _, err := f.Write(data); err != nil {
-		_ = f.Close()
-		_ = os.Remove(path)
+	defer func() { _ = os.Remove(tmp.Name()) }()
+	if err := tmp.Chmod(0o600); err != nil {
+		_ = tmp.Close()
 		return err
 	}
-	return f.Close()
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return os.Link(tmp.Name(), path)
 }
 
 // encodeManifest stores resources as a JSON array with secret values replaced by digests.

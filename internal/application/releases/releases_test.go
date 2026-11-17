@@ -463,3 +463,23 @@ func TestStateKeyAndKeyedDigests(t *testing.T) {
 		t.Fatal("same key, different digest")
 	}
 }
+
+func TestStateKeyCreatedOnceUnderConcurrency(t *testing.T) {
+	home := t.TempDir()
+	errs := make(chan error, 8)
+	for range 8 {
+		go func() {
+			s := &Service{Home: home}
+			errs <- s.loadKey()
+		}()
+	}
+	for range 8 {
+		if err := <-errs; err != nil {
+			t.Fatalf("concurrent key creation: %v", err)
+		}
+	}
+	entries, _ := os.ReadDir(home)
+	if len(entries) != 1 {
+		t.Fatalf("leftover temporary files: %v", entries)
+	}
+}
