@@ -116,7 +116,13 @@ func (a *app) printResult(verb string, res *releases.Result, verbose bool) error
 		return err
 	}
 	if verbose {
-		return res.Plan.Print(a.stdout, res.Release, res.From, res.Revision)
+		if err := res.Plan.Print(a.stdout, res.Release, res.From, res.Revision); err != nil {
+			return err
+		}
+	}
+	if res.Notes != "" {
+		_, err := fmt.Fprintf(a.stdout, "\nNOTES:\n%s\n", res.Notes)
+		return err
 	}
 	return nil
 }
@@ -448,7 +454,30 @@ func newGetCmd(a *app) *cobra.Command {
 		},
 	}
 	manifest.Flags().IntVar(&manifestRev, "revision", 0, "revision (default: current)")
-	cmd.AddCommand(values, manifest)
+	var notesRev int
+	notes := &cobra.Command{
+		Use:   "notes <release>",
+		Short: "Show the package's notes (NOTES.txt) for a revision",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.withService(cmd.Context(), func(s *releases.Service) error {
+				n, err := s.GetNotes(cmd.Context(), args[0], notesRev)
+				if err != nil {
+					return err
+				}
+				if a.output == outputJSON {
+					return writeJSON(a.stdout, map[string]string{"notes": n})
+				}
+				if n == "" {
+					n = "(the package has no NOTES.txt)"
+				}
+				_, err = fmt.Fprintln(a.stdout, n)
+				return err
+			})
+		},
+	}
+	notes.Flags().IntVar(&notesRev, "revision", 0, "revision (default: current)")
+	cmd.AddCommand(values, manifest, notes)
 	return cmd
 }
 

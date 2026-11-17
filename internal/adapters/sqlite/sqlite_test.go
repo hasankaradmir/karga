@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"strconv"
 	"strings"
 	"testing"
 	"testing/fstest"
@@ -192,15 +193,20 @@ func TestBackupAndSchemaGuards(t *testing.T) {
 		t.Fatal(err)
 	}
 	_ = s.Close()
-	first, err := fs.ReadFile(embedded, "migrations/001_init.sql")
+	real, err := fs.ReadDir(embedded, "migrations")
 	if err != nil {
 		t.Fatal(err)
 	}
-	old := migrations
-	migrations = fstest.MapFS{
-		"migrations/001_init.sql":  {Data: first},
-		"migrations/002_extra.sql": {Data: []byte("CREATE TABLE extra (x TEXT);")},
+	extra := fstest.MapFS{"migrations/zzz_extra.sql": {Data: []byte("CREATE TABLE extra (x TEXT);")}}
+	for _, e := range real {
+		data, err := fs.ReadFile(embedded, "migrations/"+e.Name())
+		if err != nil {
+			t.Fatal(err)
+		}
+		extra["migrations/"+e.Name()] = &fstest.MapFile{Data: data}
 	}
+	old := migrations
+	migrations = extra
 	t.Cleanup(func() { migrations = old })
 	s, err = Open(ctx, path)
 	if err != nil {
@@ -208,10 +214,10 @@ func TestBackupAndSchemaGuards(t *testing.T) {
 	}
 	defer func() { _ = s.Close() }()
 	var v int
-	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil || v != 2 {
+	if err := s.db.QueryRowContext(ctx, "PRAGMA user_version").Scan(&v); err != nil || v != len(real)+1 {
 		t.Fatalf("schema after migrate: %d %v", v, err)
 	}
-	if info, err := os.Stat(path + ".bak-v1"); err != nil || info.Mode().Perm() != 0o600 {
+	if info, err := os.Stat(path + ".bak-v" + strconv.Itoa(len(real))); err != nil || info.Mode().Perm() != 0o600 {
 		t.Fatalf("no backup before migrating: %v %v", info, err)
 	}
 }

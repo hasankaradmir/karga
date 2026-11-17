@@ -240,10 +240,10 @@ func (s *Store) CreateRevision(ctx context.Context, rev release.Revision) error 
 		manifest = json.RawMessage("[]")
 	}
 	_, err = s.db.ExecContext(ctx, `INSERT INTO revisions (release, revision, package_name, package_version, runtime_supported,
-		package_digest, values_digest, manifest_digest, values_json, values_all_json, manifest_json, status, description, created_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+		package_digest, values_digest, manifest_digest, values_json, values_all_json, manifest_json, status, description, created_at, notes)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
 		rev.Release, rev.Number, rev.PackageName, rev.PackageVersion, string(supported), rev.PackageDigest, rev.ValuesDigest, rev.ManifestDigest,
-		string(vals), string(all), string(manifest), string(rev.Status), rev.Description, ts(rev.CreatedAt))
+		string(vals), string(all), string(manifest), string(rev.Status), rev.Description, ts(rev.CreatedAt), rev.Notes)
 	return err
 }
 
@@ -268,13 +268,13 @@ func (s *Store) UpdateRevisionStatus(ctx context.Context, rel string, number int
 }
 
 const revisionColumns = `release, revision, package_name, package_version, runtime_supported, package_digest, values_digest, manifest_digest,
-	values_json, values_all_json, manifest_json, status, description, created_at`
+	values_json, values_all_json, manifest_json, status, description, created_at, notes`
 
 func scanRevision(row scanner) (release.Revision, error) {
 	var r release.Revision
 	var supported, vals, all, manifest, status, created string
 	if err := row.Scan(&r.Release, &r.Number, &r.PackageName, &r.PackageVersion, &supported, &r.PackageDigest, &r.ValuesDigest,
-		&r.ManifestDigest, &vals, &all, &manifest, &status, &r.Description, &created); err != nil {
+		&r.ManifestDigest, &vals, &all, &manifest, &status, &r.Description, &created, &r.Notes); err != nil {
 		return r, err
 	}
 	if err := json.Unmarshal([]byte(supported), &r.RuntimeSupported); err != nil {

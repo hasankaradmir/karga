@@ -84,6 +84,8 @@ type Result struct {
 	// NoOp is set when an install found the release already deployed with the same package and values.
 	NoOp bool            `json:"noop,omitempty"`
 	Plan deployment.Plan `json:"plan"`
+	// Notes is the package's NOTES.txt for this revision, shown after a successful apply.
+	Notes string `json:"notes,omitempty"`
 }
 
 // processAlive reports whether pid runs on this host (signal 0 only checks existence).
@@ -270,6 +272,8 @@ type deployInput struct {
 	SecretPaths [][]string
 	// Existing is the current release row, nil for a new release.
 	Existing *release.Release
+	// Notes is the rendered NOTES.txt (writeOnly values redacted).
+	Notes string
 }
 
 func (s *Service) nextRevision(ctx context.Context, name string) (int, error) {
@@ -318,7 +322,7 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
-	res := &Result{Release: in.Name, Revision: in.Revision, Plan: plan, DryRun: in.DryRun}
+	res := &Result{Release: in.Name, Revision: in.Revision, Plan: plan, DryRun: in.DryRun, Notes: in.Notes}
 	if in.Existing != nil {
 		res.From = in.Existing.CurrentRevision
 	}
@@ -411,7 +415,7 @@ func (s *Service) run(ctx context.Context, rt ports.Runtime, op *release.Operati
 		Release: in.Name, Number: in.Revision, PackageName: in.Package.Name, PackageVersion: in.Package.Version,
 		RuntimeSupported: in.Package.Runtime.Supported, PackageDigest: in.PackageDigest, ValuesDigest: valuesDigest, ManifestDigest: manifestDigest,
 		Values: values.Mask(in.Overrides, in.SecretPaths), ValuesAll: values.Mask(in.Values, in.SecretPaths), Manifest: manifest,
-		Status: release.RevisionPending, Description: in.Description, CreatedAt: now,
+		Status: release.RevisionPending, Description: in.Description, CreatedAt: now, Notes: in.Notes,
 	}); err != nil {
 		return err
 	}

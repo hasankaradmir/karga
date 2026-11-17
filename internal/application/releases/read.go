@@ -55,6 +55,15 @@ func (s *Service) GetValues(ctx context.Context, name string, revision int, all 
 }
 
 // GetManifest returns a revision's resources with secret values shown as <redacted>.
+// GetNotes returns the rendered NOTES.txt of a revision (0: the current one), "" if the package has none.
+func (s *Service) GetNotes(ctx context.Context, name string, revision int) (string, error) {
+	rev, err := s.revisionOrCurrent(ctx, name, revision)
+	if err != nil {
+		return "", err
+	}
+	return rev.Notes, nil
+}
+
 func (s *Service) GetManifest(ctx context.Context, name string, revision int) ([]resource.Resource, error) {
 	rev, err := s.revisionOrCurrent(ctx, name, revision)
 	if err != nil {

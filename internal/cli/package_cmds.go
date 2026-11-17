@@ -162,3 +162,18 @@ func newShowCmd(a *app) *cobra.Command {
 	)
 	return cmd
 }
+
+func newCreateCmd(a *app) *cobra.Command {
+	return &cobra.Command{
+		Use:   "create <dir>",
+		Short: "Create a new package to start from (a web service with health checks and notes)",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			if err := packages.Create(args[0]); err != nil {
+				return err
+			}
+			_, err := fmt.Fprintf(a.stdout, "Created package %s. Try: karga lint %s && karga install <release> %s\n", args[0], args[0], args[0])
+			return err
+		},
+	}
+}

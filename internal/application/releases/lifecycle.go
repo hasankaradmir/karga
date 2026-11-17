@@ -85,7 +85,7 @@ func (s *Service) render(ctx context.Context, name, path string, opts packages.O
 		return deployInput{}, err
 	}
 	return deployInput{Name: name, Package: p.Metadata, PackageDigest: digest, Overrides: m.Overrides,
-		Values: m.Values, Resources: m.Resources(), Revision: revision, SecretPaths: m.SecretPaths}, nil
+		Values: m.Values, Resources: m.Resources(), Revision: revision, SecretPaths: m.SecretPaths, Notes: m.Notes}, nil
 }
 
 // Install installs a package. Installing again with the same package and values is a no-op (A8).
@@ -207,7 +207,7 @@ func (s *Service) Rollback(ctx context.Context, req RollbackRequest) (*Result, e
 	return s.deploy(ctx, deployInput{
 		CommonOptions: req.CommonOptions, Name: req.Name, Type: "rollback", Description: fmt.Sprintf("Rollback to %d", target),
 		Package: p, PackageDigest: rev.PackageDigest, Overrides: rev.Values, Values: rev.ValuesAll,
-		Resources: rs, Revision: number, Existing: existing, Strategy: req.Strategy,
+		Resources: rs, Revision: number, Existing: existing, Strategy: req.Strategy, Notes: rev.Notes,
 	})
 }
 

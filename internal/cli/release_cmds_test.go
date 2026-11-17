@@ -6,11 +6,14 @@ import (
 	"encoding/json"
 	"errors"
 	"io"
+	"net"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
 	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
@@ -333,5 +336,42 @@ func TestDiffAndHistory(t *testing.T) {
 	out = e.mustRun("diff", "db", "1")
 	if strings.Contains(out, "first-secret") || strings.Contains(out, "second-secret") || !strings.Contains(out, "(changed)") {
 		t.Fatalf("secrets in diff:\n%s", out)
+	}
+}
+
+func TestCreateLintInstallNotes(t *testing.T) {
+	e := newCLIEnv(t)
+	dir := filepath.Join(t.TempDir(), "shop")
+	e.mustRun("create", dir)
+	if out := e.mustRun("lint", dir); !strings.Contains(out, "0 failed") {
+		t.Fatalf("lint of a created package:\n%s", out)
+	}
+	if _, err := e.run("create", dir); err == nil {
+		t.Fatal("create over an existing directory must fail")
+	}
+	// The fake runtime runs nothing: once the container "exists" (after the port pre-flight), answer
+	// karga's http health check on the published port.
+	srv := &http.Server{Handler: http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}), ReadHeaderTimeout: time.Second}
+	t.Cleanup(func() { _ = srv.Close() })
+	go func() {
+		for range 1000 {
+			if _, err := e.rt.GetWorkload(context.Background(), "s-web"); err == nil {
+				if l, err := net.Listen("tcp", "127.0.0.1:"+e.port); err == nil {
+					_ = srv.Serve(l)
+				}
+				return
+			}
+			time.Sleep(5 * time.Millisecond)
+		}
+	}()
+	out := e.mustRun("install", "s", dir, "--set", "service.port="+e.port)
+	if !strings.Contains(out, "NOTES:") || !strings.Contains(out, "s (revision 1) runs nginx") {
+		t.Fatalf("notes after install:\n%s", out)
+	}
+	if out := e.mustRun("get", "notes", "s"); !strings.Contains(out, "karga logs s -f") {
+		t.Fatalf("get notes:\n%s", out)
+	}
+	if _, err := e.run("create", filepath.Join(t.TempDir(), "Bad_Name")); err == nil {
+		t.Fatal("a package name must be a DNS label")
 	}
 }

@@ -85,7 +85,7 @@ func newRootCmd(stdout, stderr io.Writer, newRuntime func(context.Context) (port
 	root.PersistentFlags().BoolVar(&a.debug, "debug", false, "enable debug logging")
 	root.PersistentFlags().StringVar(&a.logFormat, "log-format", "text", "log format on stderr: text|json")
 
-	root.AddCommand(newVersionCmd(a), newTemplateCmd(a), newLintCmd(a), newShowCmd(a),
+	root.AddCommand(newVersionCmd(a), newCreateCmd(a), newTemplateCmd(a), newLintCmd(a), newShowCmd(a),
 		newInstallCmd(a), newUpgradeCmd(a), newRollbackCmd(a), newUninstallCmd(a),
 		newHistoryCmd(a), newListCmd(a), newStatusCmd(a), newGetCmd(a), newGatewayCmd(a), newStateCmd(a), newLogsCmd(a), newVolumeCmd(a), newExecCmd(a), newDiffCmd(a))
 	return root
