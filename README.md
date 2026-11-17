@@ -72,6 +72,7 @@ logs). State lives in `$KARGA_HOME` (default `$XDG_DATA_HOME/karga`, i.e. `~/.lo
 | `gateway status` | Health, version and image of the host gateway, and its listeners, routes and upstreams (Linux) |
 | `gateway set access-log on\|off` | Log every request and connection the gateway handles (off by default) |
 | `state backup <file>` | Consistent copy of the state database, safe while karga runs |
+| `volume backup\|restore <release> <volume> <file>` | Copy a volume's files to/from a gzipped tar; `--stop` for a consistent backup |
 
 Mutating commands take `--dry-run`, `--timeout` (default `5m`), `--history-max` (default 10
 revisions kept) and `--force`. Values come from the package defaults, then each `-f/--values` file in
@@ -142,9 +143,31 @@ spec:
     - {config: site, mountPath: /etc/nginx/conf.d}      # always read-only
     - {secret: creds, mountPath: /run/secrets/creds}    # always read-only
   healthCheck: {type: exec, command: [curl, -f, http://127.0.0.1/], interval: 10s, timeout: 3s, retries: 3, startPeriod: 30s}
-  resources: {memory: 512Mi, cpu: 1}
+  # or {type: http, port: 80, path: /healthz} / {type: tcp, port: 80}: no tool needed in the image
+  resources: {memory: 512Mi, cpu: 1, pids: 1024}  # memory also caps swap; pids defaults to 1024 (0: no limit)
+  logging: {maxSize: 10m, maxFiles: 3}            # the defaults: at most 30MB of container log
+  security:                                       # noNewPrivileges defaults to true
+    noNewPrivileges: true
+    readOnlyRootFilesystem: false                 # true: image read-only, /tmp is a 64m tmpfs
+    capDrop: [ALL]
+    capAdd: [NET_BIND_SERVICE]
+    user: "1000:1000"
   updateStrategy: {type: recreate, drainTimeout: 10s}   # recreate | replace
 ```
+
+**Health checks:** `exec` runs a command inside the container (Docker's healthcheck), so the image
+needs that tool. `tcp` (the port accepts a connection) and `http` (GET `path` answers 2xx/3xx) are run
+by karga from the host and need nothing in the image: through the gateway's upstream, a published
+port, or on Linux the container's address. On macOS or with a remote Docker host, `tcp`/`http` need
+the port published with `hostPort`; the plan says so otherwise. Behind karga's proxies, Envoy checks
+the same HTTP path before switching traffic to a new container. All types take `interval`,
+`timeout`, `retries` and `startPeriod`, and any of them makes a workload eligible for replace.
+
+**Limits and defaults:** Docker enforces memory (without extra swap), CPU and the process limit;
+`karga status` shows restarts and OOM kills. Container logs rotate (json-file). Workloads run with
+`no-new-privileges`; an image that needs setuid (e.g. `sudo`) needs `noNewPrivileges: false`.
+Releases installed by an earlier karga apply their workloads once more for these defaults; the plan
+lists the new fields.
 
 **Volume**: `driver` (default `local`) and `retention: retain | delete` (default `retain`). A retained
 volume survives uninstall and is reused by the next install of the same release.
@@ -167,7 +190,8 @@ Before any change karga pulls every image it needs, so a bad tag fails without t
 ### Traffic through karga's Envoys (Linux)
 
 On Linux with a local Docker daemon, karga runs two kinds of Envoy (Envoy 1.36.13 distroless, pinned by
-digest, about 150MB, one worker thread, about 15MB RAM each). Envoy updates ship with karga releases;
+digest, about 150MB, one worker thread, about 15MB RAM each, limited to 128Mi, 0.5 CPU and 256
+processes). Envoy updates ship with karga releases;
 a new image recreates the gateway and the release proxies on the next apply, a short interruption.
 `KARGA_PROXY_IMAGE` overrides the image.
 
@@ -225,6 +249,12 @@ configuration are rebuilt from it and from Docker. `karga state backup <file>` w
 copy at any time. To restore, stop using karga and copy the file over `karga.db`. Before upgrading
 the database schema karga keeps a copy as `karga.db.bak-v<schema>`, and it refuses a database written
 by a newer karga.
+
+`karga volume backup <release> <volume> <file.tar.gz>` copies a volume's files through a workload
+that mounts it (no helper container). It runs live by default; `--stop` stops the workloads
+mounting the volume for a consistent copy (for databases prefer it, or the database's own dump).
+`karga volume restore` stops them, writes the files back (overwriting files of the same name,
+keeping others) and starts them again.
 
 `$KARGA_HOME/state.key` keys the database's digests of secret values. Back it up with the database
 if you can keep both safe; restored without it, karga creates a new key and applies each release's
