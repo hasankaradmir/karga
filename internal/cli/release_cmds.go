@@ -53,6 +53,7 @@ func (a *app) withService(ctx context.Context, fn func(*releases.Service) error)
 
 type commonFlags struct {
 	dryRun     bool
+	verbose    bool
 	timeout    time.Duration
 	historyMax int
 	force      bool
@@ -63,6 +64,7 @@ func addCommonFlags(cmd *cobra.Command, c *commonFlags, dryRun bool) {
 	if dryRun {
 		f.BoolVar(&c.dryRun, "dry-run", false, "show the deployment plan without changing anything")
 	}
+	f.BoolVarP(&c.verbose, "verbose", "v", false, "show every changed field of the plan")
 	f.DurationVar(&c.timeout, "timeout", deployment.DefaultTimeout, "how long to wait for workloads to become ready")
 	f.IntVar(&c.historyMax, "history-max", releases.DefaultHistoryMax, "revisions to keep per release (0 = unlimited)")
 	f.BoolVar(&c.force, "force", false, "continue after an interrupted operation whose process is gone")
@@ -73,13 +75,15 @@ func (c commonFlags) options() releases.CommonOptions {
 }
 
 // printResult reports a mutating command. A failed deployment still has a result worth showing.
-func (a *app) printResult(verb string, res *releases.Result) error {
+func (a *app) printResult(verb string, res *releases.Result, verbose bool) error {
 	if a.output == outputJSON {
 		return writeJSON(a.stdout, res)
 	}
 	switch {
-	case res.DryRun:
+	case res.DryRun && verbose:
 		return res.Plan.Print(a.stdout, res.Release, res.From, res.Revision)
+	case res.DryRun:
+		return res.Plan.Summary(a.stdout, res.Release, res.From, res.Revision)
 	case res.NoOp:
 		_, err := fmt.Fprintf(a.stdout, "Release %q is already installed with the same package and values (revision %d).\n", res.Release, res.Revision)
 		return err
@@ -95,8 +99,13 @@ func (a *app) printResult(verb string, res *releases.Result) error {
 		}
 		changed = append(changed, line)
 	}
-	_, err := fmt.Fprintf(a.stdout, "Release %q %s (revision %d).\n%s\n", res.Release, verb, res.Revision, strings.Join(changed, "\n"))
-	return err
+	if _, err := fmt.Fprintf(a.stdout, "Release %q %s (revision %d).\n%s\n", res.Release, verb, res.Revision, strings.Join(changed, "\n")); err != nil {
+		return err
+	}
+	if verbose {
+		return res.Plan.Print(a.stdout, res.Release, res.From, res.Revision)
+	}
+	return nil
 }
 
 func newInstallCmd(a *app) *cobra.Command {
@@ -114,7 +123,7 @@ func newInstallCmd(a *app) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return a.printResult("installed", res)
+				return a.printResult("installed", res, common.verbose)
 			})
 		},
 	}
@@ -155,7 +164,7 @@ func newUpgradeCmd(a *app) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return a.printResult("upgraded", res)
+				return a.printResult("upgraded", res, common.verbose)
 			})
 		},
 	}
@@ -191,7 +200,7 @@ func newRollbackCmd(a *app) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				return a.printResult("rolled back", res)
+				return a.printResult("rolled back", res, common.verbose)
 			})
 		},
 	}

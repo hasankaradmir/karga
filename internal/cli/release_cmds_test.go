@@ -61,8 +61,13 @@ func TestReleaseLifecycleCLI(t *testing.T) {
 	}
 
 	out = e.mustRun("upgrade", "r", redis, "--set", port, "--set", "image.tag=7.2", "--dry-run")
-	if !strings.Contains(out, "Revision: 1 -> 2") || !strings.Contains(out, `spec.image: "redis:7.4" -> "redis:7.2"`) {
-		t.Fatalf("dry run:\n%s", out)
+	if !strings.Contains(out, "Revision: 1 -> 2") || !strings.Contains(out, "~ WORKLOAD redis (recreate)") ||
+		!strings.Contains(out, "0 to create, 1 to update, 0 to delete") || strings.Contains(out, "spec.image") {
+		t.Fatalf("dry run summary:\n%s", out)
+	}
+	out = e.mustRun("upgrade", "r", redis, "--set", port, "--set", "image.tag=7.2", "--dry-run", "--verbose")
+	if !strings.Contains(out, `spec.image: "redis:7.4" -> "redis:7.2"`) {
+		t.Fatalf("dry run --verbose:\n%s", out)
 	}
 	if img := e.rt.Workloads["r-redis"].Request.Image; img != "redis:7.4" {
 		t.Fatalf("dry run changed the workload: %s", img)

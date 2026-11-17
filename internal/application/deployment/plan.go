@@ -359,6 +359,59 @@ func flatten(prefix string, v any, out map[string]string) {
 	out[prefix] = string(js)
 }
 
+// Counts returns how many changes create, update and delete resources, and how many are unchanged.
+func (p Plan) Counts() (create, update, del, unchanged int) {
+	for _, c := range p.Changes {
+		switch c.Action {
+		case ActionCreate:
+			create++
+		case ActionUpdate:
+			update++
+		case ActionDelete:
+			del++
+		default:
+			unchanged++
+		}
+	}
+	return
+}
+
+var actionSymbol = map[string]string{ActionCreate: "+", ActionUpdate: "~", ActionDelete: "-"}
+
+// Summary writes one line per change (+ create, ~ update, - delete; unchanged resources are left
+// out) and the counts. Print shows the changed fields too.
+func (p Plan) Summary(w io.Writer, releaseName string, from, to int) error {
+	var b strings.Builder
+	fmt.Fprintf(&b, "Deployment Plan\n\nRelease:  %s\n", releaseName)
+	if from == 0 {
+		fmt.Fprintf(&b, "Revision: %d\n\n", to)
+	} else {
+		fmt.Fprintf(&b, "Revision: %d -> %d\n\n", from, to)
+	}
+	for _, c := range p.Changes {
+		sym, ok := actionSymbol[c.Action]
+		if !ok {
+			continue
+		}
+		fmt.Fprintf(&b, "  %s %s %s", sym, strings.ToUpper(c.Kind), c.Name)
+		if c.Strategy != "" {
+			fmt.Fprintf(&b, " (%s)", c.Label())
+		}
+		b.WriteString("\n")
+	}
+	create, update, del, unchanged := p.Counts()
+	if !p.HasChanges() {
+		b.WriteString("  No changes.\n")
+	}
+	fmt.Fprintf(&b, "\n%d to create, %d to update, %d to delete, %d unchanged.", create, update, del, unchanged)
+	if update > 0 {
+		b.WriteString(" --verbose shows the changed fields.")
+	}
+	b.WriteString("\n")
+	_, err := io.WriteString(w, b.String())
+	return err
+}
+
 // Print writes the plan in the tech design §10.2 format.
 func (p Plan) Print(w io.Writer, releaseName string, from, to int) error {
 	var b strings.Builder

@@ -256,3 +256,31 @@ func TestDigestSchemeUpgrade(t *testing.T) {
 		t.Fatalf("second plan must be unchanged: %s %v", actions(again), err)
 	}
 }
+
+func TestPlanSummary(t *testing.T) {
+	applied := appliedFrom(t, manifest(6379))
+	v2 := manifest(6379)
+	v2[0].Spec.(*resource.WorkloadSpec).Image = "redis:7.2"
+	v2 = append(v2[:3], v2[4:]...) // drop the "cache" volume
+	p, err := Diff("cache", v2, applied, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	if err := p.Summary(&b, "cache", 1, 2); err != nil {
+		t.Fatal(err)
+	}
+	out := b.String()
+	for _, want := range []string{"~ WORKLOAD redis (recreate)", "- VOLUME cache", "0 to create, 1 to update, 1 to delete, 3 unchanged."} {
+		if !strings.Contains(out, want) {
+			t.Errorf("summary misses %q:\n%s", want, out)
+		}
+	}
+	if strings.Contains(out, "NETWORK net") || strings.Contains(out, "spec.image") {
+		t.Errorf("summary shows unchanged resources or fields:\n%s", out)
+	}
+	b.Reset()
+	if err := (Plan{}).Summary(&b, "cache", 2, 3); err != nil || !strings.Contains(b.String(), "No changes.") {
+		t.Fatalf("empty plan: %q %v", b.String(), err)
+	}
+}
