@@ -261,3 +261,38 @@ func (s *Service) Exec(ctx context.Context, rel, workload string, opts ports.Exe
 	}
 	return -1, fmt.Errorf("release %s has no workload %q (workloads: %s)", rel, workload, strings.Join(names, ", "))
 }
+
+// RevisionDiff is how two revisions of a release differ.
+type RevisionDiff struct {
+	Release   string                    `json:"release"`
+	From      int                       `json:"from"`
+	To        int                       `json:"to"`
+	Package   []deployment.FieldChange  `json:"package,omitempty"`
+	Values    []deployment.FieldChange  `json:"values,omitempty"`
+	Resources []deployment.ResourceDiff `json:"resources"`
+}
+
+// Diff compares revision from with revision to of a release (to 0: the current one).
+func (s *Service) Diff(ctx context.Context, name string, from, to int) (*RevisionDiff, error) {
+	a, err := s.Store.GetRevision(ctx, name, from)
+	if err != nil {
+		return nil, err
+	}
+	b, err := s.revisionOrCurrent(ctx, name, to)
+	if err != nil {
+		return nil, err
+	}
+	res, err := deployment.CompareManifests(a.Manifest, b.Manifest)
+	if err != nil {
+		return nil, err
+	}
+	d := &RevisionDiff{Release: name, From: a.Number, To: b.Number, Resources: res,
+		Values: deployment.CompareValues(a.ValuesAll, b.ValuesAll)}
+	if d.Resources == nil {
+		d.Resources = []deployment.ResourceDiff{}
+	}
+	if a.PackageName != b.PackageName || a.PackageVersion != b.PackageVersion {
+		d.Package = []deployment.FieldChange{{Path: "package", Old: a.PackageName + " " + a.PackageVersion, New: b.PackageName + " " + b.PackageVersion}}
+	}
+	return d, nil
+}

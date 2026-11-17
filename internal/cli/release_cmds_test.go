@@ -307,3 +307,31 @@ func TestExec(t *testing.T) {
 		t.Fatalf("default interactive sh without a terminal: %v", err)
 	}
 }
+
+func TestDiffAndHistory(t *testing.T) {
+	e := newCLIEnv(t)
+	e.mustRun("install", "r", redis, "--set", "network.port="+e.port)
+	e.mustRun("upgrade", "r", redis, "--set", "network.port="+e.port, "--set", "image.tag=7.2")
+	out := e.mustRun("diff", "r", "1")
+	for _, want := range []string{"revision 1 -> 2", `image.tag: "7.4" -> "7.2"`, "~ WORKLOAD redis", `spec.image: "redis:7.4" -> "redis:7.2"`} {
+		if !strings.Contains(out, want) {
+			t.Errorf("diff misses %q:\n%s", want, out)
+		}
+	}
+	if out := e.mustRun("diff", "r", "2", "2"); !strings.Contains(out, "no differences") {
+		t.Fatalf("same revision:\n%s", out)
+	}
+	if out := e.mustRun("history", "r", "--diff"); !strings.Contains(out, "CHANGES") || !strings.Contains(out, "first") || !strings.Contains(out, "~1") {
+		t.Fatalf("history --diff:\n%s", out)
+	}
+
+	// Secret values and writeOnly values never show, only that they changed.
+	pg := "../../examples/postgres"
+	pgPort := "network.port=" + strconv.Itoa(runtimetest.FreePort(t))
+	e.mustRun("install", "db", pg, "--set", pgPort, "--set", "database.password=first-secret")
+	e.mustRun("upgrade", "db", pg, "--set", pgPort, "--set", "database.password=second-secret")
+	out = e.mustRun("diff", "db", "1")
+	if strings.Contains(out, "first-secret") || strings.Contains(out, "second-secret") || !strings.Contains(out, "(changed)") {
+		t.Fatalf("secrets in diff:\n%s", out)
+	}
+}

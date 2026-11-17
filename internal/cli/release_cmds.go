@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -15,6 +16,7 @@ import (
 	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
 	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/application/releases"
+	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/infrastructure/config"
 	"github.com/hasankaradmir/karga/internal/infrastructure/renderer"
@@ -264,7 +266,8 @@ func (a *app) table(header string, rows [][]string) error {
 func ago(t time.Time) string { return t.Local().Format("2006-01-02 15:04:05") }
 
 func newHistoryCmd(a *app) *cobra.Command {
-	return &cobra.Command{
+	var withDiff bool
+	cmd := &cobra.Command{
 		Use:   "history <release>",
 		Short: "Show the revisions of a release",
 		Args:  cobra.ExactArgs(1),
@@ -277,14 +280,41 @@ func newHistoryCmd(a *app) *cobra.Command {
 				if a.output == outputJSON {
 					return writeJSON(a.stdout, revs)
 				}
-				var rows [][]string
-				for _, r := range revs {
-					rows = append(rows, []string{strconv.Itoa(r.Number), string(r.Status), r.PackageName, r.PackageVersion, ago(r.CreatedAt), r.Description})
+				header := "REVISION\tSTATUS\tPACKAGE\tVERSION\tCREATED\tDESCRIPTION"
+				if withDiff {
+					header += "\tCHANGES"
 				}
-				return a.table("REVISION\tSTATUS\tPACKAGE\tVERSION\tCREATED\tDESCRIPTION", rows)
+				var rows [][]string
+				for i, r := range revs {
+					row := []string{strconv.Itoa(r.Number), string(r.Status), r.PackageName, r.PackageVersion, ago(r.CreatedAt), r.Description}
+					if withDiff {
+						row = append(row, changeSummary(revs, i))
+					}
+					rows = append(rows, row)
+				}
+				return a.table(header, rows)
 			})
 		},
 	}
+	cmd.Flags().BoolVar(&withDiff, "diff", false, "add what changed since the previous revision")
+	return cmd
+}
+
+// changeSummary counts the differences of revision i from the one before it.
+func changeSummary(revs []release.Revision, i int) string {
+	if i == 0 {
+		return "first"
+	}
+	res, err := deployment.CompareManifests(revs[i-1].Manifest, revs[i].Manifest)
+	if err != nil {
+		return "?"
+	}
+	n := map[string]int{}
+	for _, r := range res {
+		n[r.Action]++
+	}
+	values := len(deployment.CompareValues(revs[i-1].ValuesAll, revs[i].ValuesAll))
+	return fmt.Sprintf("+%d ~%d -%d, %d values", n["create"], n["update"], n["delete"], values)
 }
 
 func newListCmd(a *app) *cobra.Command {
@@ -600,4 +630,65 @@ func newVolumeCmd(a *app) *cobra.Command {
 	r.Flags().BoolVar(&restore.Force, "force", false, "restore a backup taken from another volume or release")
 	cmd.AddCommand(b, r)
 	return cmd
+}
+
+func newDiffCmd(a *app) *cobra.Command {
+	return &cobra.Command{
+		Use:   "diff <release> <revision> [revision]",
+		Short: "Show how two revisions differ (the second defaults to the current one)",
+		Args:  cobra.RangeArgs(2, 3),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			from, err := strconv.Atoi(args[1])
+			if err != nil {
+				return fmt.Errorf("revision %q is not a number", args[1])
+			}
+			to := 0
+			if len(args) == 3 {
+				if to, err = strconv.Atoi(args[2]); err != nil {
+					return fmt.Errorf("revision %q is not a number", args[2])
+				}
+			}
+			return a.withService(cmd.Context(), func(s *releases.Service) error {
+				d, err := s.Diff(cmd.Context(), args[0], from, to)
+				if err != nil {
+					return err
+				}
+				if a.output == outputJSON {
+					return writeJSON(a.stdout, d)
+				}
+				var b strings.Builder
+				fmt.Fprintf(&b, "Release %s: revision %d -> %d\n", d.Release, d.From, d.To)
+				fields := func(fs []deployment.FieldChange, indent string) {
+					for _, f := range fs {
+						switch {
+						case f.Old == "":
+							fmt.Fprintf(&b, "%s%s: %s\n", indent, f.Path, f.New)
+						case f.New == "":
+							fmt.Fprintf(&b, "%s%s: %s -> (removed)\n", indent, f.Path, f.Old)
+						default:
+							fmt.Fprintf(&b, "%s%s: %s -> %s\n", indent, f.Path, f.Old, f.New)
+						}
+					}
+				}
+				if len(d.Package) > 0 {
+					b.WriteString("\nPackage:\n")
+					fields(d.Package, "  ")
+				}
+				if len(d.Values) > 0 {
+					b.WriteString("\nValues:\n")
+					fields(d.Values, "  ")
+				}
+				b.WriteString("\nResources:\n")
+				if len(d.Resources) == 0 {
+					b.WriteString("  no differences\n")
+				}
+				for _, r := range d.Resources {
+					fmt.Fprintf(&b, "  %s %s %s\n", map[string]string{"create": "+", "update": "~", "delete": "-"}[r.Action], strings.ToUpper(r.Kind), r.Name)
+					fields(r.Fields, "      ")
+				}
+				_, err = io.WriteString(a.stdout, b.String())
+				return err
+			})
+		},
+	}
 }
