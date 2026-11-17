@@ -27,6 +27,7 @@ import (
 )
 
 func TestGatewayReplaceWithoutLoss(t *testing.T) {
+	t.Parallel()
 	requireLinux(t)
 	ctx := context.Background()
 	name := releaseName("it-gw")
@@ -204,6 +205,7 @@ func TestGatewayHTTPRoutes(t *testing.T) {
 
 // TestGatewayRecreateWorkload: a recreate workload (no proxy) still gets its host port from the gateway.
 func TestGatewayRecreateWorkload(t *testing.T) {
+	t.Parallel()
 	requireLinux(t)
 	ctx := context.Background()
 	name := releaseName("it-gw-rc")
@@ -229,6 +231,7 @@ func TestGatewayRecreateWorkload(t *testing.T) {
 
 // TestProxyLowPort: the non-root release proxy listens on containerPort 80.
 func TestProxyLowPort(t *testing.T) {
+	t.Parallel()
 	requireLinux(t)
 	ctx := context.Background()
 	name := releaseName("it-proxy-80")
@@ -247,6 +250,7 @@ func TestProxyLowPort(t *testing.T) {
 // TestGatewayKeepsLongConnections: a connection open before a replace keeps working on the old
 // container, and the replace finishes as soon as it closes instead of waiting the drain timeout.
 func TestGatewayKeepsLongConnections(t *testing.T) {
+	t.Parallel()
 	requireLinux(t)
 	ctx := context.Background()
 	name := releaseName("it-gw-long")
@@ -328,9 +332,10 @@ func TestGatewayKeepsLongConnections(t *testing.T) {
 // TestGatewayConcurrentInstalls: two karga processes (two services, one KARGA_HOME) install releases
 // sharing a host port at the same time; the gateway ends up serving both.
 func TestGatewayConcurrentInstalls(t *testing.T) {
+	t.Parallel()
 	requireLinux(t)
 	ctx := context.Background()
-	home := t.TempDir()
+	home := sharedHome
 	a, b := releaseName("it-gw-ca"), releaseName("it-gw-cb")
 	sa, _ := serviceIn(t, home, a)
 	sb, _ := serviceIn(t, home, b)

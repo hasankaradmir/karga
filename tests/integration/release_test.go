@@ -19,6 +19,7 @@ import (
 // service returns a release service on real Docker and a fresh state directory. Everything the
 // release created is removed when the test ends, volumes included.
 func TestRedisReleaseLifecycle(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	name := releaseName("it-rel")
 	s, rt := service(t, name)
@@ -80,6 +81,7 @@ func TestRedisReleaseLifecycle(t *testing.T) {
 // TestFailedUpgradeKeepsHistory is the M3 exit criterion: a failed upgrade leaves revision 1 deployed
 // and current, the failing container stopped but present, and rollback brings back a healthy state.
 func TestFailedUpgradeKeepsHistory(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	name := releaseName("it-probe")
 	s, rt := service(t, name)

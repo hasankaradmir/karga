@@ -18,6 +18,7 @@ import (
 // TestKargaHealthChecks: tcp and http health checks need no tool in the image; karga runs them.
 // The port is published so karga can reach it on every platform.
 func TestKargaHealthChecks(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	for _, health := range []string{"tcp", "http"} {
 		t.Run(health, func(t *testing.T) {
@@ -55,6 +56,7 @@ func TestKargaHealthChecks(t *testing.T) {
 // TestHealthCheckByContainerAddress: on Linux karga reaches an unpublished port at the container's
 // network address.
 func TestHealthCheckByContainerAddress(t *testing.T) {
+	t.Parallel()
 	requireLinux(t)
 	ctx := context.Background()
 	name := releaseName("it-hc-ip")
@@ -77,6 +79,7 @@ func TestHealthCheckByContainerAddress(t *testing.T) {
 // TestReplaceWithHTTPHealth: on Linux the proxies switch to the new container only once its HTTP
 // health check passes; no request is lost.
 func TestReplaceWithHTTPHealth(t *testing.T) {
+	t.Parallel()
 	requireLinux(t)
 	ctx := context.Background()
 	name := releaseName("it-hc-replace")

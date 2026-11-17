@@ -21,6 +21,7 @@ const startDelay = "startDelay=3"
 const maxRaceFailures = 2
 
 func TestReplaceWithoutDowntime(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	name := releaseName("it-web")
 	s, rt := service(t, name)
@@ -84,6 +85,7 @@ func TestReplaceWithoutDowntime(t *testing.T) {
 // TestRecreateHasDowntime is the control for TestReplaceWithoutDowntime: the same upgrade with
 // recreate must be seen by the pinger, otherwise the pinger proves nothing.
 func TestRecreateHasDowntime(t *testing.T) {
+	t.Parallel()
 	ctx := context.Background()
 	name := releaseName("it-web-rc")
 	s, rt := service(t, name)

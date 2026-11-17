@@ -39,6 +39,10 @@ jobs:
         with:
           go-version-file: go.mod
       # ubuntu-latest ships a running Docker Engine; the gateway and proxy tests run here.
+      - name: Pull images the tests use
+        run: |
+          docker pull -q busybox:1.37
+          docker pull -q "$(grep -o 'envoyproxy/envoy:[^"]*' internal/infrastructure/envoy/envoy.go)"
       - run: make test-integration
       - name: Docker state on failure
         if: failure()

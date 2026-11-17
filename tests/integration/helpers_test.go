@@ -13,6 +13,7 @@ import (
 	"io"
 	"maps"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"runtime"
@@ -33,6 +34,24 @@ import (
 
 // webPkg is a small HTTP server package; see testdata/web/values.yaml for its knobs.
 const webPkg = "testdata/web"
+
+// sharedHome is the KARGA_HOME of every test. The host gateway is one container configured from
+// one home, so tests running in parallel must share it. Tests that need the host to themselves
+// (the gateway going away, port 80, a Docker restart) do not call t.Parallel(): Go runs them
+// before the parallel ones start.
+var sharedHome string
+
+func TestMain(m *testing.M) {
+	dir, err := os.MkdirTemp("", "karga-it-")
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	sharedHome = dir
+	code := m.Run()
+	_ = os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 func requireLinux(t *testing.T) {
 	t.Helper()
@@ -126,7 +145,7 @@ func tryGet(port int, host string) (int, string, error) {
 
 func service(t *testing.T, name string) (*releases.Service, ports.Runtime) {
 	t.Helper()
-	return serviceIn(t, t.TempDir(), name)
+	return serviceIn(t, sharedHome, name)
 }
 
 // serviceIn is service with a given KARGA_HOME, so several services can share one.
