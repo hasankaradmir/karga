@@ -37,6 +37,8 @@ type Runtime struct {
 	Output map[string]string
 	// Files holds file contents by workload and absolute path, for ExportPath and ImportPath.
 	Files map[string]map[string][]byte
+	// ExecFunc answers Exec (default: no output, exit code 0).
+	ExecFunc func(name string, opts ports.ExecOptions) int
 }
 
 // Workload is a fake container. Aliases maps each attached network to the workload's DNS aliases.
@@ -312,6 +314,26 @@ func (r *Runtime) Logs(_ context.Context, name string, tail int, _ bool, w io.Wr
 	}
 	_, err := io.WriteString(w, strings.Join(lines, ""))
 	return err
+}
+
+// Exec implements ports.Runtime.
+func (r *Runtime) Exec(_ context.Context, name string, opts ports.ExecOptions) (int, error) {
+	r.mu.Lock()
+	err := r.call("Exec", name)
+	w, ok := r.Workloads[name]
+	fn := r.ExecFunc
+	r.mu.Unlock()
+	switch {
+	case err != nil:
+		return -1, err
+	case !ok:
+		return -1, fmt.Errorf("workload %s: %w", name, ports.ErrNotFound)
+	case w.State != ports.StateRunning:
+		return -1, fmt.Errorf("workload %s is not running: %w", name, ports.ErrConflict)
+	case fn == nil:
+		return 0, nil
+	}
+	return fn(name, opts), nil
 }
 
 // ExportPath implements ports.Runtime: files below path, as tar entries prefixed with its base name.

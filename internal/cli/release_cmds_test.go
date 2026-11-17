@@ -4,6 +4,8 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -35,7 +37,7 @@ func (e *cliEnv) run(args ...string) (string, error) {
 	e.t.Helper()
 	var out, errOut bytes.Buffer
 	cmd := newRootCmd(&out, &errOut, func(context.Context) (ports.Runtime, func(), error) { return e.rt, func() {}, nil })
-	cmd.SetArgs(append(args, "--home", e.home))
+	cmd.SetArgs(append([]string{"--home", e.home}, args...))
 	err := cmd.Execute()
 	e.stderr = errOut.String()
 	return out.String(), err
@@ -281,5 +283,27 @@ func TestLiveProgress(t *testing.T) {
 	e.mustRun("upgrade", "w", web, "--set", "content=v3", "-o", "json")
 	if p := e.lastStderr(); p != "" {
 		t.Errorf("no progress with JSON output: %q", p)
+	}
+}
+
+func TestExec(t *testing.T) {
+	e := newCLIEnv(t)
+	e.mustRun("install", "w", "../../tests/integration/testdata/web")
+	var got []string
+	e.rt.ExecFunc = func(name string, o ports.ExecOptions) int {
+		got = append([]string{name}, o.Cmd...)
+		_, _ = io.WriteString(o.Stdout, "hello\\n")
+		return 7
+	}
+	out, err := e.run("exec", "w", "web", "--", "echo", "hello")
+	var exit *ExitCodeError
+	if !errors.As(err, &exit) || exit.Code != 7 || out != "hello\\n" || strings.Join(got, " ") != "w-web echo hello" {
+		t.Fatalf("exec: %q %v %v", out, err, got)
+	}
+	if _, err := e.run("exec", "w", "nope", "--", "true"); err == nil || !strings.Contains(err.Error(), "workloads: web") {
+		t.Fatalf("unknown workload: %v", err)
+	}
+	if _, err := e.run("exec", "w", "web"); err == nil || !strings.Contains(err.Error(), "needs a terminal") {
+		t.Fatalf("default interactive sh without a terminal: %v", err)
 	}
 }

@@ -83,6 +83,8 @@ type Runtime interface {
 	// Logs writes the last tail lines (all with tail < 0) a workload wrote to stdout and stderr to w.
 	// With follow it keeps writing new lines until ctx is done.
 	Logs(ctx context.Context, name string, tail int, follow bool, w io.Writer) error
+	// Exec runs a command in a running workload and returns its exit code.
+	Exec(ctx context.Context, name string, opts ExecOptions) (int, error)
 	// ExportPath writes path of a workload (running or stopped) as a tar stream whose entries are
 	// prefixed with the base name of path.
 	ExportPath(ctx context.Context, workload, path string, w io.Writer) error
@@ -212,6 +214,17 @@ type WorkloadStatus struct {
 	Limits Limits
 	// IPs maps each attached network to the workload's address on it.
 	IPs map[string]string
+}
+
+// ExecOptions describe a command run in a workload. With TTY the output is one stream (Stdout) and
+// Width/Height and Resize set the terminal size; without it Stdout and Stderr are separate.
+type ExecOptions struct {
+	Cmd            []string
+	TTY            bool
+	Stdin          io.Reader // nil: no input
+	Stdout, Stderr io.Writer
+	Width, Height  uint
+	Resize         <-chan [2]uint // width, height
 }
 
 // Limits are the enforced resource and logging limits of a workload.

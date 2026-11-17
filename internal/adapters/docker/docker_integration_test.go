@@ -20,5 +20,6 @@ func TestContract(t *testing.T) {
 		SleepCommand:   []string{"sleep", "300"},
 		HealthyCommand: []string{"true"},
 		ReportsIPs:     true,
+		ExecCommand:    []string{"sh", "-c", "cat; echo to stderr >&2; exit 3"},
 	})
 }

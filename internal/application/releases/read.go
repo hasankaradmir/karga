@@ -235,3 +235,29 @@ func (s *Service) SetGatewayAccessLog(ctx context.Context, on bool) error {
 	_, err = deployment.SyncGateway(ctx, rt, deployment.EnvoyProxies{}, s.Home, nil)
 	return err
 }
+
+// Exec runs a command in a running workload of a release and returns its exit code.
+func (s *Service) Exec(ctx context.Context, rel, workload string, opts ports.ExecOptions) (int, error) {
+	if _, err := s.Store.GetRelease(ctx, rel); err != nil {
+		return -1, err
+	}
+	applied, err := s.Store.ListResources(ctx, rel)
+	if err != nil {
+		return -1, err
+	}
+	var names []string
+	for _, a := range applied {
+		if a.Kind != resource.KindWorkload {
+			continue
+		}
+		if a.Name == workload {
+			rt, err := s.Runtime(ctx)
+			if err != nil {
+				return -1, err
+			}
+			return rt.Exec(ctx, a.RuntimeName, opts)
+		}
+		names = append(names, a.Name)
+	}
+	return -1, fmt.Errorf("release %s has no workload %q (workloads: %s)", rel, workload, strings.Join(names, ", "))
+}

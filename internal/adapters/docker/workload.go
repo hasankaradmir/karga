@@ -281,6 +281,65 @@ func (r *Runtime) Logs(ctx context.Context, name string, tail int, follow bool, 
 	return nil
 }
 
+// Exec implements ports.Runtime.
+func (r *Runtime) Exec(ctx context.Context, name string, o ports.ExecOptions) (int, error) {
+	size := client.ConsoleSize{Height: o.Height, Width: o.Width}
+	cr, err := r.c.ExecCreate(ctx, name, client.ExecCreateOptions{
+		Cmd: o.Cmd, TTY: o.TTY, AttachStdin: o.Stdin != nil, AttachStdout: true, AttachStderr: true, ConsoleSize: size,
+	})
+	if err != nil {
+		return -1, wrap(err, "exec in "+name)
+	}
+	at, err := r.c.ExecAttach(ctx, cr.ID, client.ExecAttachOptions{TTY: o.TTY, ConsoleSize: size})
+	if err != nil {
+		return -1, wrap(err, "attach to exec in "+name)
+	}
+	defer at.Close()
+	if o.Resize != nil {
+		go func() {
+			for sz := range o.Resize {
+				_, _ = r.c.ExecResize(ctx, cr.ID, client.ExecResizeOptions{Width: sz[0], Height: sz[1]})
+			}
+		}()
+	}
+	if o.Stdin != nil {
+		go func() {
+			_, _ = io.Copy(at.Conn, o.Stdin)
+			_ = at.CloseWrite()
+		}()
+	}
+	done := make(chan error, 1)
+	go func() {
+		var err error
+		if o.TTY {
+			_, err = io.Copy(o.Stdout, at.Reader)
+		} else {
+			_, err = stdcopy.StdCopy(o.Stdout, o.Stderr, at.Reader)
+		}
+		done <- err
+	}()
+	select {
+	case err := <-done:
+		if err != nil && !errors.Is(err, io.EOF) {
+			return -1, fmt.Errorf("exec in %s: %w", name, err)
+		}
+	case <-ctx.Done():
+		return -1, ctx.Err()
+	}
+	// The output ends a moment before the process is reported as exited.
+	for range 50 {
+		ins, err := r.c.ExecInspect(ctx, cr.ID, client.ExecInspectOptions{})
+		if err != nil {
+			return -1, wrap(err, "inspect exec in "+name)
+		}
+		if !ins.Running {
+			return ins.ExitCode, nil
+		}
+		time.Sleep(20 * time.Millisecond)
+	}
+	return -1, fmt.Errorf("exec in %s: still running after its output ended", name)
+}
+
 // ExportPath implements ports.Runtime.
 func (r *Runtime) ExportPath(ctx context.Context, workload, path string, w io.Writer) error {
 	res, err := r.c.CopyFromContainer(ctx, workload, client.CopyFromContainerOptions{SourcePath: path})

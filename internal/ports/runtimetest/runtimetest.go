@@ -22,6 +22,8 @@ import (
 type Config struct {
 	// ReportsIPs: GetWorkload returns the workload's network addresses.
 	ReportsIPs bool
+	// ExecCommand copies stdin to stdout, writes "to stderr" to stderr and exits 3; nil skips the check.
+	ExecCommand []string
 	// Image must provide SleepCommand and HealthyCommand.
 	Image          string
 	SleepCommand   []string
@@ -160,6 +162,12 @@ func Run(t *testing.T, rt ports.Runtime, cfg Config) {
 		var logBuf strings.Builder
 		if err := rt.Logs(ctx, req.Name, 10, false, &logBuf); err != nil {
 			t.Fatalf("logs: %v", err)
+		}
+		var execOut, execErr bytes.Buffer
+		code, err := rt.Exec(ctx, req.Name, ports.ExecOptions{Cmd: cfg.ExecCommand, Stdin: strings.NewReader("from stdin"), Stdout: &execOut, Stderr: &execErr})
+		must(t, err)
+		if cfg.ExecCommand != nil && (code != 3 || !strings.Contains(execOut.String(), "from stdin") || !strings.Contains(execErr.String(), "to stderr")) {
+			t.Fatalf("exec: code %d, stdout %q, stderr %q", code, execOut.String(), execErr.String())
 		}
 		labeled, err := rt.ListLabeled(ctx, "io.karga.contract")
 		must(t, err)
