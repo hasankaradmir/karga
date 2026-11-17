@@ -379,23 +379,25 @@ func ownedOK(owned map[string]bool, kind, name string, err error) error {
 }
 
 // recreateWorkload recreates a workload: the old container goes first, so ports and names are free.
+// Its anonymous volumes (image VOLUME paths no Volume covers) move to the new container, as docker
+// compose does, so their data survives the update.
 func recreateWorkload(ctx context.Context, rt ports.Runtime, c Change, owned map[string]bool, rel string, s *resource.WorkloadSpec, lbl map[string]string, paths map[Key]string, behind bool) error {
 	name := RuntimeName(rel, c.Name)
-	if c.Applied != nil {
-		progress(ctx, c.Kind, c.Name, PhaseStop, "stopping and removing %s", c.Applied.RuntimeName)
-		if err := removeWorkload(ctx, rt, c.Applied.RuntimeName); err != nil {
-			return err
-		}
-	}
-	progress(ctx, c.Kind, c.Name, PhaseCreate, "creating %s", name)
 	wr, err := workloadRequest(rel, c.Name, s, lbl, paths, behind)
 	if err != nil {
 		return err
 	}
+	if c.Applied != nil {
+		progress(ctx, c.Kind, c.Name, PhaseStop, "stopping and removing %s", c.Applied.RuntimeName)
+		if wr.Mounts, err = takeOver(ctx, rt, c.Applied.RuntimeName, wr.Mounts); err != nil {
+			return err
+		}
+	}
+	progress(ctx, c.Kind, c.Name, PhaseCreate, "creating %s", name)
 	err = rt.CreateWorkload(ctx, wr)
 	if errors.Is(err, ports.ErrConflict) && owned[ports.ObjectWorkload+"/"+name] {
-		// Left over from an interrupted operation of this release.
-		if err = removeWorkload(ctx, rt, name); err == nil {
+		// Left over from an interrupted operation of this release; it may hold the moved volumes.
+		if wr.Mounts, err = takeOver(ctx, rt, name, wr.Mounts); err == nil {
 			err = rt.CreateWorkload(ctx, wr)
 		}
 	}
@@ -403,6 +405,30 @@ func recreateWorkload(ctx context.Context, rt ports.Runtime, c Change, owned map
 		return err
 	}
 	return rt.StartWorkload(ctx, name)
+}
+
+// takeOver stops and deletes a container, keeping its anonymous volumes, and returns mounts with
+// those volumes added at their paths (unless a mount already uses the path).
+func takeOver(ctx context.Context, rt ports.Runtime, name string, mounts []ports.Mount) ([]ports.Mount, error) {
+	st, err := rt.GetWorkload(ctx, name)
+	if errors.Is(err, ports.ErrNotFound) {
+		return mounts, nil
+	}
+	if err != nil {
+		return mounts, err
+	}
+	if err := rt.StopWorkload(ctx, name, stopTimeout); err != nil && !errors.Is(err, ports.ErrNotFound) {
+		return mounts, err
+	}
+	if err := rt.DeleteWorkload(ctx, name); err != nil {
+		return mounts, err
+	}
+	for _, a := range st.AnonymousVolumes {
+		if !slices.ContainsFunc(mounts, func(m ports.Mount) bool { return m.Target == a.Target }) {
+			mounts = append(mounts, ports.Mount{Type: ports.MountVolume, Source: a.Source, Target: a.Target})
+		}
+	}
+	return mounts, nil
 }
 
 // replaceWorkload updates a workload without downtime (tech design §11 "replace", ADR-010):
@@ -515,7 +541,7 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 	if err := rt.StopWorkload(ctx, old, stopWait); err != nil && !errors.Is(err, ports.ErrNotFound) {
 		return true, err
 	}
-	if err := rt.DeleteWorkload(ctx, old); err != nil {
+	if err := deleteWorkload(ctx, rt, old); err != nil {
 		return true, err
 	}
 	if err := rt.RenameWorkload(ctx, next, name); err != nil {
@@ -689,7 +715,7 @@ func Delete(ctx context.Context, rt ports.Runtime, home, release string, deleteV
 				if err := rt.StopWorkload(ctx, o.Name, stopTimeout); err != nil && !errors.Is(err, ports.ErrNotFound) {
 					errs = append(errs, err)
 				}
-				errs = append(errs, rt.DeleteWorkload(ctx, o.Name))
+				errs = append(errs, deleteWorkload(ctx, rt, o.Name))
 			case ports.ObjectNetwork:
 				errs = append(errs, rt.DeleteNetwork(ctx, o.Name))
 			case ports.ObjectVolume:

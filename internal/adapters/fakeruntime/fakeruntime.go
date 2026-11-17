@@ -39,6 +39,10 @@ type Runtime struct {
 	Files map[string]map[string][]byte
 	// ExecFunc answers Exec (default: no output, exit code 0).
 	ExecFunc func(name string, opts ports.ExecOptions) int
+	// ImageVolumes are the VOLUME paths of an image: a container gets an anonymous volume (named
+	// "anon-<n>" in Volumes) for each one no mount covers.
+	ImageVolumes map[string][]string
+	anonymous    int
 }
 
 // Workload is a fake container. Aliases maps each attached network to the workload's DNS aliases.
@@ -185,6 +189,14 @@ func (r *Runtime) CreateWorkload(_ context.Context, req ports.WorkloadRequest) e
 	for _, n := range req.Networks {
 		w.Aliases[n] = slices.Clone(req.Aliases)
 	}
+	for _, path := range r.ImageVolumes[req.Image] {
+		if !slices.ContainsFunc(req.Mounts, func(m ports.Mount) bool { return m.Target == path }) {
+			r.anonymous++
+			name := fmt.Sprintf("anon-%d", r.anonymous)
+			r.Volumes[name] = ports.VolumeRequest{Name: name}
+			w.Request.Mounts = append(slices.Clone(w.Request.Mounts), ports.Mount{Type: ports.MountVolume, Source: name, Target: path})
+		}
+	}
 	r.Workloads[req.Name] = w
 	return nil
 }
@@ -269,8 +281,14 @@ func (r *Runtime) GetWorkload(_ context.Context, name string) (ports.WorkloadSta
 	if lim.MemoryBytes > 0 {
 		lim.MemorySwapBytes = lim.MemoryBytes
 	}
+	var anon []ports.Mount
+	for _, m := range w.Request.Mounts {
+		if m.Type == ports.MountVolume && strings.HasPrefix(m.Source, "anon-") {
+			anon = append(anon, m)
+		}
+	}
 	return ports.WorkloadStatus{Name: name, State: w.State, Health: health, Labels: maps.Clone(w.Request.Labels), Limits: lim,
-		OOMKilled: w.OOMKilled, RestartCount: w.Restarts}, nil
+		OOMKilled: w.OOMKilled, RestartCount: w.Restarts, AnonymousVolumes: anon}, nil
 }
 
 // ListManaged implements ports.Runtime.

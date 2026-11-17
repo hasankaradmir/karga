@@ -20,12 +20,33 @@ import (
 // RuntimeName is the runtime object name of a release-local resource name.
 func RuntimeName(release, name string) string { return release + "-" + name }
 
-// RemoveWorkload stops a container gracefully and deletes it; a missing one is fine.
+// RemoveWorkload stops a container gracefully and deletes it with its anonymous volumes; a missing
+// one is fine.
 func RemoveWorkload(ctx context.Context, rt ports.Runtime, name string) error {
 	if err := rt.StopWorkload(ctx, name, StopTimeout); err != nil && !errors.Is(err, ports.ErrNotFound) {
 		return err
 	}
-	return rt.DeleteWorkload(ctx, name)
+	return DeleteWorkload(ctx, rt, name)
+}
+
+// DeleteWorkload deletes a container for good, with the anonymous volumes the runtime made for its
+// image's VOLUME paths (nothing else can use them); a missing one is fine.
+func DeleteWorkload(ctx context.Context, rt ports.Runtime, name string) error {
+	st, err := rt.GetWorkload(ctx, name)
+	if errors.Is(err, ports.ErrNotFound) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if err := rt.DeleteWorkload(ctx, name); err != nil {
+		return err
+	}
+	var errs []error
+	for _, m := range st.AnonymousVolumes {
+		errs = append(errs, rt.DeleteVolume(ctx, m.Source))
+	}
+	return errors.Join(errs...)
 }
 
 // StopTimeout gives workloads a graceful shutdown before they are removed.

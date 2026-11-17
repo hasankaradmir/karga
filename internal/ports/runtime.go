@@ -68,7 +68,8 @@ type Runtime interface {
 	CreateWorkload(ctx context.Context, req WorkloadRequest) error
 	StartWorkload(ctx context.Context, name string) error
 	StopWorkload(ctx context.Context, name string, timeout time.Duration) error
-	// DeleteWorkload removes the container (stopping it if needed). Named volumes are kept.
+	// DeleteWorkload removes the container (stopping it if needed). Its volumes, named and anonymous,
+	// are kept.
 	DeleteWorkload(ctx context.Context, name string) error
 	GetWorkload(ctx context.Context, name string) (WorkloadStatus, error)
 	// RenameWorkload renames a container; it keeps running and keeps its network aliases.
@@ -214,6 +215,9 @@ type WorkloadStatus struct {
 	Limits Limits
 	// IPs maps each attached network to the workload's address on it.
 	IPs map[string]string
+	// AnonymousVolumes are the volumes the runtime created for image VOLUME paths that no mount
+	// covers (Type MountVolume, Source the generated volume name, Target the path).
+	AnonymousVolumes []Mount
 }
 
 // ExecOptions describe a command run in a workload. With TTY the output is one stream (Stdout) and

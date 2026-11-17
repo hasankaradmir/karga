@@ -297,6 +297,9 @@ func eligible(w *resource.WorkloadSpec) (string, string) {
 			return resource.StrategyRecreate, fmt.Sprintf("mounts volume %s read-write", m.Volume)
 		}
 	}
+	if len(w.AnonymousVolumes) > 0 {
+		return resource.StrategyRecreate, fmt.Sprintf("keeps image VOLUME %s in an anonymous volume", strings.Join(w.AnonymousVolumes, ", "))
+	}
 	if w.HealthCheck == nil {
 		return resource.StrategyRecreate, "no healthCheck to verify readiness"
 	}

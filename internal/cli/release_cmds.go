@@ -92,6 +92,11 @@ func (a *app) printResult(verb string, res *releases.Result, verbose bool) error
 	if a.output == outputJSON {
 		return writeJSON(a.stdout, res)
 	}
+	for _, w := range res.Warnings {
+		if _, err := fmt.Fprintf(a.stderr, "Warning: %s\n", w); err != nil {
+			return err
+		}
+	}
 	switch {
 	case res.DryRun && verbose:
 		return res.Plan.Print(a.stdout, res.Release, res.From, res.Revision)

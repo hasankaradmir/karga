@@ -424,8 +424,9 @@ Rules to know:
 - **Health checks.** `exec` runs a command inside the container, so the image needs the tool (curl,
   wget, pg_isready...). `tcp` and `http` are run by karga from the host and need nothing in the
   image.
-- **Volumes.** A workload that mounts a volume read-write is always recreated: two containers
-  writing the same data are unsafe.
+- **Volumes.** A workload that mounts a volume read-write, or keeps an image VOLUME in an anonymous
+  volume (see [section 8](#what-happens-to-data-on-an-upgrade)), is always recreated: two
+  containers writing the same data are unsafe.
 - **Release proxy.** `karga status` shows it with the backend it routes to:
 
   ```
@@ -451,6 +452,25 @@ $ karga install db examples/postgres --set network.port=15432 --set database.pas
 
 Volumes have `retention: retain` by default: `uninstall` keeps them and a later install of the same
 release name reuses them. `retention: delete` removes a volume when the release no longer has it.
+
+### What happens to data on an upgrade
+
+- A Volume is named `<release>-<volume>` in Docker (`db-postgres-data`), whatever the revision.
+  The new container mounts the same volume, so upgrades, rollbacks and reinstalls under the same
+  release name see the same data. Changing a Volume's settings is refused by the plan.
+- Data written anywhere else in the container is lost when it is recreated, unless the image
+  declares that path as a `VOLUME`. Docker then keeps it in an anonymous volume, which karga moves
+  to the new container on every upgrade. It is not a karga Volume: `uninstall` deletes it and
+  `volume backup` cannot reach it, so karga warns:
+
+  ```console
+  $ karga install cache ./cache
+  Warning: workload redis keeps image VOLUME /data in an anonymous volume: upgrades keep it, but uninstall deletes it and it is not in volume backups. Mount a Volume there.
+  ```
+
+  Mount a Volume on that path to keep the data like any other.
+- Upgrades cannot undo what the new version does to the data (a database migration, a new file
+  format); back up before upgrading across such versions.
 
 ### Back up and restore a volume
 

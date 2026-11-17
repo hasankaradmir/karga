@@ -21,5 +21,7 @@ func TestContract(t *testing.T) {
 		HealthyCommand: []string{"true"},
 		ReportsIPs:     true,
 		ExecCommand:    []string{"sh", "-c", "cat; echo to stderr >&2; exit 3"},
+		VolumeImage:    "redis:7.4-alpine",
+		VolumePath:     "/data",
 	})
 }

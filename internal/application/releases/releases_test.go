@@ -517,3 +517,42 @@ func TestUpgradeRecreatesWhatWasRemoved(t *testing.T) {
 		t.Fatalf("plan created %v, workload %v", created, e.rt.Workloads["cache-redis"])
 	}
 }
+
+func TestAnonymousVolumesSurviveUpgrades(t *testing.T) {
+	e := newEnv(t)
+	e.rt.ImageVolumes = map[string][]string{"redis:7.2": {"/cache"}}
+	res := must[*Result](t)(e.install("image.tag=7.2"))
+	if len(res.Warnings) != 1 || !strings.Contains(res.Warnings[0], "keeps image VOLUME /cache in an anonymous volume") {
+		t.Fatalf("warnings: %v", res.Warnings)
+	}
+	anon := func() string {
+		for _, m := range e.rt.Workloads["cache-redis"].Request.Mounts {
+			if m.Target == "/cache" {
+				return m.Source
+			}
+		}
+		return ""
+	}
+	first := anon()
+	if first == "" {
+		t.Fatal("no anonymous volume at /cache")
+	}
+
+	// A recreate moves the anonymous volume to the new container instead of deleting it.
+	e.rt.ImageVolumes["redis:7.4"] = []string{"/cache"}
+	must[*Result](t)(e.upgrade("image.tag=7.4"))
+	if e.image() != "redis:7.4" || anon() != first {
+		t.Fatalf("after upgrade: image %s, /cache on %q, want %q", e.image(), anon(), first)
+	}
+	if _, ok := e.rt.Volumes[first]; !ok {
+		t.Fatal("anonymous volume was deleted by the upgrade")
+	}
+
+	// Uninstall deletes it: nothing could mount it again.
+	if err := e.svc.Uninstall(context.Background(), UninstallRequest{Name: "cache"}); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := e.rt.Volumes[first]; ok {
+		t.Fatal("uninstall kept the anonymous volume")
+	}
+}

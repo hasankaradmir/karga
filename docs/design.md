@@ -125,7 +125,10 @@ shows every changed field.
 2. Materializes Config and Secret files under `$KARGA_HOME/releases/<release>/<revision>/`.
 3. Deletes removed workloads, then creates and updates resources in dependency order.
 4. Waits for recreated workloads; ones that do not become ready are stopped, not removed, so their
-   logs can be read.
+   logs can be read. A recreated workload's new container mounts the same named volumes, and the
+   anonymous volumes Docker made for image `VOLUME` paths no mount covers are moved to it (as
+   docker compose does); they are deleted only with the workload for good (removed from the
+   package or uninstalled). A workload with such volumes is never replaced.
 5. Updates the release proxy and the gateway, then deletes removed networks and volumes (a removed
    volume only with `retention: delete`; `uninstall --delete-volumes` removes them all).
 

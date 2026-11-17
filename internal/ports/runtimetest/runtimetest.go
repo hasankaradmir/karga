@@ -30,6 +30,8 @@ type Config struct {
 	HealthyCommand []string
 	// Wait bounds how long the suite waits for a workload to become healthy.
 	Wait time.Duration
+	// VolumeImage declares VOLUME VolumePath; empty skips the anonymous volume check.
+	VolumeImage, VolumePath string
 }
 
 // Run exercises rt against the Runtime contract.
@@ -81,6 +83,33 @@ func Run(t *testing.T, rt ports.Runtime, cfg Config) {
 		assertListed(t, rt, release, ports.ObjectVolume, req.Name, true)
 		must(t, rt.DeleteVolume(ctx, req.Name))
 		must(t, rt.DeleteVolume(ctx, req.Name))
+	})
+
+	t.Run("anonymous volume", func(t *testing.T) {
+		if cfg.VolumeImage == "" {
+			t.Skip("no VolumeImage")
+		}
+		must(t, rt.EnsureImage(ctx, cfg.VolumeImage, "if-not-present"))
+		req := ports.WorkloadRequest{Name: name("anon"), Labels: labels("Workload", "anon"), Image: cfg.VolumeImage}
+		must(t, rt.CreateWorkload(ctx, req))
+		st, err := rt.GetWorkload(ctx, req.Name)
+		must(t, err)
+		if len(st.AnonymousVolumes) != 1 || st.AnonymousVolumes[0].Target != cfg.VolumePath {
+			t.Fatalf("anonymous volumes: %+v", st.AnonymousVolumes)
+		}
+		vol := st.AnonymousVolumes[0].Source
+		t.Cleanup(func() { _ = rt.DeleteVolume(ctx, vol) })
+		// Deleting the container keeps the volume, so a new container can mount it.
+		must(t, rt.DeleteWorkload(ctx, req.Name))
+		req.Mounts = []ports.Mount{{Type: ports.MountVolume, Source: vol, Target: cfg.VolumePath}}
+		must(t, rt.CreateWorkload(ctx, req))
+		st, err = rt.GetWorkload(ctx, req.Name)
+		must(t, err)
+		if len(st.AnonymousVolumes) != 1 || st.AnonymousVolumes[0].Source != vol {
+			t.Fatalf("after moving %s: %+v", vol, st.AnonymousVolumes)
+		}
+		must(t, rt.DeleteWorkload(ctx, req.Name))
+		must(t, rt.DeleteVolume(ctx, vol))
 	})
 
 	t.Run("image never missing", func(t *testing.T) {

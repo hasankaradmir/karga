@@ -16,6 +16,8 @@ First release.
 - Plans as a summary (`--verbose` for fields) and live progress while applying.
 - An upgrade recreates containers, networks and volumes removed outside karga; an install that
   fails before creating anything leaves no release behind.
+- Data in an image's `VOLUME` path that no Volume covers survives upgrades (the anonymous volume
+  moves to the new container), with a warning to mount a Volume there.
 
 ### Upgrades without downtime (Linux)
 - `updateStrategy: replace` starts the new container next to the old one and switches over.

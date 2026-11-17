@@ -1,0 +1,9 @@
+# The redis image declares VOLUME /data; no Volume is mounted there on purpose.
+apiVersion: karga.io/v1alpha1
+kind: Workload
+metadata:
+  name: redis
+spec:
+  image: redis:7.4-alpine
+  environment:
+    REV: "{{ .Values.rev }}"

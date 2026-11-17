@@ -2,6 +2,7 @@ package docker
 
 import (
 	"context"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -182,8 +183,8 @@ func (r *Runtime) StopWorkload(ctx context.Context, name string, timeout time.Du
 
 // DeleteWorkload implements ports.Runtime.
 func (r *Runtime) DeleteWorkload(ctx context.Context, name string) error {
-	// RemoveVolumes only removes anonymous volumes (image VOLUME declarations); named volumes always survive.
-	_, err := r.c.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true, RemoveVolumes: true})
+	// Anonymous volumes stay too: a recreate moves them to the new container.
+	_, err := r.c.ContainerRemove(ctx, name, client.ContainerRemoveOptions{Force: true})
 	return ignoreNotFound(wrap(err, "delete workload "+name))
 }
 
@@ -225,7 +226,21 @@ func (r *Runtime) GetWorkload(ctx context.Context, name string) (ports.WorkloadS
 	if res.Container.Config != nil {
 		st.Labels = res.Container.Config.Labels
 	}
+	for _, m := range res.Container.Mounts {
+		if m.Type == mount.TypeVolume && anonymous(m.Name) {
+			st.AnonymousVolumes = append(st.AnonymousVolumes, ports.Mount{Type: ports.MountVolume, Source: m.Name, Target: m.Destination, ReadOnly: !m.RW})
+		}
+	}
 	return st, nil
+}
+
+// anonymous reports whether a volume name is one Docker generated: 64 hex digits.
+func anonymous(name string) bool {
+	if len(name) != 64 {
+		return false
+	}
+	_, err := hex.DecodeString(name)
+	return err == nil
 }
 
 func managedFilter(release string) client.Filters {

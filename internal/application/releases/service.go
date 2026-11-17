@@ -84,6 +84,8 @@ type Result struct {
 	// NoOp is set when an install found the release already deployed with the same package and values.
 	NoOp bool            `json:"noop,omitempty"`
 	Plan deployment.Plan `json:"plan"`
+	// Warnings are problems that did not stop the operation.
+	Warnings []string `json:"warnings,omitempty"`
 	// Notes is the package's NOTES.txt for this revision, shown after a successful apply.
 	Notes string `json:"notes,omitempty"`
 }
@@ -323,6 +325,9 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 		if applied, err = existing(ctx, rt, in.Name, applied); err != nil {
 			return nil, err
 		}
+		if err := anonymousVolumes(ctx, rt, in.Name, in.Resources); err != nil {
+			return nil, err
+		}
 	}
 	plan, err := deployment.Diff(in.Name, in.Resources, applied, in.Strategy)
 	if err != nil {
@@ -333,6 +338,7 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 		res.From = in.Existing.CurrentRevision
 	}
 	if in.DryRun {
+		res.Warnings = anonymousWarnings(in.Resources)
 		return res, nil
 	}
 
@@ -363,6 +369,9 @@ func (s *Service) deploy(ctx context.Context, in deployInput) (*Result, error) {
 		return res, fmt.Errorf("%w\n%s", err, hint)
 	}
 	res.Status = release.StatusDeployed
+	if err := anonymousVolumes(ctx, rt, in.Name, in.Resources); err == nil {
+		res.Warnings = anonymousWarnings(in.Resources)
+	}
 	if perr := s.prune(context.WithoutCancel(ctx), in.Name, in.HistoryMax); perr != nil {
 		s.Log.Warn("prune history", "release", in.Name, "error", perr)
 	}
@@ -382,6 +391,41 @@ func (s *Service) discard(ctx context.Context, name string) bool {
 		return false
 	}
 	return true
+}
+
+// anonymousVolumes records on each workload the image VOLUME paths its container keeps in anonymous
+// volumes. Such data moves to the new container on a recreate but cannot be shared by two, so these
+// workloads are never replaced.
+func anonymousVolumes(ctx context.Context, rt ports.Runtime, name string, rs []resource.Resource) error {
+	for _, r := range rs {
+		w, ok := r.Spec.(*resource.WorkloadSpec)
+		if !ok {
+			continue
+		}
+		st, err := rt.GetWorkload(ctx, deployment.RuntimeName(name, r.Metadata.Name))
+		if errors.Is(err, ports.ErrNotFound) {
+			continue
+		}
+		if err != nil {
+			return err
+		}
+		w.AnonymousVolumes = nil
+		for _, m := range st.AnonymousVolumes {
+			w.AnonymousVolumes = append(w.AnonymousVolumes, m.Target)
+		}
+	}
+	return nil
+}
+
+func anonymousWarnings(rs []resource.Resource) []string {
+	var out []string
+	for _, r := range rs {
+		if w, ok := r.Spec.(*resource.WorkloadSpec); ok && len(w.AnonymousVolumes) > 0 {
+			out = append(out, fmt.Sprintf("workload %s keeps image VOLUME %s in an anonymous volume: upgrades keep it, but uninstall deletes it and it is not in volume backups. Mount a Volume there.",
+				r.Metadata.Name, strings.Join(w.AnonymousVolumes, ", ")))
+		}
+	}
+	return out
 }
 
 // existing drops the recorded workloads, networks and volumes that no longer exist in the runtime

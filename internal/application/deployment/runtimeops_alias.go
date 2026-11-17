@@ -7,6 +7,7 @@ var (
 	// RuntimeName is the runtime object name of a release-local resource name.
 	RuntimeName    = runtimeops.RuntimeName
 	removeWorkload = runtimeops.RemoveWorkload
+	deleteWorkload = runtimeops.DeleteWorkload
 	ipOverlap      = runtimeops.IPOverlap
 	portTaken      = runtimeops.PortTaken
 	httpHealthPath = runtimeops.HTTPHealthPath

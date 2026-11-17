@@ -200,6 +200,7 @@ func TestStrategyResolution(t *testing.T) {
 		{"host port", func(w *resource.WorkloadSpec) { eligible(w); w.Ports[0].HostPort = 6379 }, "", "recreate: publishes hostPort 6379/tcp without the gateway (Linux, tcp)"},
 		{"rw volume", func(w *resource.WorkloadSpec) { eligible(w); w.Mounts[0].ReadOnly = false }, "", "recreate: mounts volume data read-write"},
 		{"no healthcheck", func(w *resource.WorkloadSpec) { eligible(w); w.HealthCheck = nil }, "", "recreate: no healthCheck to verify readiness"},
+		{"anonymous volume", func(w *resource.WorkloadSpec) { eligible(w); w.AnonymousVolumes = []string{"/cache"} }, "replace", "recreate: keeps image VOLUME /cache in an anonymous volume"},
 	}
 	for _, tt := range tests {
 		if got := plan(tt.mutate, tt.override).Label(); got != tt.want {
