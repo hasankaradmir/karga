@@ -4,14 +4,11 @@ package integration
 
 import (
 	"context"
-	"path/filepath"
 	"strconv"
 	"strings"
 	"testing"
 	"time"
 
-	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
-	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/application/packages"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/domain/release"
@@ -21,56 +18,6 @@ import (
 
 // service returns a release service on real Docker and a fresh state directory. Everything the
 // release created is removed when the test ends, volumes included.
-func service(t *testing.T, name string) (*releases.Service, ports.Runtime) {
-	t.Helper()
-	return serviceIn(t, t.TempDir(), name)
-}
-
-// serviceIn is service with a given KARGA_HOME, so several services can share one.
-func serviceIn(t *testing.T, home, name string) (*releases.Service, ports.Runtime) {
-	t.Helper()
-	rt := newRuntime(t)
-	store, err := sqlite.Open(context.Background(), filepath.Join(home, "karga.db"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() {
-		if err := deployment.Delete(context.Background(), rt, home, name, true); err != nil {
-			t.Errorf("cleanup %s: %v", name, err)
-		}
-		_ = store.Close()
-	})
-	return releases.New(store, func(context.Context) (ports.Runtime, error) { return rt, nil }, home, nil, nil), rt
-}
-
-func opts() releases.CommonOptions {
-	return releases.CommonOptions{Timeout: 2 * time.Minute, HistoryMax: releases.DefaultHistoryMax}
-}
-
-func workload(t *testing.T, rt ports.Runtime, name string) ports.WorkloadStatus {
-	t.Helper()
-	st, err := rt.GetWorkload(context.Background(), name)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return st
-}
-
-func currentRelease(t *testing.T, s *releases.Service, name string) release.Release {
-	t.Helper()
-	rels, err := s.List(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	for _, r := range rels {
-		if r.Name == name {
-			return r
-		}
-	}
-	t.Fatalf("release %s not listed", name)
-	return release.Release{}
-}
-
 func TestRedisReleaseLifecycle(t *testing.T) {
 	ctx := context.Background()
 	name := releaseName("it-rel")

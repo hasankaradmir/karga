@@ -92,15 +92,15 @@ func TestReplaceWithHTTPHealth(t *testing.T) {
 	}
 	host := startHostPinger(port)
 	defer host.halt()
-	net := startPinger(t, rt, name)
+	net := startNetPinger(t, rt, name, "http://web:8080/")
 	time.Sleep(time.Second)
 	if _, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: common, Name: name, Package: webPkg, Values: sets("content=v2")}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Second)
-	out := logs(t, net)
-	t.Logf("host: %d ok, %d failed; network: %d failed", host.ok.Load(), host.failed.Load(), failures(out))
-	if host.failed.Load() != 0 || failures(out) != 0 || host.seen()["v2"] == 0 {
-		t.Fatalf("requests failed or v2 never served: %v\n%s", host.seen(), out)
+	res := net.result()
+	t.Logf("host: %d ok, %d failed; network: %s", host.ok.Load(), host.failed.Load(), res)
+	if host.failed.Load() != 0 || res.Failed != 0 || host.seen()["v2"] == 0 {
+		t.Fatalf("requests failed or v2 never served: host %v, network %s", host.seen(), res)
 	}
 }

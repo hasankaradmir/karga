@@ -6,18 +6,14 @@ import (
 	"bufio"
 	"context"
 	"errors"
-	"io"
-	"maps"
 	"net"
 	"net/http"
 	"os"
 	"os/exec"
-	"runtime"
 	"slices"
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"testing"
 	"time"
 
@@ -29,89 +25,6 @@ import (
 	"github.com/hasankaradmir/karga/internal/ports"
 	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )
-
-func requireLinux(t *testing.T) {
-	t.Helper()
-	if runtime.GOOS != "linux" {
-		t.Skip("the proxy only runs on Linux (ADR-009)")
-	}
-}
-
-// hostPinger requests http://127.0.0.1:port/ (with an optional Host header) every 50ms from the
-// host until stopped.
-type hostPinger struct {
-	ok, failed atomic.Int64
-	mu         sync.Mutex
-	bodies     map[string]int
-	stop       chan struct{}
-	done       sync.WaitGroup
-}
-
-func startHostPinger(port int) *hostPinger { return startHostPingerFor(port, "") }
-
-func startHostPingerFor(port int, host string) *hostPinger {
-	p := &hostPinger{bodies: map[string]int{}, stop: make(chan struct{})}
-	client := &http.Client{Timeout: 2 * time.Second, Transport: &http.Transport{DisableKeepAlives: true}}
-	url := "http://127.0.0.1:" + strconv.Itoa(port) + "/"
-	p.done.Add(1)
-	go func() {
-		defer p.done.Done()
-		for {
-			select {
-			case <-p.stop:
-				return
-			case <-time.After(50 * time.Millisecond):
-			}
-			req, _ := http.NewRequest(http.MethodGet, url, nil)
-			if host != "" {
-				req.Host = host
-			}
-			resp, err := client.Do(req)
-			if err != nil {
-				p.failed.Add(1)
-				continue
-			}
-			b, _ := io.ReadAll(resp.Body)
-			_ = resp.Body.Close()
-			if resp.StatusCode != http.StatusOK {
-				p.failed.Add(1)
-				continue
-			}
-			p.ok.Add(1)
-			p.mu.Lock()
-			p.bodies[strings.TrimSpace(string(b))]++
-			p.mu.Unlock()
-		}
-	}()
-	return p
-}
-
-func (p *hostPinger) halt() { close(p.stop); p.done.Wait() }
-
-// seen returns a copy of the response bodies counted so far.
-func (p *hostPinger) seen() map[string]int {
-	p.mu.Lock()
-	defer p.mu.Unlock()
-	return maps.Clone(p.bodies)
-}
-
-func (p *hostPinger) reset() { p.ok.Store(0); p.failed.Store(0) }
-
-// hostGet does one request to http://127.0.0.1:port/ with a Host header and returns status and body.
-func hostGet(t *testing.T, port int, host string) (int, string) {
-	t.Helper()
-	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+"/", nil)
-	req.Host = host
-	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
-	if err != nil {
-		t.Fatalf("GET %s on %d: %v", host, port, err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	b, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, strings.TrimSpace(string(b))
-}
-
-func failures(out string) int { return strings.Count(out, "FAIL") }
 
 func TestGatewayReplaceWithoutLoss(t *testing.T) {
 	requireLinux(t)
@@ -157,8 +70,7 @@ func TestGatewayReplaceWithoutLoss(t *testing.T) {
 
 	host := startHostPinger(port)
 	defer host.halt()
-	web := startPinger(t, rt, name)
-	api := startURLPinger(t, rt, name, "api-pinger", "http://api:8081/")
+	net := startNetPinger(t, rt, name, "http://web:8080/", "http://api:8081/")
 	time.Sleep(time.Second)
 
 	if _, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: common, Name: name, Package: webPkg, Values: sets("content=v2")}); err != nil {
@@ -171,14 +83,14 @@ func TestGatewayReplaceWithoutLoss(t *testing.T) {
 	}
 	time.Sleep(time.Second)
 
-	webOut, apiOut := logs(t, web), logs(t, api)
+	pings := net.results()
+	web, api := pings[0], pings[1]
 	bodies := host.seen()
-	t.Logf("host: %d ok, %d failed, bodies %v; network web: %d failed of %d, api: %d failed of %d", host.ok.Load(), host.failed.Load(), bodies,
-		failures(webOut), strings.Count(webOut, "\n")/2, failures(apiOut), strings.Count(apiOut, "\n")/2)
-	if host.failed.Load() != 0 || failures(webOut) != 0 || failures(apiOut) != 0 {
-		t.Fatalf("requests failed behind the gateway and proxy:\nweb:\n%s\napi:\n%s", webOut, apiOut)
+	t.Logf("host: %d ok, %d failed, bodies %v; network web: %s; api: %s", host.ok.Load(), host.failed.Load(), bodies, web, api)
+	if host.failed.Load() != 0 || web.Failed != 0 || api.Failed != 0 {
+		t.Fatalf("requests failed behind the gateway and proxy: web %s, api %s", web, api)
 	}
-	if bodies["v2"] == 0 || len(bodies) != 2 || !strings.Contains(apiOut, "v2") {
+	if bodies["v2"] == 0 || len(bodies) != 2 || api.Bodies["v2"] == 0 {
 		t.Fatalf("unexpected content: %v", bodies)
 	}
 	if r := currentRelease(t, s, name); r.Status != release.StatusDeployed || r.CurrentRevision != 2 {
@@ -325,10 +237,10 @@ func TestProxyLowPort(t *testing.T) {
 		Values: packages.Options{Sets: []string{"listenPort=80"}}}); err != nil {
 		t.Fatal(err)
 	}
-	p := startURLPinger(t, rt, name, "pinger80", "http://web:80/")
+	p := startNetPinger(t, rt, name, "http://web:80/")
 	time.Sleep(2 * time.Second)
-	if out := logs(t, p); !strings.Contains(out, "v1") {
-		t.Fatalf("proxy did not serve containerPort 80:\n%s", out)
+	if res := p.result(); res.Bodies["v1"] == 0 {
+		t.Fatalf("proxy did not serve containerPort 80: %s", res)
 	}
 }
 
@@ -478,21 +390,9 @@ func TestGatewaySurvivesDockerRestart(t *testing.T) {
 	}
 	// The release proxy is back too: api answers on the network.
 	rt := newRuntime(t)
-	p := startURLPinger(t, rt, name, "boot-pinger", "http://api:8081/")
+	p := startNetPinger(t, rt, name, "http://api:8081/")
 	time.Sleep(2 * time.Second)
-	if out := logs(t, p); !strings.Contains(out, "v1") {
-		t.Fatalf("release proxy not serving after the restart:\n%s", out)
+	if res := p.result(); res.Bodies["v1"] == 0 {
+		t.Fatalf("release proxy not serving after the restart: %s", res)
 	}
-}
-
-func tryGet(port int, host string) (int, string, error) {
-	req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+"/", nil)
-	req.Host = host
-	resp, err := (&http.Client{Timeout: 2 * time.Second}).Do(req)
-	if err != nil {
-		return 0, "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-	b, _ := io.ReadAll(resp.Body)
-	return resp.StatusCode, strings.TrimSpace(string(b)), nil
 }

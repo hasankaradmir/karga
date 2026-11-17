@@ -5,8 +5,6 @@ package integration
 
 import (
 	"context"
-	"crypto/rand"
-	"encoding/hex"
 	"errors"
 	"slices"
 	"strconv"
@@ -14,29 +12,12 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hasankaradmir/karga/internal/adapters/docker"
 	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/application/packages"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/ports"
 	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )
-
-func newRuntime(t *testing.T) *docker.Runtime {
-	t.Helper()
-	rt, err := docker.New(context.Background())
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = rt.Close() })
-	return rt
-}
-
-func releaseName(prefix string) string {
-	b := make([]byte, 3)
-	_, _ = rand.Read(b)
-	return prefix + "-" + hex.EncodeToString(b)
-}
 
 func render(t *testing.T, example, release string, sets ...string) []resource.Resource {
 	t.Helper()

@@ -4,8 +4,6 @@ package integration
 
 import (
 	"context"
-	"os/exec"
-	"strings"
 	"testing"
 	"time"
 
@@ -15,52 +13,12 @@ import (
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
-const webPkg = "testdata/web"
-
 // startDelay makes the server take 3s to listen: a recreate then has a real outage, a replace must
 // hide it.
 const startDelay = "startDelay=3"
 
 // maxRaceFailures bounds requests that may fail while racing a replace switch-over (see below).
 const maxRaceFailures = 2
-
-// startPinger runs a client on the release network that requests http://web:8080/ every 100ms and
-// prints the body, or FAIL when a request fails.
-// startPinger measures what other workloads see during an upgrade. It has to be a container on the
-// release network: Docker resolves aliases such as "web" only there, never from the host. It is
-// test-only; karga's own health checks start no container.
-func startPinger(t *testing.T, rt ports.Runtime, rel string) string {
-	t.Helper()
-	return startURLPinger(t, rt, rel, "pinger", "http://web:8080/")
-}
-
-// startURLPinger requests url every 100ms from the release network, printing FAIL for errors.
-func startURLPinger(t *testing.T, rt ports.Runtime, rel, suffix, url string) string {
-	t.Helper()
-	ctx := context.Background()
-	name := rel + "-" + suffix
-	if err := rt.CreateWorkload(ctx, ports.WorkloadRequest{
-		Name: name, Image: "busybox:1.37", RestartPolicy: "never",
-		Labels:   map[string]string{ports.LabelManaged: "true", ports.LabelRelease: rel},
-		Networks: []string{rel + "-web-net"},
-		Command:  []string{"sh", "-c", `while :; do wget -q -T 2 -O - ` + url + ` || echo FAIL; echo; sleep 0.1; done`},
-	}); err != nil {
-		t.Fatal(err)
-	}
-	if err := rt.StartWorkload(ctx, name); err != nil {
-		t.Fatal(err)
-	}
-	return name
-}
-
-func logs(t *testing.T, container string) string {
-	t.Helper()
-	out, err := exec.Command("docker", "logs", container).CombinedOutput()
-	if err != nil {
-		t.Fatalf("docker logs %s: %v\n%s", container, err, out)
-	}
-	return string(out)
-}
 
 func TestReplaceWithoutDowntime(t *testing.T) {
 	ctx := context.Background()
@@ -77,7 +35,7 @@ func TestReplaceWithoutDowntime(t *testing.T) {
 		Values: packages.Options{Sets: []string{startDelay}}}); err != nil {
 		t.Fatal(err)
 	}
-	pinger := startPinger(t, rt, name)
+	pinger := startNetPinger(t, rt, name, "http://web:8080/")
 	time.Sleep(time.Second)
 
 	res, err := upgrade("content=v2")
@@ -97,16 +55,16 @@ func TestReplaceWithoutDowntime(t *testing.T) {
 	}
 	time.Sleep(time.Second)
 
-	out := logs(t, pinger)
+	got := pinger.result()
 	// There is no outage window, but a request that resolved the old container's IP just before it
-	// stopped can still fail: DNS-based switching cannot drain that race (a retrying proxy, phase 2,
-	// can). Allow at most maxRaceFailures; the recreate control shows a real outage is far larger.
-	t.Logf("replace: %d of %d requests failed", strings.Count(out, "FAIL"), strings.Count(out, "\n")/2)
-	if n := strings.Count(out, "FAIL"); n > maxRaceFailures {
-		t.Fatalf("%d failed requests during replace (max %d):\n%s", n, maxRaceFailures, out)
+	// stopped can still fail: DNS-based switching cannot drain that race (karga's proxies can, on
+	// Linux). Allow at most maxRaceFailures; the recreate control shows a real outage is far larger.
+	t.Logf("replace: %s", got)
+	if got.Failed > maxRaceFailures {
+		t.Fatalf("%d failed requests during replace (max %d): %s", got.Failed, maxRaceFailures, got)
 	}
-	if !strings.Contains(out, "v1") || !strings.Contains(out, "v2") || strings.Contains(out, "v3") {
-		t.Fatalf("unexpected content sequence:\n%s", out)
+	if got.Bodies["v1"] == 0 || got.Bodies["v2"] == 0 || got.Bodies["v3"] != 0 {
+		t.Fatalf("unexpected content: %s", got)
 	}
 
 	st := workload(t, rt, name+"-web")
@@ -135,16 +93,16 @@ func TestRecreateHasDowntime(t *testing.T) {
 		Values: packages.Options{Sets: []string{startDelay, "strategy=recreate"}}}); err != nil {
 		t.Fatal(err)
 	}
-	pinger := startPinger(t, rt, name)
+	pinger := startNetPinger(t, rt, name, "http://web:8080/")
 	time.Sleep(time.Second)
 	if _, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: common, Name: name, Package: webPkg,
 		Values: packages.Options{Sets: []string{startDelay, "strategy=recreate", "content=v2"}}}); err != nil {
 		t.Fatal(err)
 	}
 	time.Sleep(time.Second)
-	out := logs(t, pinger)
-	t.Logf("recreate: %d of %d requests failed", strings.Count(out, "FAIL"), strings.Count(out, "\n")/2)
-	if n := strings.Count(out, "FAIL"); n <= 3*maxRaceFailures {
-		t.Fatalf("recreate showed only %d failures; the pinger cannot tell an outage from the replace race:\n%s", n, out)
+	res := pinger.result()
+	t.Logf("recreate: %s", res)
+	if res.Failed <= 3*maxRaceFailures {
+		t.Fatalf("recreate showed only %d failures; the pinger cannot tell an outage from the replace race: %s", res.Failed, res)
 	}
 }
