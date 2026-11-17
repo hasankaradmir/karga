@@ -602,7 +602,10 @@ func newStateCmd(a *app) *cobra.Command {
 			if err := store.Backup(cmd.Context(), args[0]); err != nil {
 				return err
 			}
-			_, err = fmt.Fprintf(a.stdout, "state written to %s\n", args[0])
+			_, err = fmt.Fprintf(a.stdout, "state written to %s\n"+
+				"The backup does not hold %s, which keys the digests of secret values: copy it too (and keep\n"+
+				"both safe). Restored without it, each release applies its Secrets once more on its next upgrade.\n",
+				args[0], filepath.Join(a.cfg.Home, "state.key"))
 			return err
 		},
 	})
