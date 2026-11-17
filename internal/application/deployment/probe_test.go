@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
@@ -30,9 +31,9 @@ func probedWorkload(t *testing.T, rt *fakeruntime.Runtime, name string, containe
 	t.Helper()
 	_, p, _ := net.SplitHostPort(addr)
 	up, _ := strconv.Atoi(p)
-	label, _ := json.Marshal([]GatewayPort{{ContainerPort: containerPort, Upstream: up}})
+	label, _ := json.Marshal([]gateway.Port{{ContainerPort: containerPort, Upstream: up}})
 	if err := rt.CreateWorkload(context.Background(), ports.WorkloadRequest{Name: name, Image: "img",
-		Labels: map[string]string{ports.LabelManaged: "true", LabelGateway: string(label)}}); err != nil {
+		Labels: map[string]string{ports.LabelManaged: "true", gateway.LabelPorts: string(label)}}); err != nil {
 		t.Fatal(err)
 	}
 	if err := rt.StartWorkload(context.Background(), name); err != nil {

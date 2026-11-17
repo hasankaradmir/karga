@@ -18,6 +18,7 @@ import (
 	"time"
 
 	"github.com/hasankaradmir/karga/internal/application/deployment"
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/application/packages"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/domain/release"
@@ -63,7 +64,7 @@ func TestGatewayReplaceWithoutLoss(t *testing.T) {
 		}
 	}
 	routes, err := s.Gateway(ctx)
-	if err != nil || !slices.ContainsFunc(routes, func(r deployment.GatewayRoute) bool {
+	if err != nil || !slices.ContainsFunc(routes, func(r gateway.Route) bool {
 		return r.Release == name && r.Listener == "127.0.0.1:"+strconv.Itoa(port) && r.Route == "tcp"
 	}) {
 		t.Fatalf("gateway routes: %+v %v", routes, err)
@@ -113,7 +114,7 @@ func TestGatewayReplaceWithoutLoss(t *testing.T) {
 	}
 
 	// Restarting the gateway, the proxy or the backend (which may change its IP) keeps routing.
-	for _, c := range []string{deployment.GatewayName, deployment.ProxyName(name), name + "-web"} {
+	for _, c := range []string{gateway.ContainerName, deployment.ProxyName(name), name + "-web"} {
 		if err := rt.StopWorkload(ctx, c, 2*time.Second); err != nil {
 			t.Fatal(err)
 		}
@@ -163,7 +164,7 @@ func TestGatewayHTTPRoutes(t *testing.T) {
 		t.Fatalf("gateway health: %+v %v", health, err)
 	}
 	// The access log is off by default; turning it on logs requests without recreating the gateway.
-	before, _ := rt.GetWorkload(ctx, deployment.GatewayName)
+	before, _ := rt.GetWorkload(ctx, gateway.ContainerName)
 	if err := s.SetGatewayAccessLog(ctx, true); err != nil {
 		t.Fatal(err)
 	}
@@ -184,7 +185,7 @@ func TestGatewayHTTPRoutes(t *testing.T) {
 	if !strings.Contains(logged.String(), `"GET /logged HTTP/1.1"`) {
 		t.Fatalf("request not in the gateway access log:\n%s", logged.String())
 	}
-	if after, _ := rt.GetWorkload(ctx, deployment.GatewayName); after.Labels[ports.LabelManaged] == "" || before.Name != after.Name {
+	if after, _ := rt.GetWorkload(ctx, gateway.ContainerName); after.Labels[ports.LabelManaged] == "" || before.Name != after.Name {
 		t.Fatalf("gateway changed: %+v", after)
 	}
 	// The same host and path in a third release is refused before anything is created.
@@ -198,7 +199,7 @@ func TestGatewayHTTPRoutes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if _, err := rt.GetWorkload(ctx, deployment.GatewayName); err == nil {
+	if _, err := rt.GetWorkload(ctx, gateway.ContainerName); err == nil {
 		t.Fatal("gateway still exists after the last release went")
 	}
 }
@@ -282,7 +283,7 @@ func TestGatewayKeepsLongConnections(t *testing.T) {
 	}
 	roundTrip("before")
 	upstream := func() string {
-		eps, err := envoy.Endpoints(deployment.GatewayDir(s.Home))
+		eps, err := envoy.Endpoints(gateway.Dir(s.Home))
 		if err != nil {
 			t.Fatal(err)
 		}

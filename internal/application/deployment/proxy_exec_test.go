@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
@@ -27,7 +28,7 @@ type fakeProxies struct {
 }
 
 func (f *fakeProxies) kind(dir string) string {
-	if dir == GatewayDir(f.home) {
+	if dir == gateway.Dir(f.home) {
 		return "gateway"
 	}
 	return "proxy"
@@ -95,7 +96,7 @@ func before(t *testing.T, calls []string, first, second string) {
 
 func upstream(t *testing.T, w *fakeruntime.Workload) string {
 	t.Helper()
-	gp := parseGatewayLabel(w.Request.Labels)
+	gp := gateway.ParseLabel(w.Request.Labels)
 	if len(gp) != 1 {
 		t.Fatalf("gateway label: %v", w.Request.Labels)
 	}
@@ -115,7 +116,7 @@ func TestProxyAndGatewayInstall(t *testing.T) {
 	if p := w.Request.Ports[0]; p.HostIP != "127.0.0.1" || p.HostPort == port || p.HostPort == 0 {
 		t.Fatalf("workload must publish only a loopback upstream: %+v", p)
 	}
-	gp := parseGatewayLabel(w.Request.Labels)
+	gp := gateway.ParseLabel(w.Request.Labels)
 	if len(gp) != 1 || gp[0].HostPort != port || gp[0].Upstream != w.Request.Ports[0].HostPort {
 		t.Fatalf("gateway label: %+v", gp)
 	}
@@ -125,7 +126,7 @@ func TestProxyAndGatewayInstall(t *testing.T) {
 		len(pr.Ports) != 0 || pr.Sysctls["net.ipv4.ip_unprivileged_port_start"] != "0" || pr.Mounts[0].Target != envoy.MountPath {
 		t.Fatalf("proxy request: %+v", pr)
 	}
-	for _, req := range []ports.WorkloadRequest{pr, r.rt.Workloads[GatewayName].Request} {
+	for _, req := range []ports.WorkloadRequest{pr, r.rt.Workloads[gateway.ContainerName].Request} {
 		if req.MemoryBytes != 128<<20 || req.MilliCPU != 500 || req.PidsLimit != 256 {
 			t.Fatalf("%s limits: mem %d cpu %d pids %d", req.Name, req.MemoryBytes, req.MilliCPU, req.PidsLimit)
 		}
@@ -133,7 +134,7 @@ func TestProxyAndGatewayInstall(t *testing.T) {
 	if w.Request.PidsLimit != 1024 {
 		t.Fatalf("workload default pids: %d", w.Request.PidsLimit)
 	}
-	gw := r.rt.Workloads[GatewayName].Request
+	gw := r.rt.Workloads[gateway.ContainerName].Request
 	if !gw.HostNetwork || gw.User != "0:0" || !slices.Equal(gw.CapDrop, []string{"ALL"}) || !gw.NoNewPrivileges || gw.Labels[ports.LabelRelease] != "" {
 		t.Fatalf("gateway request: %+v", gw)
 	}
@@ -143,10 +144,10 @@ func TestProxyAndGatewayInstall(t *testing.T) {
 	before(t, c, "Write:proxy:karga-redis-r1:6379", "CreateWorkload:cache-karga-proxy")
 	before(t, c, "StartWorkload:cache-karga-proxy", "WaitReady:proxy:karga-redis-r1")
 	before(t, c, "WaitReady:proxy:karga-redis-r1", "Write:gateway:"+upstream(t, w))
-	before(t, c, "Write:gateway:", "CreateWorkload:"+GatewayName)
-	before(t, c, "StartWorkload:"+GatewayName, "WaitReady:gateway:"+upstream(t, w))
-	cfgEps, _ := envoy.Endpoints(GatewayDir(r.req.Home))
-	if cfgEps[gatewayCluster("cache", "redis", 6379)] != upstream(t, w) {
+	before(t, c, "Write:gateway:", "CreateWorkload:"+gateway.ContainerName)
+	before(t, c, "StartWorkload:"+gateway.ContainerName, "WaitReady:gateway:"+upstream(t, w))
+	cfgEps, _ := envoy.Endpoints(gateway.Dir(r.req.Home))
+	if cfgEps[gateway.Cluster("cache", "redis", 6379)] != upstream(t, w) {
 		t.Fatalf("gateway endpoints: %v", cfgEps)
 	}
 }
@@ -174,7 +175,7 @@ func TestProxyAndGatewayReplace(t *testing.T) {
 		before(t, c, step[0], step[1])
 	}
 	if slices.ContainsFunc(c, func(s string) bool {
-		return strings.HasSuffix(s, ":cache-karga-proxy") || strings.HasSuffix(s, ":"+GatewayName)
+		return strings.HasSuffix(s, ":cache-karga-proxy") || strings.HasSuffix(s, ":"+gateway.ContainerName)
 	}) {
 		t.Fatalf("a replace must not touch the proxy or gateway containers: %v", c)
 	}
@@ -200,7 +201,7 @@ func TestReplaceRevertsWhenProxyNotReady(t *testing.T) {
 	if eps, _ := envoy.Endpoints(ProxyDir(r.req.Home, "cache")); eps["redis-p6379"] != "karga-redis-r1:6379" {
 		t.Fatalf("old backend not restored: %v", eps)
 	}
-	if eps, _ := envoy.Endpoints(GatewayDir(r.req.Home)); eps[gatewayCluster("cache", "redis", 6379)] != old {
+	if eps, _ := envoy.Endpoints(gateway.Dir(r.req.Home)); eps[gateway.Cluster("cache", "redis", 6379)] != old {
 		t.Fatalf("gateway moved: %v", eps)
 	}
 	if n := r.rt.Workloads["cache-redis-next"]; n == nil || n.State != ports.StateExited {
@@ -215,7 +216,7 @@ func TestReplaceRevertsWhenGatewayNotReady(t *testing.T) {
 	}
 	old := upstream(t, r.rt.Workloads["cache-redis"])
 	px.notReady["gateway"] = true
-	r.rt.Output = map[string]string{GatewayName: "[2026-11-17][1][info][main] starting\n" +
+	r.rt.Output = map[string]string{gateway.ContainerName: "[2026-11-17][1][info][main] starting\n" +
 		"[2026-11-17][1][warning][config] Filesystem config update rejected: cannot bind '0.0.0.0:80': Permission denied\n"}
 	err := r.upgrade(2)
 	if err == nil || !strings.Contains(err.Error(), "cannot bind '0.0.0.0:80'") || strings.Contains(err.Error(), "starting") {
@@ -224,7 +225,7 @@ func TestReplaceRevertsWhenGatewayNotReady(t *testing.T) {
 	if slices.Contains(r.rt.Calls, "StopWorkload:cache-redis") {
 		t.Fatal("old container stopped although the gateway never got ready")
 	}
-	if eps, _ := envoy.Endpoints(GatewayDir(r.req.Home)); eps[gatewayCluster("cache", "redis", 6379)] != old {
+	if eps, _ := envoy.Endpoints(gateway.Dir(r.req.Home)); eps[gateway.Cluster("cache", "redis", 6379)] != old {
 		t.Fatalf("old upstream not restored: %v", eps)
 	}
 	if eps, _ := envoy.Endpoints(ProxyDir(r.req.Home, "cache")); eps["redis-p6379"] != "karga-redis-r1:6379" {
@@ -240,10 +241,10 @@ func TestGatewayGoesWithTheLastRelease(t *testing.T) {
 	if err := Delete(context.Background(), r.rt, r.req.Home, "cache", false); err != nil {
 		t.Fatal(err)
 	}
-	if _, ok := r.rt.Workloads[GatewayName]; ok {
+	if _, ok := r.rt.Workloads[gateway.ContainerName]; ok {
 		t.Fatal("gateway still exists")
 	}
-	if eps, _ := envoy.Endpoints(GatewayDir(r.req.Home)); len(eps) != 0 {
+	if eps, _ := envoy.Endpoints(gateway.Dir(r.req.Home)); len(eps) != 0 {
 		t.Fatalf("gateway config left: %v", eps)
 	}
 }

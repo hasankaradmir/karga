@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"slices"
 
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
@@ -55,7 +56,7 @@ func Preflight(ctx context.Context, rt ports.Runtime, info ports.RuntimeInfo, re
 			continue
 		}
 		for _, p := range w.Ports {
-			if p.HostPort == 0 || slices.ContainsFunc(gatewayPorts(w), func(g resource.Port) bool { return g.ContainerPort == p.ContainerPort }) {
+			if p.HostPort == 0 || slices.ContainsFunc(gateway.Ports(w), func(g resource.Port) bool { return g.ContainerPort == p.ContainerPort }) {
 				continue // the gateway holds it, checked below
 			}
 			if err := checkHostPort(release, r.Metadata.Name, p, published); err != nil {
@@ -64,7 +65,7 @@ func Preflight(ctx context.Context, rt ports.Runtime, info ports.RuntimeInfo, re
 		}
 	}
 	if proxySupported.Load() {
-		errs = append(errs, checkGateway(ctx, rt, release, rs)...)
+		errs = append(errs, gateway.Check(ctx, rt, release, rs)...)
 	}
 	return errors.Join(errs...)
 }

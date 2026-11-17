@@ -9,6 +9,7 @@ import (
 	"strings"
 
 	"github.com/hasankaradmir/karga/internal/application/deployment"
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
@@ -207,41 +208,41 @@ func backends(dir string) string {
 }
 
 // Gateway lists what the host gateway serves, across releases.
-func (s *Service) Gateway(ctx context.Context) ([]deployment.GatewayRoute, error) {
+func (s *Service) Gateway(ctx context.Context) ([]gateway.Route, error) {
 	rt, err := s.Runtime(ctx)
 	if err != nil {
 		return nil, err
 	}
-	return deployment.GatewayRoutes(ctx, rt)
+	return gateway.Routes(ctx, rt)
 }
 
 // GatewayHealth reports the gateway container and whether its Envoy is ready.
-func (s *Service) GatewayHealth(ctx context.Context) (deployment.GatewayState, error) {
+func (s *Service) GatewayHealth(ctx context.Context) (gateway.State, error) {
 	rt, err := s.Runtime(ctx)
 	if err != nil {
-		return deployment.GatewayState{}, err
+		return gateway.State{}, err
 	}
-	return deployment.GatewayHealth(ctx, rt, s.Home)
+	return gateway.Health(ctx, rt, s.Home)
 }
 
 // SetGatewayAccessLog stores the access log setting and applies it to a running gateway.
 func (s *Service) SetGatewayAccessLog(ctx context.Context, on bool) error {
-	settings, err := deployment.ReadGatewaySettings(s.Home)
+	settings, err := gateway.ReadSettings(s.Home)
 	if err != nil {
 		return err
 	}
 	settings.AccessLog = on
-	if err := deployment.WriteGatewaySettings(s.Home, settings); err != nil {
+	if err := gateway.WriteSettings(s.Home, settings); err != nil {
 		return err
 	}
 	rt, err := s.runtime(ctx)
 	if err != nil {
 		return err
 	}
-	if _, err := rt.GetWorkload(ctx, deployment.GatewayName); errors.Is(err, ports.ErrNotFound) {
+	if _, err := rt.GetWorkload(ctx, gateway.ContainerName); errors.Is(err, ports.ErrNotFound) {
 		return nil // applied when a release next needs the gateway
 	}
-	_, err = deployment.SyncGateway(ctx, rt, deployment.EnvoyProxies{}, s.Home, nil)
+	_, err = gateway.Sync(ctx, rt, deployment.EnvoyProxies{}, s.Home, nil)
 	return err
 }
 

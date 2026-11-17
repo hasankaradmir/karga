@@ -13,6 +13,7 @@ import (
 
 	"encoding/json"
 
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
@@ -93,7 +94,7 @@ func Execute(ctx context.Context, rt ports.Runtime, req ExecRequest) error {
 	}
 	if disrupted && proxySupported.Load() {
 		// Point the gateway at what runs now; the error that got us here is the one to report.
-		_, _ = SyncGateway(ctx, rt, proxyControl(req), req.Home, releaseRouting(req.Release, workloadNames(req.Resources)))
+		_, _ = gateway.Sync(ctx, rt, proxyControl(req), req.Home, gateway.ReleaseRouting(req.Release, workloadNames(req.Resources)))
 	}
 	return &ExecError{Err: err, Disrupted: disrupted}
 }
@@ -154,7 +155,7 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 			continue
 		}
 		if w, ok := workloadOf(c); ok {
-			needGateway = needGateway || len(gatewayPorts(w)) > 0
+			needGateway = needGateway || len(gateway.Ports(w)) > 0
 			progress(ctx, c.Kind, c.Name, PhasePull, "image %s (%s)", w.Image, w.PullPolicy)
 			if err := rt.EnsureImage(ctx, w.Image, w.PullPolicy); err != nil {
 				return fmt.Errorf("%s %q: %w", c.Kind, c.Name, err)
@@ -280,10 +281,10 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 		}
 	}
 	if proxySupported.Load() {
-		progress(ctx, "Gateway", GatewayName, PhaseSwitch, "updating the host gateway")
-		targets, err := SyncGateway(ctx, rt, req.Proxies, req.Home, releaseRouting(req.Release, workloadNames(req.Resources)))
+		progress(ctx, "Gateway", gateway.ContainerName, PhaseSwitch, "updating the host gateway")
+		targets, err := gateway.Sync(ctx, rt, req.Proxies, req.Home, gateway.ReleaseRouting(req.Release, workloadNames(req.Resources)))
 		if err == nil {
-			err = envoyErr(ctx, rt, GatewayName, waitGateway(ctx, req.Proxies, req.Home, req.Release, targets))
+			err = envoyErr(ctx, rt, gateway.ContainerName, gateway.Wait(ctx, req.Proxies, req.Home, req.Release, targets))
 		}
 		if err != nil {
 			*disrupted = true
@@ -317,7 +318,7 @@ func execute(ctx context.Context, rt ports.Runtime, req ExecRequest, disrupted *
 // bind a gateway port between this one listing the gateway's claims and test-binding the port.
 func preflightLocked(ctx context.Context, rt ports.Runtime, info ports.RuntimeInfo, req ExecRequest) error {
 	if proxySupported.Load() {
-		unlock, err := lockGateway(req.Home)
+		unlock, err := gateway.Lock(req.Home)
 		if err != nil {
 			return err
 		}
@@ -478,15 +479,15 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 		}
 	}
 
-	viaGateway := len(gatewayPorts(s)) > 0
+	viaGateway := len(gateway.Ports(s)) > 0
 	if viaGateway {
-		targets, err := SyncGateway(ctx, rt, req.Proxies, req.Home, map[string]string{req.Release + "/" + c.Name: next})
+		targets, err := gateway.Sync(ctx, rt, req.Proxies, req.Home, map[string]string{req.Release + "/" + c.Name: next})
 		if err == nil {
-			want := gatewayWant(targets, func(t gatewayTarget) bool { return t.Container == next })
-			err = envoyErr(ctx, rt, GatewayName, req.Proxies.WaitReady(ctx, GatewayDir(req.Home), want, proxyReadyTimeout))
+			want := gateway.Want(targets, func(t gateway.Target) bool { return t.Container == next })
+			err = envoyErr(ctx, rt, gateway.ContainerName, req.Proxies.WaitReady(ctx, gateway.Dir(req.Home), want, proxyReadyTimeout))
 		}
 		if err != nil {
-			_, gerr := SyncGateway(ctx, rt, req.Proxies, req.Home, map[string]string{req.Release + "/" + c.Name: ""})
+			_, gerr := gateway.Sync(ctx, rt, req.Proxies, req.Home, map[string]string{req.Release + "/" + c.Name: ""})
 			return true, stopNext(errors.Join(err, gerr, revertProxy()))
 		}
 	}
@@ -502,10 +503,10 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 	}
 	if viaGateway {
 		var clusters []string
-		for _, p := range gatewayPorts(s) {
-			clusters = append(clusters, gatewayCluster(req.Release, c.Name, p.ContainerPort))
+		for _, p := range gateway.Ports(s) {
+			clusters = append(clusters, gateway.Cluster(req.Release, c.Name, p.ContainerPort))
 		}
-		if _, err := req.Proxies.WaitDrained(ctx, GatewayDir(req.Home), clusters, drain); err != nil {
+		if _, err := req.Proxies.WaitDrained(ctx, gateway.Dir(req.Home), clusters, drain); err != nil {
 			return true, err
 		}
 	}
@@ -522,7 +523,7 @@ func replaceWorkload(ctx context.Context, rt ports.Runtime, req ExecRequest, c C
 	}
 	if viaGateway {
 		// -next is gone under that name: the gateway routes to the canonical container again.
-		_, err := SyncGateway(ctx, rt, req.Proxies, req.Home, map[string]string{req.Release + "/" + c.Name: ""})
+		_, err := gateway.Sync(ctx, rt, req.Proxies, req.Home, map[string]string{req.Release + "/" + c.Name: ""})
 		return true, err
 	}
 	return true, nil
@@ -627,7 +628,8 @@ func workloadRequest(release, name string, s *resource.WorkloadSpec, lbl map[str
 		rev, _ := strconv.Atoi(lbl[ports.LabelRevision])
 		wr.Aliases = []string{BackendAlias(name, rev)}
 	}
-	if err := gatewayLabel(&wr, s, paths); err != nil {
+	certDir := func(secret string) (string, bool) { dir, ok := paths[Key{resource.KindSecret, secret}]; return dir, ok }
+	if err := gateway.Label(&wr, s, certDir); err != nil {
 		return wr, err
 	}
 	if hc := s.HealthCheck; hc != nil && hc.Type == resource.HealthExec {
@@ -706,7 +708,7 @@ func Delete(ctx context.Context, rt ports.Runtime, home, release string, deleteV
 					names = append(names, n)
 				}
 			}
-			_, err := SyncGateway(ctx, rt, EnvoyProxies{}, home, releaseRouting(release, names))
+			_, err := gateway.Sync(ctx, rt, EnvoyProxies{}, home, gateway.ReleaseRouting(release, names))
 			errs = append(errs, err)
 		}
 	}

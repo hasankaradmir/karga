@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
@@ -44,7 +45,7 @@ func probeReachable(s *resource.WorkloadSpec) string {
 // probeAddr is where karga reaches the health check port of a running container.
 func probeAddr(st ports.WorkloadStatus, s *resource.WorkloadSpec) (string, error) {
 	port := s.HealthCheck.Port
-	for _, g := range parseGatewayLabel(st.Labels) {
+	for _, g := range gateway.ParseLabel(st.Labels) {
 		if g.ContainerPort == port {
 			return net.JoinHostPort("127.0.0.1", strconv.Itoa(g.Upstream)), nil
 		}

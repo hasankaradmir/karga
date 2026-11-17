@@ -11,6 +11,7 @@ import (
 	"strconv"
 	"strings"
 
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
 	"github.com/hasankaradmir/karga/internal/ports"
@@ -180,9 +181,9 @@ func routedTo(ctx context.Context, rt ports.Runtime, home, rel, name, next strin
 			}
 		}
 	}
-	eps, _ := envoy.Endpoints(GatewayDir(home))
-	for _, p := range parseGatewayLabel(st.Labels) {
-		if eps[gatewayCluster(rel, name, p.ContainerPort)] == "127.0.0.1:"+strconv.Itoa(p.Upstream) {
+	eps, _ := envoy.Endpoints(gateway.Dir(home))
+	for _, p := range gateway.ParseLabel(st.Labels) {
+		if eps[gateway.Cluster(rel, name, p.ContainerPort)] == "127.0.0.1:"+strconv.Itoa(p.Upstream) {
 			return true
 		}
 	}

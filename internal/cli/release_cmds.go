@@ -14,6 +14,7 @@ import (
 
 	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
 	"github.com/hasankaradmir/karga/internal/application/deployment"
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
@@ -525,7 +526,7 @@ func newGatewayCmd(a *app) *cobra.Command {
 				}
 				if a.output == outputJSON {
 					if routes == nil {
-						routes = []deployment.GatewayRoute{}
+						routes = []gateway.Route{}
 					}
 					return writeJSON(a.stdout, map[string]any{"gateway": health, "routes": routes})
 				}

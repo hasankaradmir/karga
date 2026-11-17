@@ -1,4 +1,7 @@
-package deployment
+// Package gateway runs the host gateway (ADR-010): one Envoy in the host network namespace that
+// serves every release's tcp host ports and HTTP(S) routes and forwards to the workloads'
+// loopback upstream ports.
+package gateway
 
 import (
 	"bytes"
@@ -17,6 +20,7 @@ import (
 	"strings"
 	"syscall"
 
+	"github.com/hasankaradmir/karga/internal/application/deployment/runtimeops"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
 	"github.com/hasankaradmir/karga/internal/ports"
@@ -26,18 +30,18 @@ import (
 // every release on Linux and forwards to the workloads' loopback upstream ports. It belongs to no
 // release; karga creates it when something needs it and removes it when nothing does.
 const (
-	GatewayName = "karga-gateway"
-	// LabelGateway on a workload container lists its gateway ports as JSON ([]GatewayPort).
-	LabelGateway   = "io.karga.gateway"
+	ContainerName = "karga-gateway"
+	// LabelPorts on a workload container lists its gateway ports as JSON ([]Port).
+	LabelPorts     = "io.karga.gateway"
 	LabelComponent = "io.karga.component"
 )
 
-// GatewayDir holds the gateway's configuration and admin socket.
-func GatewayDir(home string) string { return filepath.Join(home, "gateway") }
+// Dir holds the gateway's configuration and admin socket.
+func Dir(home string) string { return filepath.Join(home, "gateway") }
 
-// GatewayPort is a workload port served by the gateway: as tcp on HostIP:HostPort, or as HTTP routes.
+// Port is a workload port served by the gateway: as tcp on HostIP:HostPort, or as HTTP routes.
 // Upstream is the loopback port the container publishes it on.
-type GatewayPort struct {
+type Port struct {
 	ContainerPort int              `json:"containerPort"`
 	Upstream      int              `json:"upstream"`
 	HostIP        string           `json:"hostIP,omitempty"`
@@ -49,9 +53,9 @@ type GatewayPort struct {
 	HealthPath string `json:"healthPath,omitempty"`
 }
 
-// gatewayPorts returns the ports of w the gateway serves (none off Linux).
-func gatewayPorts(w *resource.WorkloadSpec) []resource.Port {
-	if !proxySupported.Load() {
+// Ports returns the ports of w the gateway serves (none off Linux).
+func Ports(w *resource.WorkloadSpec) []resource.Port {
+	if !runtimeops.Supported.Load() {
 		return nil
 	}
 	var out []resource.Port
@@ -74,29 +78,29 @@ func allocatePort() (int, error) {
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
-// gatewayCluster names the cluster of one workload port. Release and workload names are DNS
+// Cluster names the cluster of one workload port. Release and workload names are DNS
 // labels, so "_" cannot occur in them.
-func gatewayCluster(rel, workload string, port int) string {
+func Cluster(rel, workload string, port int) string {
 	return fmt.Sprintf("%s_%s_p%d", rel, workload, port)
 }
 
-// gatewayTarget is one workload container the gateway forwards to.
-type gatewayTarget struct {
+// Target is one workload container the gateway forwards to.
+type Target struct {
 	Release, Workload, Container string
-	Ports                        []GatewayPort
+	Ports                        []Port
 }
 
-func parseGatewayLabel(labels map[string]string) []GatewayPort {
-	var out []GatewayPort
-	_ = json.Unmarshal([]byte(labels[LabelGateway]), &out) // karga writes it; a broken label means no ports
+func ParseLabel(labels map[string]string) []Port {
+	var out []Port
+	_ = json.Unmarshal([]byte(labels[LabelPorts]), &out) // karga writes it; a broken label means no ports
 	return out
 }
 
-// gatewayTargets finds, per release workload, the container the gateway routes to: the one named in
+// findTargets finds, per release workload, the container the gateway routes to: the one named in
 // prefer ("release/workload" -> container) if it exists, else the canonical one. Others (a
 // replace's -next before its switch, a stopped leftover) are ignored.
-func gatewayTargets(ctx context.Context, rt ports.Runtime, prefer map[string]string) ([]gatewayTarget, error) {
-	objs, err := rt.ListLabeled(ctx, LabelGateway)
+func findTargets(ctx context.Context, rt ports.Runtime, prefer map[string]string) ([]Target, error) {
+	objs, err := rt.ListLabeled(ctx, LabelPorts)
 	if err != nil {
 		return nil, err
 	}
@@ -104,10 +108,10 @@ func gatewayTargets(ctx context.Context, rt ports.Runtime, prefer map[string]str
 	for _, o := range objs {
 		byName[o.Name] = o
 	}
-	var out []gatewayTarget
+	var out []Target
 	for _, o := range objs {
 		rel, name := o.Labels[ports.LabelRelease], o.Labels[ports.LabelName]
-		want := RuntimeName(rel, name)
+		want := runtimeops.RuntimeName(rel, name)
 		if p, ok := prefer[rel+"/"+name]; ok {
 			if _, exists := byName[p]; exists {
 				want = p
@@ -116,7 +120,7 @@ func gatewayTargets(ctx context.Context, rt ports.Runtime, prefer map[string]str
 		if o.Name != want {
 			continue
 		}
-		out = append(out, gatewayTarget{Release: rel, Workload: name, Container: o.Name, Ports: parseGatewayLabel(o.Labels)})
+		out = append(out, Target{Release: rel, Workload: name, Container: o.Name, Ports: ParseLabel(o.Labels)})
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Container < out[j].Container })
 	return out, nil
@@ -162,8 +166,8 @@ func updateRouting(home string, changes map[string]string) (map[string]string, e
 	return routing, writeFile(routingFile(home), js)
 }
 
-// releaseRouting clears the switches of every workload of a release once its operation is over.
-func releaseRouting(rel string, names []string) map[string]string {
+// ReleaseRouting clears the switches of every workload of a release once its operation is over.
+func ReleaseRouting(rel string, names []string) map[string]string {
 	out := map[string]string{}
 	for _, n := range names {
 		out[rel+"/"+n] = ""
@@ -179,11 +183,11 @@ func certName(rel string, port int, host, src string) string {
 	return fmt.Sprintf("%s_%d_%s_%x", rel, port, host, sum[:4])
 }
 
-// gatewayConfig builds the gateway's listeners and clusters. Conflicts are refused by Preflight; if
+// buildConfig builds the gateway's listeners and clusters. Conflicts are refused by Preflight; if
 // one slips through anyway (two releases applied at once) the first target in name order wins.
 // TLS hosts also get a redirect from plain HTTP on port 80 of their address, unless that port
 // already serves the host or is taken otherwise.
-func gatewayConfig(targets []gatewayTarget) envoy.Config {
+func buildConfig(targets []Target) envoy.Config {
 	var cfg envoy.Config
 	type addr struct {
 		ip   string
@@ -208,7 +212,7 @@ func gatewayConfig(targets []gatewayTarget) envoy.Config {
 	var tlsHosts []tlsHost
 	for _, t := range targets {
 		for _, p := range t.Ports {
-			cluster := gatewayCluster(t.Release, t.Workload, p.ContainerPort)
+			cluster := Cluster(t.Release, t.Workload, p.ContainerPort)
 			cfg.Clusters = append(cfg.Clusters, envoy.Cluster{Name: cluster, Host: "127.0.0.1", Port: p.Upstream, HealthPath: p.HealthPath})
 			if p.HostPort != 0 {
 				a := addr{p.HostIP, p.HostPort}
@@ -246,10 +250,10 @@ func gatewayConfig(targets []gatewayTarget) envoy.Config {
 	for _, th := range tlsHosts {
 		plain := addr{th.a.ip, 80}
 		if tcp[plain] || slices.ContainsFunc(cfg.TCP, func(l envoy.TCPListener) bool {
-			return l.Port == 80 && l.Address != plain.ip && ipOverlap(l.Address, plain.ip)
+			return l.Port == 80 && l.Address != plain.ip && runtimeops.IPOverlap(l.Address, plain.ip)
 		}) ||
 			slices.ContainsFunc(cfg.HTTP, func(l envoy.HTTPListener) bool {
-				return l.Port == 80 && l.Address != plain.ip && ipOverlap(l.Address, plain.ip)
+				return l.Port == 80 && l.Address != plain.ip && runtimeops.IPOverlap(l.Address, plain.ip)
 			}) {
 			continue // the address cannot get a plain listener
 		}
@@ -264,7 +268,7 @@ func gatewayConfig(targets []gatewayTarget) envoy.Config {
 
 // syncCerts copies the certificates of the targets' TLS routes into the gateway directory and
 // removes the ones no longer used. Files are 0600; the gateway reads them as root.
-func syncCerts(dir string, targets []gatewayTarget, prune bool) error {
+func syncCerts(dir string, targets []Target, prune bool) error {
 	certs := filepath.Join(dir, "certs")
 	want := map[string]bool{}
 	for _, t := range targets {
@@ -326,22 +330,22 @@ func writeFile(path string, data []byte) error {
 	return os.Rename(tmp, path)
 }
 
-// gatewayWant is what the gateway must route to for the given targets to be served: cluster -> endpoint.
-func gatewayWant(targets []gatewayTarget, keep func(gatewayTarget) bool) map[string]string {
+// Want is what the gateway must route to for the given targets to be served: cluster -> endpoint.
+func Want(targets []Target, keep func(Target) bool) map[string]string {
 	want := map[string]string{}
 	for _, t := range targets {
 		if !keep(t) {
 			continue
 		}
 		for _, p := range t.Ports {
-			want[gatewayCluster(t.Release, t.Workload, p.ContainerPort)] = net.JoinHostPort("127.0.0.1", strconv.Itoa(p.Upstream))
+			want[Cluster(t.Release, t.Workload, p.ContainerPort)] = net.JoinHostPort("127.0.0.1", strconv.Itoa(p.Upstream))
 		}
 	}
 	return want
 }
 
-// lockGateway serializes gateway updates of concurrent karga processes (release locks are per release).
-func lockGateway(home string) (func(), error) {
+// Lock serializes gateway updates of concurrent karga processes (release locks are per release).
+func Lock(home string) (func(), error) {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return nil, err
 	}
@@ -356,16 +360,16 @@ func lockGateway(home string) (func(), error) {
 	return func() { _ = f.Close() }, nil // closing releases the lock
 }
 
-// labelGatewaySource records what a gateway container was created from; another KARGA_HOME or image
+// labelSource records what a gateway container was created from; another KARGA_HOME or image
 // means it must be recreated.
-const labelGatewaySource = "io.karga.gateway-source"
+const labelSource = "io.karga.gateway-source"
 
-func gatewaySource(dir string) string { return dir + " " + envoyLimits + " " + envoy.Image() }
+func source(dir string) string { return dir + " " + runtimeops.EnvoyLimits + " " + envoy.Image() }
 
-func gatewayRequest(dir string) ports.WorkloadRequest {
+func request(dir string) ports.WorkloadRequest {
 	return ports.WorkloadRequest{
-		Name:   GatewayName,
-		Labels: map[string]string{ports.LabelManaged: "true", LabelComponent: "gateway", labelGatewaySource: gatewaySource(dir)},
+		Name:   ContainerName,
+		Labels: map[string]string{ports.LabelManaged: "true", LabelComponent: "gateway", labelSource: source(dir)},
 		Image:  envoy.Image(),
 		// Root only to bind low ports in the host namespace (Docker grants no ambient capabilities
 		// to other users); every capability but those two is dropped.
@@ -378,20 +382,20 @@ func gatewayRequest(dir string) ports.WorkloadRequest {
 		NoNewPrivileges: true,
 		RestartPolicy:   "always",
 		Mounts:          []ports.Mount{{Type: ports.MountBind, Source: dir, Target: envoy.MountPath}},
-		MemoryBytes:     envoyMemory,
-		MilliCPU:        envoyMilliCPU,
-		PidsLimit:       envoyPids,
+		MemoryBytes:     runtimeops.EnvoyMemory,
+		MilliCPU:        runtimeops.EnvoyMilliCPU,
+		PidsLimit:       runtimeops.EnvoyPids,
 		LogMaxSize:      resource.DefaultLogMaxSize,
 		LogMaxFiles:     resource.DefaultLogMaxFiles,
 	}
 }
 
-// SyncGateway rewrites the gateway from every release's workload containers and creates or removes
+// Sync rewrites the gateway from every release's workload containers and creates or removes
 // the gateway container as needed. switches routes workloads to another container (a replace's
 // -next) until switched back with an empty name; they are stored, so concurrent updates by other
 // releases keep them. It returns the targets it routes to.
-func SyncGateway(ctx context.Context, rt ports.Runtime, px ProxyControl, home string, switches map[string]string) ([]gatewayTarget, error) {
-	unlock, err := lockGateway(home)
+func Sync(ctx context.Context, rt ports.Runtime, px runtimeops.ProxyControl, home string, switches map[string]string) ([]Target, error) {
+	unlock, err := Lock(home)
 	if err != nil {
 		return nil, err
 	}
@@ -400,13 +404,13 @@ func SyncGateway(ctx context.Context, rt ports.Runtime, px ProxyControl, home st
 	if err != nil {
 		return nil, err
 	}
-	targets, err := gatewayTargets(ctx, rt, prefer)
+	targets, err := findTargets(ctx, rt, prefer)
 	if err != nil {
 		return nil, err
 	}
-	dir := GatewayDir(home)
+	dir := Dir(home)
 	if len(targets) == 0 {
-		if err := removeWorkload(ctx, rt, GatewayName); err != nil && !errors.Is(err, ports.ErrNotFound) {
+		if err := runtimeops.RemoveWorkload(ctx, rt, ContainerName); err != nil && !errors.Is(err, ports.ErrNotFound) {
 			return nil, err
 		}
 		return nil, os.RemoveAll(dir)
@@ -418,8 +422,8 @@ func SyncGateway(ctx context.Context, rt ports.Runtime, px ProxyControl, home st
 	if err := syncCerts(dir, targets, false); err != nil {
 		return nil, err
 	}
-	cfg := gatewayConfig(targets)
-	settings, err := ReadGatewaySettings(home)
+	cfg := buildConfig(targets)
+	settings, err := ReadSettings(home)
 	if err != nil {
 		return nil, err
 	}
@@ -431,9 +435,9 @@ func SyncGateway(ctx context.Context, rt ports.Runtime, px ProxyControl, home st
 	if err := syncCerts(dir, targets, true); err != nil {
 		return nil, err
 	}
-	st, err := rt.GetWorkload(ctx, GatewayName)
-	if err == nil && st.Labels[labelGatewaySource] != gatewaySource(dir) {
-		if err := removeWorkload(ctx, rt, GatewayName); err != nil {
+	st, err := rt.GetWorkload(ctx, ContainerName)
+	if err == nil && st.Labels[labelSource] != source(dir) {
+		if err := runtimeops.RemoveWorkload(ctx, rt, ContainerName); err != nil {
 			return nil, err
 		}
 		err = fmt.Errorf("gateway %w", ports.ErrNotFound)
@@ -443,36 +447,36 @@ func SyncGateway(ctx context.Context, rt ports.Runtime, px ProxyControl, home st
 		if err := rt.EnsureImage(ctx, envoy.Image(), "if-not-present"); err != nil {
 			return nil, err
 		}
-		if err := rt.CreateWorkload(ctx, gatewayRequest(dir)); err != nil {
+		if err := rt.CreateWorkload(ctx, request(dir)); err != nil {
 			return nil, err
 		}
-		err = rt.StartWorkload(ctx, GatewayName)
+		err = rt.StartWorkload(ctx, ContainerName)
 	case err == nil && st.State != ports.StateRunning:
-		err = rt.StartWorkload(ctx, GatewayName)
+		err = rt.StartWorkload(ctx, ContainerName)
 	}
 	return targets, err
 }
 
-// waitGateway waits until the gateway routes to every target of release rel.
-func waitGateway(ctx context.Context, px ProxyControl, home, rel string, targets []gatewayTarget) error {
-	want := gatewayWant(targets, func(t gatewayTarget) bool { return t.Release == rel })
+// Wait waits until the gateway routes to every target of release rel.
+func Wait(ctx context.Context, px runtimeops.ProxyControl, home, rel string, targets []Target) error {
+	want := Want(targets, func(t Target) bool { return t.Release == rel })
 	if len(want) == 0 {
 		return nil
 	}
-	return px.WaitReady(ctx, GatewayDir(home), want, proxyReadyTimeout)
+	return px.WaitReady(ctx, Dir(home), want, runtimeops.ProxyReadyTimeout)
 }
 
-// GatewaySettings are the user's gateway choices; they outlive the gateway itself.
-type GatewaySettings struct {
+// Settings are the user's gateway choices; they outlive the gateway itself.
+type Settings struct {
 	AccessLog bool `json:"accessLog"`
 }
 
-func gatewaySettingsPath(home string) string { return filepath.Join(home, "gateway.json") }
+func settingsPath(home string) string { return filepath.Join(home, "gateway.json") }
 
-// ReadGatewaySettings returns the stored settings (defaults when none are stored).
-func ReadGatewaySettings(home string) (GatewaySettings, error) {
-	var s GatewaySettings
-	data, err := os.ReadFile(gatewaySettingsPath(home))
+// ReadSettings returns the stored settings (defaults when none are stored).
+func ReadSettings(home string) (Settings, error) {
+	var s Settings
+	data, err := os.ReadFile(settingsPath(home))
 	if errors.Is(err, os.ErrNotExist) {
 		return s, nil
 	}
@@ -480,13 +484,13 @@ func ReadGatewaySettings(home string) (GatewaySettings, error) {
 		return s, err
 	}
 	if err := json.Unmarshal(data, &s); err != nil {
-		return s, fmt.Errorf("%s: %w", gatewaySettingsPath(home), err)
+		return s, fmt.Errorf("%s: %w", settingsPath(home), err)
 	}
 	return s, nil
 }
 
-// WriteGatewaySettings stores settings; the next SyncGateway applies them.
-func WriteGatewaySettings(home string, s GatewaySettings) error {
+// WriteSettings stores settings; the next Sync applies them.
+func WriteSettings(home string, s Settings) error {
 	data, err := json.Marshal(s)
 	if err != nil {
 		return err
@@ -494,11 +498,11 @@ func WriteGatewaySettings(home string, s GatewaySettings) error {
 	if err := os.MkdirAll(home, 0o700); err != nil {
 		return err
 	}
-	return writeFile(gatewaySettingsPath(home), data)
+	return writeFile(settingsPath(home), data)
 }
 
-// GatewayState is the health part of `karga gateway status`.
-type GatewayState struct {
+// State is the health part of `karga gateway status`.
+type State struct {
 	// Container is the gateway container's state, or "missing" when no release needs it.
 	Container string `json:"container"`
 	Ready     bool   `json:"ready"`
@@ -509,14 +513,14 @@ type GatewayState struct {
 	Error string `json:"error,omitempty"`
 }
 
-// GatewayHealth reads the gateway container and Envoy's admin API.
-func GatewayHealth(ctx context.Context, rt ports.Runtime, home string) (GatewayState, error) {
-	settings, err := ReadGatewaySettings(home)
+// Health reads the gateway container and Envoy's admin API.
+func Health(ctx context.Context, rt ports.Runtime, home string) (State, error) {
+	settings, err := ReadSettings(home)
 	if err != nil {
-		return GatewayState{}, err
+		return State{}, err
 	}
-	st := GatewayState{AccessLog: settings.AccessLog}
-	ws, err := rt.GetWorkload(ctx, GatewayName)
+	st := State{AccessLog: settings.AccessLog}
+	ws, err := rt.GetWorkload(ctx, ContainerName)
 	switch {
 	case errors.Is(err, ports.ErrNotFound):
 		st.Container = "missing"
@@ -525,10 +529,10 @@ func GatewayHealth(ctx context.Context, rt ports.Runtime, home string) (GatewayS
 		return st, err
 	}
 	st.Container = ws.State
-	if src := ws.Labels[labelGatewaySource]; strings.Contains(src, " ") {
+	if src := ws.Labels[labelSource]; strings.Contains(src, " ") {
 		st.Image = src[strings.LastIndex(src, " ")+1:]
 	}
-	admin := envoy.NewAdmin(GatewayDir(home))
+	admin := envoy.NewAdmin(Dir(home))
 	if st.Ready, err = admin.Live(ctx); err != nil {
 		st.Error = err.Error()
 		return st, nil
@@ -537,8 +541,8 @@ func GatewayHealth(ctx context.Context, rt ports.Runtime, home string) (GatewayS
 	return st, nil
 }
 
-// GatewayRoute is one line of `karga gateway status`.
-type GatewayRoute struct {
+// Route is one line of `karga gateway status`.
+type Route struct {
 	Listener string `json:"listener"` // ip:port
 	Route    string `json:"route"`    // "tcp" or host+path
 	Release  string `json:"release"`
@@ -546,21 +550,21 @@ type GatewayRoute struct {
 	Upstream string `json:"upstream"`
 }
 
-// GatewayRoutes lists what the gateway serves, as computed from the running workloads.
-func GatewayRoutes(ctx context.Context, rt ports.Runtime) ([]GatewayRoute, error) {
-	targets, err := gatewayTargets(ctx, rt, nil)
+// Routes lists what the gateway serves, as computed from the running workloads.
+func Routes(ctx context.Context, rt ports.Runtime) ([]Route, error) {
+	targets, err := findTargets(ctx, rt, nil)
 	if err != nil {
 		return nil, err
 	}
-	var out []GatewayRoute
+	var out []Route
 	for _, t := range targets {
 		for _, p := range t.Ports {
 			up := net.JoinHostPort("127.0.0.1", strconv.Itoa(p.Upstream))
 			if p.HostPort != 0 {
-				out = append(out, GatewayRoute{net.JoinHostPort(p.HostIP, strconv.Itoa(p.HostPort)), "tcp", t.Release, t.Workload, up})
+				out = append(out, Route{net.JoinHostPort(p.HostIP, strconv.Itoa(p.HostPort)), "tcp", t.Release, t.Workload, up})
 			}
 			for _, r := range p.Routes {
-				out = append(out, GatewayRoute{net.JoinHostPort(r.HostIP, strconv.Itoa(r.HostPort)), r.Host + r.Path, t.Release, t.Workload, up})
+				out = append(out, Route{net.JoinHostPort(r.HostIP, strconv.Itoa(r.HostPort)), r.Host + r.Path, t.Release, t.Workload, up})
 			}
 		}
 	}
@@ -573,8 +577,8 @@ func GatewayRoutes(ctx context.Context, rt ports.Runtime) ([]GatewayRoute, error
 	return out, nil
 }
 
-// gatewayClaim is a host address the gateway serves for a release.
-type gatewayClaim struct {
+// claimT is a host address the gateway serves for a release.
+type claim struct {
 	release string
 	ip      string
 	tcp     bool
@@ -583,21 +587,21 @@ type gatewayClaim struct {
 	certs   map[string]string // TLS host -> "release/secret" its certificate comes from
 }
 
-// checkGateway refuses gateway ports that clash with other releases (or within the release), and
+// Check refuses gateway ports that clash with other releases (or within the release), and
 // binds unclaimed ones once to see that no other process holds them.
-func checkGateway(ctx context.Context, rt ports.Runtime, rel string, rs []resource.Resource) []error {
-	objs, err := rt.ListLabeled(ctx, LabelGateway)
+func Check(ctx context.Context, rt ports.Runtime, rel string, rs []resource.Resource) []error {
+	objs, err := rt.ListLabeled(ctx, LabelPorts)
 	if err != nil {
 		return []error{err}
 	}
-	claims := map[int][]*gatewayClaim{}
-	claim := func(owner, ip string, port int) *gatewayClaim {
+	claims := map[int][]*claim{}
+	claim := func(owner, ip string, port int) *claim {
 		for _, c := range claims[port] {
 			if c.release == owner && c.ip == ip {
 				return c
 			}
 		}
-		c := &gatewayClaim{release: owner, ip: ip, routes: map[string]bool{}, certs: map[string]string{}}
+		c := &claim{release: owner, ip: ip, routes: map[string]bool{}, certs: map[string]string{}}
 		claims[port] = append(claims[port], c)
 		return c
 	}
@@ -606,7 +610,7 @@ func checkGateway(ctx context.Context, rt ports.Runtime, rel string, rs []resour
 		if owner == rel {
 			continue
 		}
-		for _, p := range parseGatewayLabel(o.Labels) {
+		for _, p := range ParseLabel(o.Labels) {
 			if p.HostPort != 0 {
 				claim(owner, p.HostIP, p.HostPort).tcp = true
 			}
@@ -620,7 +624,7 @@ func checkGateway(ctx context.Context, rt ports.Runtime, rel string, rs []resour
 		if o.Labels[ports.LabelRelease] != rel {
 			continue
 		}
-		for _, p := range parseGatewayLabel(o.Labels) {
+		for _, p := range ParseLabel(o.Labels) {
 			held[p.HostPort] = true
 			for _, r := range p.Routes {
 				held[r.HostPort] = true
@@ -634,10 +638,10 @@ func checkGateway(ctx context.Context, rt ports.Runtime, rel string, rs []resour
 		if !ok {
 			continue
 		}
-		for _, p := range gatewayPorts(w) {
+		for _, p := range Ports(w) {
 			if p.HostPort != 0 {
 				where := fmt.Sprintf("%s %q: hostPort %s:%d", resource.KindWorkload, r.Metadata.Name, p.HostIP, p.HostPort)
-				if err := gatewayFree(claims[p.HostPort], p.HostIP, true, "", where); err != nil {
+				if err := free(claims[p.HostPort], p.HostIP, true, "", where); err != nil {
 					errs = append(errs, err)
 				} else if !held[p.HostPort] && !bindable(p.HostIP, p.HostPort) {
 					errs = append(errs, fmt.Errorf("%s is taken by another process on this host: %w", where, ports.ErrPortInUse))
@@ -646,7 +650,7 @@ func checkGateway(ctx context.Context, rt ports.Runtime, rel string, rs []resour
 			}
 			for _, rt := range p.Routes {
 				where := fmt.Sprintf("%s %q: route %s%s on %s:%d", resource.KindWorkload, r.Metadata.Name, rt.Host, rt.Path, rt.HostIP, rt.HostPort)
-				if err := gatewayFreeRoute(claims[rt.HostPort], rel, rt, where); err != nil {
+				if err := freeRoute(claims[rt.HostPort], rel, rt, where); err != nil {
 					errs = append(errs, err)
 				} else if !held[rt.HostPort] && len(claims[rt.HostPort]) == 0 && !bindable(rt.HostIP, rt.HostPort) {
 					errs = append(errs, fmt.Errorf("%s: the port is taken by another process on this host: %w", where, ports.ErrPortInUse))
@@ -661,10 +665,10 @@ func checkGateway(ctx context.Context, rt ports.Runtime, rel string, rs []resour
 	return errs
 }
 
-// gatewayFree checks a tcp port (route == "") or an HTTP route against existing claims of a port.
-func gatewayFree(existing []*gatewayClaim, ip string, tcp bool, route, where string) error {
+// free checks a tcp port (route == "") or an HTTP route against existing claims of a port.
+func free(existing []*claim, ip string, tcp bool, route, where string) error {
 	for _, c := range existing {
-		if !ipOverlap(c.ip, ip) {
+		if !runtimeops.IPOverlap(c.ip, ip) {
 			continue
 		}
 		switch {
@@ -679,21 +683,21 @@ func gatewayFree(existing []*gatewayClaim, ip string, tcp bool, route, where str
 	return nil
 }
 
-func addRouteClaim(c *gatewayClaim, rel string, r resource.Route) {
+func addRouteClaim(c *claim, rel string, r resource.Route) {
 	c.routes[r.Host+r.Path], c.tls = true, r.TLS != nil
 	if r.TLS != nil {
 		c.certs[r.Host] = rel + "/" + r.TLS.Secret
 	}
 }
 
-// gatewayFreeRoute checks an HTTP route of release rel against the existing claims of its port.
-func gatewayFreeRoute(existing []*gatewayClaim, rel string, r resource.Route, where string) error {
-	if err := gatewayFree(existing, r.HostIP, false, r.Host+r.Path, where); err != nil {
+// freeRoute checks an HTTP route of release rel against the existing claims of its port.
+func freeRoute(existing []*claim, rel string, r resource.Route, where string) error {
+	if err := free(existing, r.HostIP, false, r.Host+r.Path, where); err != nil {
 		return err
 	}
 	tls := r.TLS != nil
 	for _, c := range existing {
-		if !ipOverlap(c.ip, r.HostIP) || len(c.routes) == 0 {
+		if !runtimeops.IPOverlap(c.ip, r.HostIP) || len(c.routes) == 0 {
 			continue
 		}
 		switch {
@@ -706,16 +710,16 @@ func gatewayFreeRoute(existing []*gatewayClaim, rel string, r resource.Route, wh
 	return nil
 }
 
-func bindable(ip string, port int) bool { return !portTaken("tcp", ip, port) }
+func bindable(ip string, port int) bool { return !runtimeops.PortTaken("tcp", ip, port) }
 
-// gatewayLabel publishes the gateway ports of a workload request on fresh loopback upstream ports
+// Label publishes the gateway ports of a workload request on fresh loopback upstream ports
 // and records them in its labels.
-func gatewayLabel(wr *ports.WorkloadRequest, s *resource.WorkloadSpec, paths map[Key]string) error {
-	gw := gatewayPorts(s)
+func Label(wr *ports.WorkloadRequest, s *resource.WorkloadSpec, certDir func(secret string) (string, bool)) error {
+	gw := Ports(s)
 	if len(gw) == 0 {
 		return nil
 	}
-	var label []GatewayPort
+	var label []Port
 	for i := range wr.Ports {
 		p := &wr.Ports[i]
 		j := slices.IndexFunc(gw, func(g resource.Port) bool { return g.ContainerPort == p.ContainerPort && g.Protocol == p.Protocol })
@@ -726,13 +730,13 @@ func gatewayLabel(wr *ports.WorkloadRequest, s *resource.WorkloadSpec, paths map
 		if err != nil {
 			return err
 		}
-		gp := GatewayPort{ContainerPort: p.ContainerPort, Upstream: up, HostIP: gw[j].HostIP, HostPort: gw[j].HostPort, Routes: gw[j].Routes,
-			HealthPath: httpHealthPath(s, p.ContainerPort)}
+		gp := Port{ContainerPort: p.ContainerPort, Upstream: up, HostIP: gw[j].HostIP, HostPort: gw[j].HostPort, Routes: gw[j].Routes,
+			HealthPath: runtimeops.HTTPHealthPath(s, p.ContainerPort)}
 		for _, r := range gw[j].Routes {
 			if r.TLS == nil {
 				continue
 			}
-			dir, ok := paths[Key{resource.KindSecret, r.TLS.Secret}]
+			dir, ok := certDir(r.TLS.Secret)
 			if !ok {
 				return fmt.Errorf("tls secret %q was not materialized", r.TLS.Secret)
 			}
@@ -749,6 +753,6 @@ func gatewayLabel(wr *ports.WorkloadRequest, s *resource.WorkloadSpec, paths map
 		return err
 	}
 	wr.Labels = maps.Clone(wr.Labels)
-	wr.Labels[LabelGateway] = string(js)
+	wr.Labels[LabelPorts] = string(js)
 	return nil
 }

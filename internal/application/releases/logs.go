@@ -11,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/hasankaradmir/karga/internal/application/deployment"
+	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
 	"github.com/hasankaradmir/karga/internal/domain/resource"
 )
 
@@ -68,7 +69,7 @@ type logTarget struct{ label, runtime string }
 
 func (s *Service) logTargets(ctx context.Context, req LogsRequest) ([]logTarget, error) {
 	if req.Gateway {
-		return []logTarget{{"gateway", deployment.GatewayName}}, nil
+		return []logTarget{{"gateway", gateway.ContainerName}}, nil
 	}
 	if _, err := s.Store.GetRelease(ctx, req.Release); err != nil {
 		return nil, err
