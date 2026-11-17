@@ -64,6 +64,7 @@ logs). State lives in `$KARGA_HOME` (default `$XDG_DATA_HOME/karga`, i.e. `~/.lo
 
 | Command | What it does |
 |---|---|
+| `create <dir>` | Start a new package: a web workload with an http health check, replace updates and notes |
 | `lint <package>...` | Validate `Package.yaml`, values and schema, render and check every resource |
 | `template <release> <package>` | Render locally; Secret values are shown as `<redacted>` unless `--show-secrets` |
 | `show package\|values\|readme <package>` | Show package metadata, default values or README |
@@ -71,16 +72,20 @@ logs). State lives in `$KARGA_HOME` (default `$XDG_DATA_HOME/karga`, i.e. `~/.lo
 | `upgrade <release> <package>` | Apply new values or a new package version. `--reuse-values`, `--install`, `--strategy` |
 | `rollback <release> [revision]` | Re-apply an earlier revision as a new revision |
 | `uninstall <release>` | Remove workloads and networks. `--delete-volumes`, `--keep-history` |
-| `history`, `list`, `status <release>` | Revisions, releases, and desired vs actual state |
-| `get values\|manifest <release>` | Stored values (`--all` merges defaults) or rendered resources |
+| `history`, `list`, `status <release>` | Revisions (`--diff` adds what changed), releases, and desired vs actual state (`--watch`) |
+| `diff <release> <rev> [rev]` | What differs between two revisions (values, package, resource fields; secrets only as changed) |
+| `get values\|manifest\|notes <release>` | Stored values (`--all` merges defaults), rendered resources, or the package's notes |
+| `exec <release> <workload> [-it] [-- cmd]` | Run a command in a workload (default: an interactive `sh`); exits with its code |
 | `logs <release> [workload...]` | Container logs (`--tail`, `-f`); `--proxy` for the release proxy, `--gateway` for the gateway |
 | `gateway status` | Health, version and image of the host gateway, and its listeners, routes and upstreams (Linux) |
 | `gateway set access-log on\|off` | Log every request and connection the gateway handles (off by default) |
 | `state backup <file>` | Consistent copy of the state database, safe while karga runs |
 | `volume backup\|restore <release> <volume> <file>` | Copy a volume's files to/from a gzipped tar; `--stop` for a consistent backup |
 
-Mutating commands take `--dry-run`, `--timeout` (default `5m`), `--history-max` (default 10
-revisions kept) and `--force`. Values come from the package defaults, then each `-f/--values` file in
+Mutating commands take `--dry-run`, `--verbose` (every changed field of the plan), `--timeout`
+(default `5m`), `--history-max` (default 10 revisions kept) and `--force`; they show their progress
+on stderr. A package's `NOTES.txt` (a template) is shown after install and upgrade. Tables are
+colored on a terminal (`--color auto|always|never`, `NO_COLOR`). Values come from the package defaults, then each `-f/--values` file in
 order, then `--set` and `--set-string`; `--set a=null` deletes a default.
 
 ## Packages
