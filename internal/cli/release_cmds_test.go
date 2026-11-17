@@ -196,3 +196,21 @@ func TestLogs(t *testing.T) {
 		t.Fatalf("no proxy off Linux: %v", err)
 	}
 }
+
+func TestGatewayStatusAndSettings(t *testing.T) {
+	e := newCLIEnv(t)
+	out := e.mustRun("gateway", "status")
+	if !strings.Contains(out, "Gateway:    not running (no release uses it)") || !strings.Contains(out, "Access log: off") {
+		t.Fatalf("status:\n%s", out)
+	}
+	e.mustRun("gateway", "set", "access-log", "on")
+	if out := e.mustRun("gateway", "status"); !strings.Contains(out, "Access log: on") {
+		t.Fatalf("after set:\n%s", out)
+	}
+	if _, err := e.run("gateway", "set", "access-log", "maybe"); err == nil {
+		t.Fatal("invalid value accepted")
+	}
+	if out := e.mustRun("gateway", "status", "-o", "json"); !strings.Contains(out, `"accessLog": true`) || !strings.Contains(out, `"routes": []`) {
+		t.Fatalf("json:\n%s", out)
+	}
+}

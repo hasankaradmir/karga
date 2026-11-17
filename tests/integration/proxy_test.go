@@ -26,6 +26,7 @@ import (
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/domain/release"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
+	"github.com/hasankaradmir/karga/internal/ports"
 	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )
 
@@ -243,6 +244,35 @@ func TestGatewayHTTPRoutes(t *testing.T) {
 	}
 	if code, _ := hostGet(t, port, "other.local"); code != http.StatusNotFound {
 		t.Errorf("unknown host: %d", code)
+	}
+	health, err := s.GatewayHealth(ctx)
+	if err != nil || !health.Ready || health.Version != "1.36.13" || !strings.Contains(health.Image, "@sha256:") {
+		t.Fatalf("gateway health: %+v %v", health, err)
+	}
+	// The access log is off by default; turning it on logs requests without recreating the gateway.
+	before, _ := rt.GetWorkload(ctx, deployment.GatewayName)
+	if err := s.SetGatewayAccessLog(ctx, true); err != nil {
+		t.Fatal(err)
+	}
+	var logged strings.Builder
+	deadline := time.Now().Add(15 * time.Second)
+	for !strings.Contains(logged.String(), `"GET /logged HTTP/1.1"`) && time.Now().Before(deadline) {
+		req, _ := http.NewRequest(http.MethodGet, "http://127.0.0.1:"+strconv.Itoa(port)+"/logged", nil)
+		req.Host = "a.local"
+		if resp, err := http.DefaultClient.Do(req); err == nil {
+			_ = resp.Body.Close()
+		}
+		time.Sleep(500 * time.Millisecond)
+		logged.Reset()
+		if err := s.Logs(ctx, releases.LogsRequest{Gateway: true, Tail: 20}, &logged); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if !strings.Contains(logged.String(), `"GET /logged HTTP/1.1"`) {
+		t.Fatalf("request not in the gateway access log:\n%s", logged.String())
+	}
+	if after, _ := rt.GetWorkload(ctx, deployment.GatewayName); after.Labels[ports.LabelManaged] == "" || before.Name != after.Name {
+		t.Fatalf("gateway changed: %+v", after)
 	}
 	// The same host and path in a third release is refused before anything is created.
 	c := releaseName("it-gw-c")

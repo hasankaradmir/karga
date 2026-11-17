@@ -91,10 +91,12 @@ type HTTPRoute struct {
 }
 
 // Config is the dynamic part of a proxy: listeners (lds.json) and clusters (cds.json).
+// AccessLog writes a line per request (HTTP) or connection (TCP) to stdout.
 type Config struct {
-	TCP      []TCPListener
-	HTTP     []HTTPListener
-	Clusters []Cluster
+	TCP       []TCPListener
+	HTTP      []HTTPListener
+	Clusters  []Cluster
+	AccessLog bool
 }
 
 // Bootstrap is the static part: an admin API on a unix socket and file-based LDS/CDS. socketMode is
@@ -240,6 +242,34 @@ type address struct {
 
 func (a address) String() string {
 	return net.JoinHostPort(a.SocketAddress.Address, strconv.Itoa(a.SocketAddress.PortValue))
+}
+
+// Live reports whether Envoy's admin API answers and the server is live.
+func (a *Admin) Live(ctx context.Context) (bool, error) {
+	body, err := a.get(ctx, "/ready")
+	if err != nil {
+		return false, err
+	}
+	return strings.TrimSpace(string(body)) == "LIVE", nil
+}
+
+// Version returns the running Envoy's version, e.g. "1.36.13".
+func (a *Admin) Version(ctx context.Context) (string, error) {
+	body, err := a.get(ctx, "/server_info")
+	if err != nil {
+		return "", err
+	}
+	var info struct {
+		Version string `json:"version"`
+	}
+	if err := json.Unmarshal(body, &info); err != nil {
+		return "", err
+	}
+	// "<commit>/<version>/<status>/<build>/<ssl>"
+	if parts := strings.Split(info.Version, "/"); len(parts) > 1 {
+		return parts[1], nil
+	}
+	return info.Version, nil
 }
 
 // Admin reads a proxy's admin API through the unix socket in its directory.

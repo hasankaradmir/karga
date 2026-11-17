@@ -392,24 +392,48 @@ func newGetCmd(a *app) *cobra.Command {
 func newGatewayCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:   "gateway",
-		Short: "Inspect the host gateway (Linux)",
+		Short: "Inspect and configure the host gateway (Linux)",
 	}
 	cmd.AddCommand(&cobra.Command{
 		Use:   "status",
-		Short: "List the listeners and routes the gateway serves",
+		Short: "Show the gateway's health and the listeners and routes it serves",
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			return a.withService(cmd.Context(), func(s *releases.Service) error {
+				health, err := s.GatewayHealth(cmd.Context())
+				if err != nil {
+					return err
+				}
 				routes, err := s.Gateway(cmd.Context())
 				if err != nil {
 					return err
 				}
 				if a.output == outputJSON {
 					if routes == nil {
-						return writeJSON(a.stdout, []any{})
+						routes = []deployment.GatewayRoute{}
 					}
-					return writeJSON(a.stdout, routes)
+					return writeJSON(a.stdout, map[string]any{"gateway": health, "routes": routes})
 				}
+				state := health.Container
+				switch {
+				case health.Container == "missing":
+					state = "not running (no release uses it)"
+				case health.Ready:
+					state += ", ready (Envoy " + health.Version + ")"
+				case health.Error != "":
+					state += ", admin API unreachable: " + health.Error
+				default:
+					state += ", not ready"
+				}
+				access := "off"
+				if health.AccessLog {
+					access = "on (karga logs --gateway)"
+				}
+				_, _ = fmt.Fprintf(a.stdout, "Gateway:    %s\n", state)
+				if health.Image != "" {
+					_, _ = fmt.Fprintf(a.stdout, "Image:      %s\n", health.Image)
+				}
+				_, _ = fmt.Fprintf(a.stdout, "Access log: %s\n\n", access)
 				var rows [][]string
 				for _, r := range routes {
 					rows = append(rows, []string{r.Listener, r.Route, r.Release, r.Workload, r.Upstream})
@@ -418,6 +442,23 @@ func newGatewayCmd(a *app) *cobra.Command {
 			})
 		},
 	})
+	set := &cobra.Command{Use: "set", Short: "Change a gateway setting"}
+	set.AddCommand(&cobra.Command{
+		Use:       "access-log on|off",
+		Short:     "Log every request and connection the gateway handles (off by default)",
+		Args:      cobra.MatchAll(cobra.ExactArgs(1), cobra.OnlyValidArgs),
+		ValidArgs: []string{"on", "off"},
+		RunE: func(cmd *cobra.Command, args []string) error {
+			return a.withService(cmd.Context(), func(s *releases.Service) error {
+				if err := s.SetGatewayAccessLog(cmd.Context(), args[0] == "on"); err != nil {
+					return err
+				}
+				_, err := fmt.Fprintf(a.stdout, "gateway access log %s\n", args[0])
+				return err
+			})
+		},
+	})
+	cmd.AddCommand(set)
 	return cmd
 }
 

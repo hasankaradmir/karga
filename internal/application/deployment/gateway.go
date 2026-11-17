@@ -14,6 +14,7 @@ import (
 	"slices"
 	"sort"
 	"strconv"
+	"strings"
 	"syscall"
 
 	"github.com/hasankaradmir/karga/internal/domain/resource"
@@ -350,8 +351,14 @@ func SyncGateway(ctx context.Context, rt ports.Runtime, px ProxyControl, home st
 	if err := syncCerts(dir, targets, false); err != nil {
 		return nil, err
 	}
+	cfg := gatewayConfig(targets)
+	settings, err := ReadGatewaySettings(home)
+	if err != nil {
+		return nil, err
+	}
+	cfg.AccessLog = settings.AccessLog
 	// The socket is created by root in the 0700 directory, which keeps other users out.
-	if err := px.Write(dir, "gateway", 0o666, gatewayConfig(targets)); err != nil {
+	if err := px.Write(dir, "gateway", 0o666, cfg); err != nil {
 		return nil, err
 	}
 	if err := syncCerts(dir, targets, true); err != nil {
@@ -386,6 +393,81 @@ func waitGateway(ctx context.Context, px ProxyControl, home, rel string, targets
 		return nil
 	}
 	return px.WaitReady(ctx, GatewayDir(home), want, proxyReadyTimeout)
+}
+
+// GatewaySettings are the user's gateway choices; they outlive the gateway itself.
+type GatewaySettings struct {
+	AccessLog bool `json:"accessLog"`
+}
+
+func gatewaySettingsPath(home string) string { return filepath.Join(home, "gateway.json") }
+
+// ReadGatewaySettings returns the stored settings (defaults when none are stored).
+func ReadGatewaySettings(home string) (GatewaySettings, error) {
+	var s GatewaySettings
+	data, err := os.ReadFile(gatewaySettingsPath(home))
+	if errors.Is(err, os.ErrNotExist) {
+		return s, nil
+	}
+	if err != nil {
+		return s, err
+	}
+	if err := json.Unmarshal(data, &s); err != nil {
+		return s, fmt.Errorf("%s: %w", gatewaySettingsPath(home), err)
+	}
+	return s, nil
+}
+
+// WriteGatewaySettings stores settings; the next SyncGateway applies them.
+func WriteGatewaySettings(home string, s GatewaySettings) error {
+	data, err := json.Marshal(s)
+	if err != nil {
+		return err
+	}
+	if err := os.MkdirAll(home, 0o700); err != nil {
+		return err
+	}
+	return writeFile(gatewaySettingsPath(home), data)
+}
+
+// GatewayState is the health part of `karga gateway status`.
+type GatewayState struct {
+	// Container is the gateway container's state, or "missing" when no release needs it.
+	Container string `json:"container"`
+	Ready     bool   `json:"ready"`
+	Version   string `json:"version,omitempty"`
+	Image     string `json:"image,omitempty"`
+	AccessLog bool   `json:"accessLog"`
+	// Error says why the admin API could not be read, if it could not.
+	Error string `json:"error,omitempty"`
+}
+
+// GatewayHealth reads the gateway container and Envoy's admin API.
+func GatewayHealth(ctx context.Context, rt ports.Runtime, home string) (GatewayState, error) {
+	settings, err := ReadGatewaySettings(home)
+	if err != nil {
+		return GatewayState{}, err
+	}
+	st := GatewayState{AccessLog: settings.AccessLog}
+	ws, err := rt.GetWorkload(ctx, GatewayName)
+	switch {
+	case errors.Is(err, ports.ErrNotFound):
+		st.Container = "missing"
+		return st, nil
+	case err != nil:
+		return st, err
+	}
+	st.Container = ws.State
+	if src := ws.Labels[labelGatewaySource]; strings.Contains(src, " ") {
+		st.Image = src[strings.LastIndex(src, " ")+1:]
+	}
+	admin := envoy.NewAdmin(GatewayDir(home))
+	if st.Ready, err = admin.Live(ctx); err != nil {
+		st.Error = err.Error()
+		return st, nil
+	}
+	st.Version, _ = admin.Version(ctx)
+	return st, nil
 }
 
 // GatewayRoute is one line of `karga gateway status`.

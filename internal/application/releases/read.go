@@ -197,3 +197,33 @@ func (s *Service) Gateway(ctx context.Context) ([]deployment.GatewayRoute, error
 	}
 	return deployment.GatewayRoutes(ctx, rt)
 }
+
+// GatewayHealth reports the gateway container and whether its Envoy is ready.
+func (s *Service) GatewayHealth(ctx context.Context) (deployment.GatewayState, error) {
+	rt, err := s.Runtime(ctx)
+	if err != nil {
+		return deployment.GatewayState{}, err
+	}
+	return deployment.GatewayHealth(ctx, rt, s.Home)
+}
+
+// SetGatewayAccessLog stores the access log setting and applies it to a running gateway.
+func (s *Service) SetGatewayAccessLog(ctx context.Context, on bool) error {
+	settings, err := deployment.ReadGatewaySettings(s.Home)
+	if err != nil {
+		return err
+	}
+	settings.AccessLog = on
+	if err := deployment.WriteGatewaySettings(s.Home, settings); err != nil {
+		return err
+	}
+	rt, err := s.runtime(ctx)
+	if err != nil {
+		return err
+	}
+	if _, err := rt.GetWorkload(ctx, deployment.GatewayName); errors.Is(err, ports.ErrNotFound) {
+		return nil // applied when a release next needs the gateway
+	}
+	_, err = deployment.SyncGateway(ctx, rt, deployment.EnvoyProxies{}, s.Home, nil)
+	return err
+}

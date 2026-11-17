@@ -9,11 +9,13 @@ import (
 	"strings"
 	"time"
 
+	accesslogv3 "github.com/envoyproxy/go-control-plane/envoy/config/accesslog/v3"
 	clusterv3 "github.com/envoyproxy/go-control-plane/envoy/config/cluster/v3"
 	corev3 "github.com/envoyproxy/go-control-plane/envoy/config/core/v3"
 	endpointv3 "github.com/envoyproxy/go-control-plane/envoy/config/endpoint/v3"
 	listenerv3 "github.com/envoyproxy/go-control-plane/envoy/config/listener/v3"
 	routev3 "github.com/envoyproxy/go-control-plane/envoy/config/route/v3"
+	streamv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/access_loggers/stream/v3"
 	dnscommonv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/common/dns/v3"
 	dnsv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/clusters/dns/v3"
 	routerv3 "github.com/envoyproxy/go-control-plane/envoy/extensions/filters/http/router/v3"
@@ -70,6 +72,14 @@ func filterListener(name, address string, port int, filter string, cfg validated
 // Listeners renders lds.json. Output is sorted so equal configs give equal files.
 func (c Config) Listeners() ([]byte, error) {
 	var items []validated
+	var logs []*accesslogv3.AccessLog
+	if c.AccessLog {
+		stdout, err := pack(&streamv3.StdoutAccessLog{})
+		if err != nil {
+			return nil, err
+		}
+		logs = []*accesslogv3.AccessLog{{Name: "envoy.access_loggers.stdout", ConfigType: &accesslogv3.AccessLog_TypedConfig{TypedConfig: stdout}}}
+	}
 	tcp := slices.Clone(c.TCP)
 	slices.SortFunc(tcp, func(a, b TCPListener) int {
 		return strings.Compare(tcpName(a.Address, a.Port), tcpName(b.Address, b.Port))
@@ -80,6 +90,7 @@ func (c Config) Listeners() ([]byte, error) {
 			StatPrefix:         name,
 			ClusterSpecifier:   &tcpv3.TcpProxy_Cluster{Cluster: l.Cluster},
 			MaxConnectAttempts: wrapperspb.UInt32(3),
+			AccessLog:          logs,
 		})
 		if err != nil {
 			return nil, err
@@ -95,7 +106,7 @@ func (c Config) Listeners() ([]byte, error) {
 		return nil, err
 	}
 	for _, l := range httpls {
-		lis, err := httpListener(l, router)
+		lis, err := httpListener(l, router, logs)
 		if err != nil {
 			return nil, err
 		}
@@ -104,9 +115,10 @@ func (c Config) Listeners() ([]byte, error) {
 	return resources(items)
 }
 
-func hcm(name string, router *anypb.Any, hosts []*routev3.VirtualHost) *hcmv3.HttpConnectionManager {
+func hcm(name string, router *anypb.Any, hosts []*routev3.VirtualHost, logs []*accesslogv3.AccessLog) *hcmv3.HttpConnectionManager {
 	return &hcmv3.HttpConnectionManager{
 		StatPrefix: name,
+		AccessLog:  logs,
 		// The gateway sees the real client address and passes it on in x-forwarded-for.
 		UseRemoteAddress: wrapperspb.Bool(true),
 		HttpFilters: []*hcmv3.HttpFilter{{
@@ -120,14 +132,14 @@ func hcm(name string, router *anypb.Any, hosts []*routev3.VirtualHost) *hcmv3.Ht
 
 // httpListener renders a plain listener (one filter chain) or a TLS one (a chain per host,
 // selected by SNI, each with its certificate and its routes).
-func httpListener(l HTTPListener, router *anypb.Any) (*listenerv3.Listener, error) {
+func httpListener(l HTTPListener, router *anypb.Any, logs []*accesslogv3.AccessLog) (*listenerv3.Listener, error) {
 	name := httpName(l.Address, l.Port)
 	if len(l.Certs) == 0 {
 		hosts := virtualHosts(l.Routes)
 		for _, h := range slices.Sorted(slices.Values(l.Redirects)) {
 			hosts = append(hosts, redirectHost(h, l.RedirectPort))
 		}
-		return filterListener(name, l.Address, l.Port, "envoy.filters.network.http_connection_manager", hcm(name, router, hosts))
+		return filterListener(name, l.Address, l.Port, "envoy.filters.network.http_connection_manager", hcm(name, router, hosts, logs))
 	}
 	inspector, err := pack(&tlsinspectorv3.TlsInspector{})
 	if err != nil {
@@ -157,7 +169,7 @@ func httpListener(l HTTPListener, router *anypb.Any) (*listenerv3.Listener, erro
 		if err != nil {
 			return nil, err
 		}
-		manager, err := pack(hcm(name, router, virtualHosts(routes)))
+		manager, err := pack(hcm(name, router, virtualHosts(routes), logs))
 		if err != nil {
 			return nil, err
 		}

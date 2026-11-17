@@ -111,6 +111,10 @@ func fakeAdmin(t *testing.T, clusters, stats func() string) string {
 			_, _ = w.Write([]byte(clusters()))
 		case "/stats":
 			_, _ = w.Write([]byte(stats()))
+		case "/ready":
+			_, _ = w.Write([]byte("LIVE\n"))
+		case "/server_info":
+			_, _ = w.Write([]byte(`{"version":"eb0a95ba/1.36.13/Clean/RELEASE/BoringSSL","state":"LIVE"}`))
 		case "/config_dump":
 			_, _ = w.Write([]byte(`{"configs":[{"active_state":{"listener":{"filter_chains":[{"filters":[{"typed_config":{"cluster":"p8080"}}]}]}}},
 			  {"warming_state":{"listener":{"filter_chains":[{"filters":[{"typed_config":{"cluster":"p9000"}}]}]}}}]}`))
@@ -216,5 +220,31 @@ func TestWriteWaitsForClustersBeforeListeners(t *testing.T) {
 	}
 	if time.Since(start) > 200*time.Millisecond {
 		t.Fatal("waited although Envoy knew every cluster")
+	}
+}
+
+func TestAccessLogAndHealth(t *testing.T) {
+	cfg := sample
+	cfg.AccessLog = true
+	lds, err := cfg.Listeners()
+	if err != nil {
+		t.Fatal(err)
+	}
+	// One per filter: the tcp proxy, the plain HTTP listener and the TLS host's chain.
+	if n := strings.Count(string(lds), "envoy.access_loggers.stdout"); n != 3 {
+		t.Fatalf("access loggers: %d, want 3", n)
+	}
+	off, _ := sample.Listeners()
+	if strings.Contains(string(off), "access_log") {
+		t.Fatal("access log on by default")
+	}
+
+	dir := fakeAdmin(t, func() string { return `{"cluster_statuses":[]}` }, func() string { return "" })
+	a := NewAdmin(dir)
+	if live, err := a.Live(context.Background()); err != nil || !live {
+		t.Fatalf("live: %v %v", live, err)
+	}
+	if v, err := a.Version(context.Background()); err != nil || v != "1.36.13" {
+		t.Fatalf("version: %q %v", v, err)
 	}
 }
