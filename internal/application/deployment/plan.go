@@ -98,7 +98,8 @@ func withoutStrategy(r resource.Resource) resource.Resource {
 }
 
 // Specs returns the canonical redacted JSON and digest of every resource. A workload's digest also
-// covers the Config and Secret resources it mounts, so changing their content recreates it.
+// covers the Config and Secret resources it mounts or serves TLS with, so changing their content
+// applies it again.
 func Specs(rs []resource.Resource) (map[Key]release.AppliedResource, error) {
 	out := map[Key]release.AppliedResource{}
 	behind, _ := proxied(rs)
@@ -123,6 +124,9 @@ func Specs(rs []resource.Resource) (map[Key]release.AppliedResource, error) {
 					if kind != resource.KindVolume {
 						_, _ = fmt.Fprintf(h, "\n%s/%s=%s", kind, name, out[Key{kind, name}].Digest) // hash writes never fail
 					}
+				}
+				for _, name := range w.TLSSecrets() {
+					_, _ = fmt.Fprintf(h, "\ntls/%s=%s", name, out[Key{resource.KindSecret, name}].Digest) // a new certificate re-applies the workload
 				}
 			}
 			out[keyOf(r)] = release.AppliedResource{

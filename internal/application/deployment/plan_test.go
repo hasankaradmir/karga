@@ -210,3 +210,26 @@ func TestStrategyResolution(t *testing.T) {
 		t.Error("unknown strategy: expected error")
 	}
 }
+
+func TestTLSSecretChangeReappliesWorkload(t *testing.T) {
+	withProxySupport(t, true)
+	tlsManifest := func(cert string) []resource.Resource {
+		rs := manifest(0)
+		rs[0].Spec.(*resource.WorkloadSpec).Ports[0].Routes = []resource.Route{{Host: "a.example", Path: "/", HostPort: 443, HostIP: "127.0.0.1", TLS: &resource.RouteTLS{Secret: "cert"}}}
+		return append(rs, secretRes("cert", map[string]string{resource.TLSCertKey: cert, resource.TLSKeyKey: "k"}))
+	}
+	ordered, err := Order(tlsManifest("c1"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if names(ordered) == "" || strings.Index(names(ordered), "Secret/cert") > strings.Index(names(ordered), "Workload/redis") {
+		t.Fatalf("the tls secret must come before the workload: %s", names(ordered))
+	}
+	p, err := Diff("cache", tlsManifest("c2"), appliedFrom(t, tlsManifest("c1")), "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := actions(p); !strings.Contains(got, "update:Workload/redis") || !strings.Contains(got, "update:Secret/cert") {
+		t.Fatalf("a new certificate must re-apply the workload: %s", got)
+	}
+}

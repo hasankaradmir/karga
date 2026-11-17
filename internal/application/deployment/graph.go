@@ -29,6 +29,9 @@ func dependencies(r resource.Resource) []Key {
 		kind, name := m.Target()
 		deps = append(deps, Key{kind, name})
 	}
+	for _, name := range w.TLSSecrets() {
+		deps = append(deps, Key{resource.KindSecret, name})
+	}
 	return deps
 }
 
