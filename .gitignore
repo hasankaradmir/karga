@@ -40,3 +40,4 @@ graphify-out/
 
 # Build output
 bin/
+dist/

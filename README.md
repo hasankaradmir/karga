@@ -28,9 +28,14 @@ repositories/registries, package dependencies, a daemon that reconciles drift, W
 
 ## Install
 
+From a release (Linux and macOS, amd64 and arm64), checked against the release checksums:
+
 ```bash
-make build            # produces bin/karga
+curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga/master/scripts/install.sh | sh
+# KARGA_VERSION=v0.1.0 picks a version, KARGA_BIN_DIR another directory (default /usr/local/bin)
 ```
+
+From source: `make build` produces `bin/karga`. Shell completion: `karga completion bash|zsh|fish`.
 
 ## Quickstart
 
@@ -293,6 +298,10 @@ and provisions the VM on first use (`KARGA_VM` names it) and runs `TARGETS` ther
 `test-integration test-e2e`). Integration tests run in parallel and share one `KARGA_HOME`.
 `KARGA_TEST_DAEMON_RESTART=1 make test-integration` additionally restarts the Docker daemon (needs
 passwordless sudo).
+
+Releases: add the version to `CHANGELOG.md`, then `git tag vX.Y.Z && git push --tags`; the release
+workflow builds the binaries with GoReleaser and publishes a draft GitHub release with the
+changelog section as notes. `goreleaser release --snapshot --clean` builds the same locally.
 
 Architecture decisions are in [`docs/adr/`](docs/adr/), with the implementation decisions in
 [`docs/adr/decisions.md`](docs/adr/decisions.md).

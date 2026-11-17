@@ -1,0 +1,33 @@
+# Release builds: `git tag vX.Y.Z && git push --tags` runs .github/workflows/release.yml.
+# Local check: goreleaser release --snapshot --clean
+version: 2
+
+project_name: karga
+
+builds:
+  - main: ./cmd/karga
+    binary: karga
+    env:
+      - CGO_ENABLED=0
+    flags:
+      - -trimpath
+    ldflags:
+      - -s -w -X github.com/hasankaradmir/karga/internal/cli.version={{ .Version }}
+    goos: [linux, darwin]
+    goarch: [amd64, arm64]
+
+archives:
+  - formats: [tar.gz]
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+      - CHANGELOG.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  disable: true # release notes come from CHANGELOG.md
+
+release:
+  draft: true
