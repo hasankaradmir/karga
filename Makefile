@@ -1,7 +1,7 @@
 VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo dev)
 LDFLAGS := -X github.com/hasankaradmir/karga/internal/cli.version=$(VERSION)
 
-.PHONY: build test test-integration test-e2e lint fmt
+.PHONY: build test test-integration test-e2e test-linux lint fmt
 
 build:
 	go build -ldflags "$(LDFLAGS)" -o bin/karga ./cmd/karga
@@ -22,3 +22,8 @@ lint:
 
 fmt:
 	golangci-lint fmt
+
+# Runs TARGETS in a Linux VM (OrbStack or Lima): the gateway and release proxy are Linux-only.
+TARGETS ?= test-integration test-e2e
+test-linux:
+	scripts/linux-vm.sh $(TARGETS)

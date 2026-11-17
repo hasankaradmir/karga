@@ -285,9 +285,12 @@ make test               # unit tests
 make lint               # golangci-lint
 make test-integration   # needs Docker: adapter contract and deployments
 make test-e2e           # needs Docker: builds the binary and runs the lifecycle end to end
+make test-linux         # the same in a Linux VM (OrbStack or Lima), where the gateway runs
 ```
 
-On Linux the integration tests also cover the gateway and release proxy.
+On Linux the integration tests also cover the gateway and release proxy. `make test-linux` creates
+and provisions the VM on first use (`KARGA_VM` names it) and runs `TARGETS` there (default
+`test-integration test-e2e`). Integration tests run in parallel and share one `KARGA_HOME`.
 `KARGA_TEST_DAEMON_RESTART=1 make test-integration` additionally restarts the Docker daemon (needs
 passwordless sudo).
 
