@@ -20,7 +20,7 @@ import (
 	"github.com/hasankaradmir/karga/internal/application/reconciler"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/infrastructure/config"
-	"github.com/hasankaradmir/karga/internal/infrastructure/logger"
+	"github.com/hasankaradmir/karga-sdk/logger"
 	"github.com/hasankaradmir/karga/internal/ports"
 	"github.com/hasankaradmir/karga/internal/version"
 )

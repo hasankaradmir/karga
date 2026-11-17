@@ -9,7 +9,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hasankaradmir/karga/internal/application/packages"
+	"github.com/hasankaradmir/karga-sdk/packages"
 	"github.com/hasankaradmir/karga/internal/application/reconciler"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/ports"

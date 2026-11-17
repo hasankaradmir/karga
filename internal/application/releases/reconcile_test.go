@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hasankaradmir/karga/internal/domain/release"
+	"github.com/hasankaradmir/karga-sdk/release"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 

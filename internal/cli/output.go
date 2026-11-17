@@ -7,7 +7,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
-	"github.com/hasankaradmir/karga/internal/infrastructure/renderer"
+	"github.com/hasankaradmir/karga-sdk/renderer"
 )
 
 func writeJSON(w io.Writer, v any) error {

@@ -9,7 +9,7 @@ import (
 	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
 	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
 	"github.com/hasankaradmir/karga/internal/application/deployment"
-	"github.com/hasankaradmir/karga/internal/application/packages"
+	"github.com/hasankaradmir/karga-sdk/packages"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
@@ -29,7 +29,7 @@ func TestEventTriggersRepair(t *testing.T) {
 	rt.EventsC = make(chan ports.RuntimeEvent)
 	svc := releases.New(store, func(context.Context) (ports.Runtime, error) { return rt, nil }, home, nil, nil)
 	if _, err := svc.Install(ctx, releases.InstallRequest{CommonOptions: releases.CommonOptions{Timeout: time.Second},
-		Name: "cache", Package: "../../../examples/redis", Values: packages.Options{Sets: []string{"service.enabled=false"}}}); err != nil {
+		Name: "cache", Package: "../../../tests/testdata/redis", Values: packages.Options{Sets: []string{"service.enabled=false"}}}); err != nil {
 		t.Fatal(err)
 	}
 	loop := New(svc, 0, nil) // events only

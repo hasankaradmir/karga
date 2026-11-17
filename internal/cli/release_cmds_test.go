@@ -88,7 +88,7 @@ func (e *cliEnv) mustRun(args ...string) string {
 	return out
 }
 
-const redis = "../../examples/redis"
+const redis = "../../tests/testdata/redis"
 
 // Tests run without Envoy: proxy and gateway configuration is written, readiness is assumed.
 func init() { deployment.Proxies = fakeruntime.Proxies{} }
@@ -400,7 +400,7 @@ func TestDiffAndHistory(t *testing.T) {
 	}
 
 	// Secret values and writeOnly values never show, only that they changed.
-	pg := "../../examples/postgres"
+	pg := "../../tests/testdata/postgres"
 	pgPort := "service.enabled=false"
 	e.mustRun("install", "db", pg, "--set", pgPort, "--set", "database.password=first-secret")
 	e.mustRun("upgrade", "db", pg, "--set", pgPort, "--set", "database.password=second-secret")

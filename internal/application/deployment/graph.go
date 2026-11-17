@@ -6,7 +6,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga-sdk/resource"
 )
 
 // kindRank breaks ties between independent resources so the order is stable.

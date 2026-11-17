@@ -21,8 +21,8 @@ import (
 	"syscall"
 
 	"github.com/hasankaradmir/karga/internal/application/deployment/runtimeops"
-	"github.com/hasankaradmir/karga/internal/domain/pkg"
-	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga-sdk/pkg"
+	"github.com/hasankaradmir/karga-sdk/resource"
 	"github.com/hasankaradmir/karga/internal/infrastructure/envoy"
 	"github.com/hasankaradmir/karga/internal/ports"
 )

@@ -6,7 +6,7 @@ import (
 	"slices"
 	"testing"
 
-	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga-sdk/resource"
 )
 
 func cfgRes(name string, files map[string]string) resource.Resource {

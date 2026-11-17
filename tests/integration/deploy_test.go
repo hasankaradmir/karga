@@ -13,14 +13,14 @@ import (
 
 	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
-	"github.com/hasankaradmir/karga/internal/application/packages"
-	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga-sdk/packages"
+	"github.com/hasankaradmir/karga-sdk/resource"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
 func render(t *testing.T, example, release string, sets ...string) []resource.Resource {
 	t.Helper()
-	p, err := packages.Load("../../examples/" + example)
+	p, err := packages.Load("../testdata/" + example)
 	if err != nil {
 		t.Fatal(err)
 	}

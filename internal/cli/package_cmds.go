@@ -6,8 +6,8 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/hasankaradmir/karga/internal/application/packages"
-	"github.com/hasankaradmir/karga/internal/infrastructure/renderer"
+	"github.com/hasankaradmir/karga-sdk/packages"
+	"github.com/hasankaradmir/karga-sdk/renderer"
 )
 
 // valueOpts holds the value override flags shared by template, lint, install and upgrade.

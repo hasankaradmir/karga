@@ -9,7 +9,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hasankaradmir/karga/internal/api"
-	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga-sdk/resource"
 )
 
 // Dynamic shell completion asks karga-server, briefly; without a server it offers nothing.

@@ -8,7 +8,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hasankaradmir/karga/internal/application/packages"
+	"github.com/hasankaradmir/karga-sdk/packages"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 	"github.com/hasankaradmir/karga/internal/ports"
 )

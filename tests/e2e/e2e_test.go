@@ -231,8 +231,8 @@ func TestRedisLifecycle(t *testing.T) {
 	portSet := "service.listener=redis"
 
 	// 1. Lint and 2. install.
-	e.run("lint", "../../examples/redis")
-	if out := e.run("install", rel, "../../examples/redis", "--set", portSet); !strings.Contains(out, "installed (revision 1)") {
+	e.run("lint", "../testdata/redis")
+	if out := e.run("install", rel, "../testdata/redis", "--set", portSet); !strings.Contains(out, "installed (revision 1)") {
 		t.Fatalf("install:\n%s", out)
 	}
 	if st, actual := status(t, e, rel); st != "deployed" || actual["Workload"] != "running/healthy" {
@@ -276,7 +276,7 @@ func TestRedisLifecycle(t *testing.T) {
 	}
 
 	// 4. Dry run shows the plan and changes nothing.
-	plan := e.run("upgrade", rel, "../../examples/redis", "--set", portSet, "--set", "config.maxmemory=128mb", "--dry-run")
+	plan := e.run("upgrade", rel, "../testdata/redis", "--set", portSet, "--set", "config.maxmemory=128mb", "--dry-run")
 	if !strings.Contains(plan, "Revision: 1 -> 2") || !strings.Contains(plan, "CONFIG redis-config") || !strings.Contains(plan, "WORKLOAD redis (recreate") {
 		t.Fatalf("plan:\n%s", plan)
 	}
@@ -285,7 +285,7 @@ func TestRedisLifecycle(t *testing.T) {
 	}
 
 	// 5. Upgrade: new config, data kept.
-	e.run("upgrade", rel, "../../examples/redis", "--set", portSet, "--set", "config.maxmemory=128mb")
+	e.run("upgrade", rel, "../testdata/redis", "--set", portSet, "--set", "config.maxmemory=128mb")
 	if got := redis(t, port, "CONFIG GET maxmemory"); !strings.Contains(got, "134217728") {
 		t.Fatalf("maxmemory after upgrade: %q", got)
 	}
@@ -307,7 +307,7 @@ func TestRedisLifecycle(t *testing.T) {
 	if err := exec.Command("docker", "volume", "inspect", rel+"-redis-data").Run(); err != nil {
 		t.Fatalf("volume not retained: %v", err)
 	}
-	e.run("install", rel, "../../examples/redis", "--set", portSet)
+	e.run("install", rel, "../testdata/redis", "--set", portSet)
 	if got := redis(t, port, "GET e2e"); !strings.Contains(got, "kept") {
 		t.Fatalf("data after reinstall: %q", got)
 	}
@@ -324,7 +324,7 @@ func TestPostgresSecretStaysOutOfDocker(t *testing.T) {
 	rel := releaseName("e2e-pg")
 	e.cleanup(rel)
 	const password = "e2e-hunter2"
-	e.run("install", rel, "../../examples/postgres", "--set", "database.password="+password)
+	e.run("install", rel, "../testdata/postgres", "--set", "database.password="+password)
 	if st, actual := status(t, e, rel); st != "deployed" || actual["Workload"] != "running/healthy" {
 		t.Fatalf("status: %s %v", st, actual)
 	}

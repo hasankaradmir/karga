@@ -12,7 +12,7 @@ import (
 
 	"github.com/hasankaradmir/karga/internal/application/deployment"
 	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
-	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga-sdk/resource"
 )
 
 // LogsRequest selects containers to show logs of: the workloads of a release (all, or the named

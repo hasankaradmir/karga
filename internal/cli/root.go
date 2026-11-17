@@ -10,7 +10,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hasankaradmir/karga/internal/api"
-	"github.com/hasankaradmir/karga/internal/infrastructure/logger"
+	"github.com/hasankaradmir/karga-sdk/logger"
 )
 
 const (

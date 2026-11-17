@@ -25,7 +25,7 @@ import (
 	"go.yaml.in/yaml/v3"
 
 	"github.com/hasankaradmir/karga/internal/application/deployment/gateway"
-	"github.com/hasankaradmir/karga/internal/application/packages"
+	"github.com/hasankaradmir/karga-sdk/packages"
 	"github.com/hasankaradmir/karga/internal/application/releases"
 )
 

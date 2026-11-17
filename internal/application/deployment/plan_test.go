@@ -5,8 +5,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hasankaradmir/karga/internal/domain/release"
-	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga-sdk/release"
+	"github.com/hasankaradmir/karga-sdk/resource"
 )
 
 func appliedFrom(t *testing.T, rs []resource.Resource) []release.AppliedResource {

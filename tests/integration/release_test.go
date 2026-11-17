@@ -8,9 +8,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/hasankaradmir/karga/internal/application/packages"
+	"github.com/hasankaradmir/karga-sdk/packages"
 	"github.com/hasankaradmir/karga/internal/application/releases"
-	"github.com/hasankaradmir/karga/internal/domain/release"
+	"github.com/hasankaradmir/karga-sdk/release"
 	"github.com/hasankaradmir/karga/internal/ports"
 )
 
@@ -26,14 +26,14 @@ func TestRedisReleaseLifecycle(t *testing.T) {
 	}
 
 	// Install an older Redis, then upgrade forward (downgrading would hit RDB format changes).
-	if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: "../../examples/redis", Values: values("7.2")}); err != nil {
+	if _, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: "../testdata/redis", Values: values("7.2")}); err != nil {
 		t.Fatal(err)
 	}
-	res, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: "../../examples/redis", Values: values("7.2")})
+	res, err := s.Install(ctx, releases.InstallRequest{CommonOptions: opts(), Name: name, Package: "../testdata/redis", Values: values("7.2")})
 	if err != nil || !res.NoOp {
 		t.Fatalf("second install should be a no-op: %+v %v", res, err)
 	}
-	if _, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: opts(), Name: name, Package: "../../examples/redis", Values: values("7.4")}); err != nil {
+	if _, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: opts(), Name: name, Package: "../testdata/redis", Values: values("7.4")}); err != nil {
 		t.Fatal(err)
 	}
 	if st := workload(t, rt, name+"-redis"); st.Health != ports.HealthHealthy || st.Labels[ports.LabelRevision] != "2" {
@@ -45,7 +45,7 @@ func TestRedisReleaseLifecycle(t *testing.T) {
 	}
 
 	// A missing image fails before the running container is touched.
-	if _, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: opts(), Name: name, Package: "../../examples/redis", Values: values("0.0.0-missing")}); err == nil {
+	if _, err := s.Upgrade(ctx, releases.UpgradeRequest{CommonOptions: opts(), Name: name, Package: "../testdata/redis", Values: values("0.0.0-missing")}); err == nil {
 		t.Fatal("upgrade to a missing image should fail")
 	}
 	if st := workload(t, rt, name+"-redis"); st.State != ports.StateRunning || st.Labels[ports.LabelRevision] != "2" {

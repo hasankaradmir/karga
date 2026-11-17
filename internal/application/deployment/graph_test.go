@@ -4,7 +4,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga-sdk/resource"
 )
 
 func res(kind, name string) resource.Resource {

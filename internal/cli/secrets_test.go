@@ -15,7 +15,7 @@ const leak = "hunter2-LEAK"
 // appears nowhere except the materialized secret files: not in any output, log or state file.
 func TestSecretsDoNotLeak(t *testing.T) {
 	e := newCLIEnv(t)
-	pg := "../../examples/postgres"
+	pg := "../../tests/testdata/postgres"
 	set := []string{"--set", "service.enabled=false", "--set", "database.password=" + leak}
 	debug := []string{"--debug", "--log-format", "json"}
 

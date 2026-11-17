@@ -15,14 +15,14 @@ import (
 	"github.com/hasankaradmir/karga/internal/adapters/fakeruntime"
 	"github.com/hasankaradmir/karga/internal/adapters/sqlite"
 	"github.com/hasankaradmir/karga/internal/application/deployment"
-	"github.com/hasankaradmir/karga/internal/application/packages"
-	"github.com/hasankaradmir/karga/internal/domain/release"
-	"github.com/hasankaradmir/karga/internal/domain/resource"
+	"github.com/hasankaradmir/karga-sdk/packages"
+	"github.com/hasankaradmir/karga-sdk/release"
+	"github.com/hasankaradmir/karga-sdk/resource"
 	"github.com/hasankaradmir/karga/internal/ports"
 	"github.com/hasankaradmir/karga/internal/ports/runtimetest"
 )
 
-const redisPkg = "../../../examples/redis"
+const redisPkg = "../../../tests/testdata/redis"
 
 // Tests run without Envoy: proxy and gateway configuration is written, readiness is assumed.
 func init() { deployment.Proxies = fakeruntime.Proxies{} }
@@ -285,7 +285,7 @@ func TestUninstall(t *testing.T) {
 func TestManifestAndStatus(t *testing.T) {
 	e := newEnv(t)
 	ctx := context.Background()
-	_, err := e.svc.Install(ctx, InstallRequest{CommonOptions: common(), Name: "db", Package: "../../../examples/postgres",
+	_, err := e.svc.Install(ctx, InstallRequest{CommonOptions: common(), Name: "db", Package: "../../../tests/testdata/postgres",
 		Values: packages.Options{Sets: []string{"service.enabled=false", "database.password=hunter2"}}})
 	if err != nil {
 		t.Fatal(err)
@@ -394,7 +394,7 @@ func TestReconcileBeforePlan(t *testing.T) {
 	}
 }
 
-const pgPkg = "../../../examples/postgres"
+const pgPkg = "../../../tests/testdata/postgres"
 
 func TestWriteOnlyValuesNotStored(t *testing.T) {
 	e := newEnv(t)

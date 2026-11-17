@@ -3,7 +3,7 @@ package ports
 import (
 	"context"
 
-	"github.com/hasankaradmir/karga/internal/domain/release"
+	"github.com/hasankaradmir/karga-sdk/release"
 )
 
 // StateStore persists releases, revisions, applied resources and operations.
