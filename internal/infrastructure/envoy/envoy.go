@@ -370,28 +370,42 @@ func (a *Admin) hosts(ctx context.Context) (map[string][]hostStatus, error) {
 // name of a DNS cluster, or "ip:port" of a static one) and is used by an active listener, so a
 // listener change written with it has been applied too.
 func (a *Admin) Ready(ctx context.Context, want map[string]string) (bool, error) {
+	why, err := a.notReady(ctx, want)
+	return why == "" && err == nil, err
+}
+
+// notReady says why want is not served yet ("" when it is).
+func (a *Admin) notReady(ctx context.Context, want map[string]string) (string, error) {
 	hosts, err := a.hosts(ctx)
 	if err != nil {
-		return false, err
+		return "", err
 	}
 	used, err := a.listenerClusters(ctx)
 	if err != nil {
-		return false, err
+		return "", err
 	}
-	for cluster := range want {
-		if !used[cluster] {
-			return false, nil
+	for _, cluster := range slices.Sorted(maps.Keys(want)) {
+		endpoint := want[cluster]
+		hs, known := hosts[cluster]
+		switch {
+		case !known:
+			return fmt.Sprintf("cluster %s is not loaded", cluster), nil
+		case !used[cluster]:
+			return fmt.Sprintf("no active listener uses cluster %s", cluster), nil
+		}
+		i := slices.IndexFunc(hs, func(h hostStatus) bool { return h.Hostname == endpoint || h.Address.String() == endpoint })
+		switch {
+		case i < 0:
+			var have []string
+			for _, h := range hs {
+				have = append(have, h.Address.String())
+			}
+			return fmt.Sprintf("cluster %s routes to %v, not %s", cluster, have, endpoint), nil
+		case !hs[i].healthy():
+			return fmt.Sprintf("cluster %s: %s is not healthy (%v)", cluster, endpoint, hs[i].HealthStatus), nil
 		}
 	}
-	for cluster, endpoint := range want {
-		ok := slices.ContainsFunc(hosts[cluster], func(h hostStatus) bool {
-			return (h.Hostname == endpoint || h.Address.String() == endpoint) && h.healthy()
-		})
-		if !ok {
-			return false, nil
-		}
-	}
-	return true, nil
+	return "", nil
 }
 
 // listenerClusters returns the clusters the active listeners route to.
@@ -459,12 +473,13 @@ func (a *Admin) OldConnections(ctx context.Context, clusters []string) (int, err
 func (a *Admin) WaitReady(ctx context.Context, want map[string]string, timeout time.Duration) error {
 	deadline := time.Now().Add(timeout)
 	var lastErr error
+	why := ""
 	for time.Now().Before(deadline) {
-		ok, err := a.Ready(ctx, want)
-		if ok {
+		w, err := a.notReady(ctx, want)
+		if w == "" && err == nil {
 			return nil
 		}
-		lastErr = err
+		lastErr, why = err, w
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
@@ -474,7 +489,7 @@ func (a *Admin) WaitReady(ctx context.Context, want map[string]string, timeout t
 	if lastErr != nil {
 		return fmt.Errorf("proxy does not route to %s after %s: %w", describe(want), timeout, lastErr)
 	}
-	return fmt.Errorf("proxy does not route to a healthy %s after %s", describe(want), timeout)
+	return fmt.Errorf("proxy does not route to a healthy %s after %s: %s", describe(want), timeout, why)
 }
 
 // WaitDrained polls OldConnections until it is 0 or timeout passes; it reports whether it drained.

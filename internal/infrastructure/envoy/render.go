@@ -250,8 +250,12 @@ func (c Config) ClustersJSON() ([]byte, error) {
 			},
 			// A new cluster only takes traffic once its endpoint passed this check (warming).
 			HealthChecks: []*corev3.HealthCheck{{
-				Timeout:            durationpb.New(time.Second),
-				Interval:           durationpb.New(500 * time.Millisecond),
+				Timeout:  durationpb.New(time.Second),
+				Interval: durationpb.New(500 * time.Millisecond),
+				// Without these Envoy checks a cluster that has no traffic yet, or a host that failed,
+				// only every 60s: a new backend whose first check failed stayed out for a minute.
+				NoTrafficInterval:  durationpb.New(500 * time.Millisecond),
+				UnhealthyInterval:  durationpb.New(500 * time.Millisecond),
 				UnhealthyThreshold: wrapperspb.UInt32(1),
 				HealthyThreshold:   wrapperspb.UInt32(1),
 				HealthChecker:      &corev3.HealthCheck_TcpHealthCheck_{TcpHealthCheck: &corev3.HealthCheck_TcpHealthCheck{}},
