@@ -44,7 +44,7 @@ karga-server first, on the Linux host it manages (a systemd service; see its
 [README](https://github.com/hasankaradmir/karga-server#install)):
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga-server/main/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga-server/master/scripts/install.sh | sh
 sudo usermod -aG karga $USER      # then log in again: members of the karga group may use karga
 ```
 
@@ -62,7 +62,7 @@ speak the same API version (`karga version` shows both).
 
 From source: `make build` produces `bin/karga`. Shell completion: `karga completion
 bash|zsh|fish`. The examples below use the packages in karga-sdk's
-[`examples/`](https://github.com/hasankaradmir/karga-sdk/tree/main/examples).
+[`examples/`](https://github.com/hasankaradmir/karga-sdk/tree/master/examples).
 
 ## Quickstart
 
@@ -286,7 +286,7 @@ section as notes; publish it to make it the latest release.
 Documentation:
 
 - [USAGE.md](USAGE.md): how to use karga, scenario by scenario.
-- karga-server's [docs/](https://github.com/hasankaradmir/karga-server/tree/main/docs): how karga
+- karga-server's [docs/](https://github.com/hasankaradmir/karga-server/tree/master/docs): how karga
   works, the roadmap and architecture decisions.
 
 ## License

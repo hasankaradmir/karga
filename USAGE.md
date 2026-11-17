@@ -2,7 +2,7 @@
 
 This guide walks through karga by task: what to run, what you will see, and what to do when
 something goes wrong. The command list is in the [README](README.md); how karga works inside is in
-karga-server's [docs/design.md](https://github.com/hasankaradmir/karga-server/blob/main/docs/design.md). Outputs below are from real runs, shortened; client addresses are
+karga-server's [docs/design.md](https://github.com/hasankaradmir/karga-server/blob/master/docs/design.md). Outputs below are from real runs, shortened; client addresses are
 replaced by documentation addresses.
 
 - [1. Concepts in five minutes](#1-concepts-in-five-minutes)
@@ -54,7 +54,7 @@ karga-server and the CLI are released from their own repositories
 Each install script checks the archive against the release checksums:
 
 ```console
-$ curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga-server/main/scripts/install.sh | sh
+$ curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga-server/master/scripts/install.sh | sh
 karga-server v0.1.0 installed to /usr/local/bin/karga-server
 karga-server is running; add users to the karga group to use karga: sudo usermod -aG karga $USER
 $ curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga/master/scripts/install.sh | sh
@@ -68,7 +68,7 @@ from the releases pages, then install `karga-server`, `deploy/systemd/karga-serv
 `karga` from the archives.
 
 The example packages used below (`examples/redis`, `examples/postgres`) are in
-[karga-sdk](https://github.com/hasankaradmir/karga-sdk/tree/main/examples).
+[karga-sdk](https://github.com/hasankaradmir/karga-sdk/tree/master/examples).
 
 ### The server
 
@@ -860,4 +860,4 @@ db-postgres-data
 - Packages come from local directories or archives; there is no repository or dependency support.
 - There are no lifecycle tasks (e.g. running migrations before an upgrade) yet.
 
-The full list, with what is planned, is in karga-server's [docs/roadmap.md](https://github.com/hasankaradmir/karga-server/blob/main/docs/roadmap.md).
+The full list, with what is planned, is in karga-server's [docs/roadmap.md](https://github.com/hasankaradmir/karga-server/blob/master/docs/roadmap.md).
