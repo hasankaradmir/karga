@@ -28,10 +28,12 @@ repositories/registries, package dependencies, a daemon that reconciles drift, W
 
 ## Install
 
-From a release (Linux and macOS, amd64 and arm64), checked against the release checksums:
+From a release (Linux and macOS, amd64 and arm64), checked against the release checksums. The
+repository is private, so the script downloads with an authenticated GitHub CLI (`gh auth login`) or
+`GITHUB_TOKEN`:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga/master/scripts/install.sh | sh
+gh api repos/hasankaradmir/karga/contents/scripts/install.sh -H "Accept: application/vnd.github.raw" | sh
 # KARGA_VERSION=v0.1.0 picks a version, KARGA_BIN_DIR another directory (default /usr/local/bin)
 ```
 
@@ -305,8 +307,8 @@ and provisions the VM on first use (`KARGA_VM` names it) and runs `TARGETS` ther
 passwordless sudo).
 
 Releases: add the version to `CHANGELOG.md`, then `git tag vX.Y.Z && git push --tags`; the release
-workflow builds the binaries with GoReleaser and publishes a draft GitHub release with the
-changelog section as notes. `goreleaser release --snapshot --clean` builds the same locally.
+workflow builds the binaries with GoReleaser and creates a draft GitHub release with the changelog
+section as notes; publish it to make it the latest release. `goreleaser release --snapshot --clean` builds the same locally.
 
 Architecture decisions are in [`docs/adr/`](docs/adr/), with the implementation decisions in
 [`docs/adr/decisions.md`](docs/adr/decisions.md).
