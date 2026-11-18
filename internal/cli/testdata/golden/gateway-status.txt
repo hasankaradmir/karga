@@ -1,0 +1,6 @@
+Gateway:    running, ready (Envoy )
+Listen:     
+Access log: off
+
+LISTENER   ROUTE              RELEASE  SERVICE  UPSTREAM
+https:443  shop.example.com/  r        web:80   127.0.0.1:41000

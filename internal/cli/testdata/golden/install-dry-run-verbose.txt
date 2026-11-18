@@ -1,0 +1,15 @@
+Deployment Plan
+
+Release: r
+Revision: 1 -> 2
+
+Changes:
+
+  WORKLOAD web (replace)
+    spec.image: "nginx:1" -> "nginx:2"
+
+  VOLUME cache
+    delete (its data is deleted)
+
+  NETWORK net
+    unchanged

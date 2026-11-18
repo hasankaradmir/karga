@@ -1,0 +1,6 @@
+Release "r" upgraded (revision 2).
+  update workload web (replace)
+  delete volume cache (its data is deleted)
+
+NOTES:
+r (revision 2) runs nginx:2.
