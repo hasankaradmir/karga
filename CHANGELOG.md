@@ -6,6 +6,9 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Added
+- `make dist` builds the release archives and `checksums.txt` without a release; `install.sh`
+  installs them from `file://`. USAGE: requirements, installing from source, and a new section 15
+  that puts an API and its database online on a domain.
 - `lint` and `template` know `environmentFrom` (workload variables from Secrets); USAGE §9.
 
 ## [0.1.1] - 2026-11-18

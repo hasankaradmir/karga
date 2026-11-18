@@ -60,7 +60,9 @@ Without the server every command but `create`, `lint`, `template`, `show`, `comp
 `version` stops with `karga-server is not running`. The CLI and the server work together when they
 speak the same API version (`karga version` shows both).
 
-From source: `make build` produces `bin/karga`. Shell completion: `karga completion
+Without a published release, `make dist` in both repositories builds the release archives and the
+same scripts install them ([USAGE.md, "From source"](USAGE.md#from-source)); `make build` alone
+produces `bin/karga`. Shell completion: `karga completion
 bash|zsh|fish`. The examples below use the packages in karga-sdk's
 [`examples/`](https://github.com/hasankaradmir/karga-sdk/tree/master/examples).
 

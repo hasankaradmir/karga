@@ -19,7 +19,8 @@ replaced by documentation addresses.
 - [12. Back up and move a host](#12-back-up-and-move-a-host)
 - [13. Write a package](#13-write-a-package)
 - [14. Uninstall and clean up](#14-uninstall-and-clean-up)
-- [15. Limits to know](#15-limits-to-know)
+- [15. Put your own application online](#15-put-your-own-application-online)
+- [16. Limits to know](#16-limits-to-know)
 
 ## 1. Concepts in five minutes
 
@@ -47,6 +48,14 @@ Where things live:
 
 ## 2. Install karga
 
+### Requirements
+
+- karga-server: Linux with systemd and Docker Engine, rootful (the default; not rootless Docker,
+  not Docker Desktop): install it first ([docs.docker.com/engine/install](https://docs.docker.com/engine/install/)),
+  so that the `docker` group exists. `curl` for the install scripts.
+- The CLI: Linux or macOS. On macOS it writes, lints and renders packages; to manage a server, run
+  karga on its host (`ssh host karga ...`).
+
 ### From a release
 
 karga-server and the CLI are released from their own repositories
@@ -58,7 +67,7 @@ $ curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga-server/master
 karga-server v0.1.0 installed to /usr/local/bin/karga-server
 karga-server is running; add users to the karga group to use karga: sudo usermod -aG karga $USER
 $ curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga-cli/master/scripts/install.sh | sh
-karga v0.1.0 installed to /usr/local/bin/karga
+karga v0.1.1 installed to /usr/local/bin/karga
 $ sudo usermod -aG karga $USER          # log in again afterwards
 ```
 
@@ -66,6 +75,33 @@ $ sudo usermod -aG karga $USER          # log in again afterwards
 scripts: download `karga-server_0.1.0_linux_amd64.tar.gz` and `karga_0.1.0_linux_amd64.tar.gz`
 from the releases pages, then install `karga-server`, `deploy/systemd/karga-server.service` and
 `karga` from the archives.
+
+### From source
+
+Without a published release, build the same archives from the repositories and install them with
+the same scripts. Build where Go 1.27 is installed (the server host, or another machine), then
+run the scripts on the server host:
+
+```console
+$ git clone https://github.com/hasankaradmir/karga-server && git clone https://github.com/hasankaradmir/karga-cli
+$ make -C karga-server dist
+install: KARGA_VERSION=v0.1.0-5-g1a2b3c4 KARGA_DOWNLOAD_URL=file:///home/me/karga-server/dist KARGA_SKIP_SIGNATURE=1 sh scripts/install.sh
+$ make -C karga-cli dist
+install: KARGA_VERSION=v0.1.1-3-g5d6e7f8 KARGA_DOWNLOAD_URL=file:///home/me/karga-cli/dist KARGA_SKIP_SIGNATURE=1 sh scripts/install.sh
+
+$ cd karga-server && KARGA_VERSION=v0.1.0-5-g1a2b3c4 KARGA_DOWNLOAD_URL=file://$PWD/dist KARGA_SKIP_SIGNATURE=1 sh scripts/install.sh
+karga-server v0.1.0-5-g1a2b3c4 installed to /usr/local/bin/karga-server
+karga-server is running; add users to the karga group to use karga: sudo usermod -aG karga $USER
+$ cd ../karga-cli && KARGA_VERSION=v0.1.1-3-g5d6e7f8 KARGA_DOWNLOAD_URL=file://$PWD/dist KARGA_SKIP_SIGNATURE=1 sh scripts/install.sh
+karga v0.1.1-3-g5d6e7f8 installed to /usr/local/bin/karga
+$ sudo usermod -aG karga $USER          # log in again afterwards
+```
+
+`make dist` prints the install line with its version (from `git describe`). Built elsewhere, copy
+`dist/` and `scripts/install.sh` to the server host and run the line there with that path. The
+archives have the release names and contents, `checksums.txt` is checked, and there is no
+signature to verify (`KARGA_SKIP_SIGNATURE=1`). Running the script again with a newer build
+upgrades in place; the server restarts only if its binary changed.
 
 The example packages used below (`examples/redis`, `examples/postgres`) are in
 [karga-sdk](https://github.com/hasankaradmir/karga-sdk/tree/master/examples).
@@ -75,7 +111,7 @@ The example packages used below (`examples/redis`, `examples/postgres`) are in
 ```console
 $ systemctl status karga-server
 $ karga version
-karga v0.1.0 (commit ..., go1.27.4, API 2.0)
+karga v0.1.1 (commit 55fb34d8c63c, go1.27.4, API 2.0)
 karga-server v0.1.0 (API 2.0)
 $ journalctl -u karga-server -f          # the server's log
 ```
@@ -104,13 +140,13 @@ own repairs and resumes).
 Operations run in the server, not in the CLI. Ctrl-C (or a lost connection) stops only the
 progress output: the operation goes on to its end, and `karga events -f <release>` follows it. When
 the server stops (`systemctl stop`, a reboot) it waits up to 5 minutes for running operations. If
-it is killed in the middle of one, it finishes the operation when it starts again: an install,
+it is killed in the middle of one, it finishes the operation when it starts again, with the
+options it was given (`--delete-volumes`, `--strategy`, `--timeout`, `--keep-history`): an install,
 upgrade or rollback deploys its revision again (steps already done are skipped, no new revision),
-an uninstall runs again keeping volumes and history, and other operations (volume backup or
-restore, a repair) are aborted. `karga events` shows the interrupted operation as `aborted` and
+an uninstall runs again, and other operations (volume backup or restore, a repair) are aborted. `karga events` shows the interrupted operation as `aborted` and
 the one that finished it as `resume`.
 
-### From source
+### Development server
 
 ```console
 $ make build        # in each checkout, needs Go 1.27: bin/karga (here), bin/karga-server (karga-server)
@@ -214,6 +250,9 @@ follows the logs; `karga status demo --watch` refreshes every two seconds.
 
 Installing the same package with the same values again does nothing: `Release "demo" is already
 installed with the same package and values`.
+
+[Section 15](#15-put-your-own-application-online) puts a complete application (an API and its
+database, on a domain) online.
 
 ## 4. Configure with values
 
@@ -906,7 +945,292 @@ db-postgres-data
 - The release proxy goes with the release; the gateway goes when nothing is exposed anymore. The
   gateway's listeners and listen addresses stay: they are the host's settings.
 
-## 15. Limits to know
+## 15. Put your own application online
+
+This section takes one application from nothing to a domain: an HTTP API
+([PostgREST](https://postgrest.org), a public image that reads its database address from the
+environment) and its PostgreSQL database, on one host. Replace the API's image with your own; the
+rest stays the same.
+
+### The package
+
+```
+notes/
+  Package.yaml
+  values.yaml
+  values.schema.json
+  templates/notes.yaml
+  NOTES.txt
+```
+
+`Package.yaml`:
+
+```yaml
+apiVersion: karga.io/v1alpha1
+name: notes
+version: 1.0.0
+description: A REST API (PostgREST) over PostgreSQL
+runtime:
+  supported: [docker]
+```
+
+`values.yaml` holds what changes between installs; the password has no default:
+
+```yaml
+# The application's image.
+image: postgrest/postgrest:v12.2.3
+# Where it is served: a host name on a gateway listener (karga gateway listener list).
+host: notes.example.com
+listener: web
+database:
+  # Required: --set database.password=... or a values file kept out of git.
+  password: ""
+```
+
+`values.schema.json` checks them and marks the password `writeOnly`, so karga never stores or
+shows it (section 9):
+
+```json
+{
+  "type": "object",
+  "properties": {
+    "image": {"type": "string", "minLength": 1},
+    "host": {"type": "string", "minLength": 1},
+    "listener": {"type": "string", "minLength": 1},
+    "database": {
+      "type": "object",
+      "properties": {"password": {"type": "string", "minLength": 8, "writeOnly": true}},
+      "required": ["password"]
+    }
+  },
+  "required": ["image", "host", "listener", "database"]
+}
+```
+
+`templates/notes.yaml`:
+
+```yaml
+apiVersion: karga.io/v1alpha1
+kind: Network
+metadata: {name: backend}
+---
+apiVersion: karga.io/v1alpha1
+kind: Secret
+metadata: {name: db}
+spec:
+  values:
+    password: {{ .Values.database.password | quote }}
+    uri: "postgres://app:{{ .Values.database.password | urlquery }}@postgres:5432/app"
+---
+apiVersion: karga.io/v1alpha1
+kind: Volume
+metadata: {name: db-data}
+spec: {retention: retain}
+---
+apiVersion: karga.io/v1alpha1
+kind: Workload
+metadata: {name: postgres}
+spec:
+  image: postgres:17
+  stopTimeout: 60s
+  environment:
+    POSTGRES_DB: app
+    POSTGRES_USER: app
+    POSTGRES_PASSWORD_FILE: /run/secrets/db/password
+  networks: [backend]
+  ports:
+    - {name: postgres, containerPort: 5432}
+  mounts:
+    - {secret: db, mountPath: /run/secrets/db}
+    - {volume: db-data, mountPath: /var/lib/postgresql/data}
+  healthCheck:
+    type: exec
+    command: [pg_isready, -U, app, -d, app]
+    interval: 5s
+    timeout: 5s
+    retries: 5
+---
+apiVersion: karga.io/v1alpha1
+kind: Service
+metadata: {name: postgres}
+spec:
+  workload: postgres
+  ports:
+    - {name: postgres, port: 5432}
+---
+apiVersion: karga.io/v1alpha1
+kind: Workload
+metadata: {name: api}
+spec:
+  image: {{ .Values.image | quote }}
+  dependsOn: [postgres]
+  networks: [backend]
+  environment:
+    PGRST_DB_ANON_ROLE: app
+    PGRST_DB_SCHEMAS: public
+    PGRST_ADMIN_SERVER_PORT: "3001"
+  environmentFrom:
+    - {name: PGRST_DB_URI, secret: db, key: uri}
+  ports:
+    - {name: http, containerPort: 3000}
+    - {name: admin, containerPort: 3001}
+  healthCheck:
+    type: http
+    port: 3001
+    path: /ready
+    interval: 5s
+    timeout: 2s
+    retries: 3
+  updateStrategy:
+    type: replace
+    drainTimeout: 10s
+---
+apiVersion: karga.io/v1alpha1
+kind: Service
+metadata: {name: api}
+spec:
+  workload: api
+  ports:
+    - {name: http, port: 80, targetPort: http}
+  expose:
+    - {port: http, listener: {{ .Values.listener }}, host: {{ .Values.host }}}
+```
+
+What it does:
+
+- **Secret `db`** holds the password and the connection URI built from it. Postgres reads the
+  password from a mounted file (`POSTGRES_PASSWORD_FILE`); the API takes the URI as a variable
+  (`environmentFrom`), because it reads it only from the environment.
+- **Volume `db-data`** keeps the database across upgrades and uninstalls (`retention: retain`).
+- **Service `postgres`** is how the API reaches the database (`postgres:5432` in the URI);
+  nothing outside the release can reach it.
+- **Workload `api`** starts only once Postgres is ready (`dependsOn`). Its health check is karga's
+  (`type: http`, the image has no shell), so upgrades replace it without downtime (section 7).
+- **Service `api`** exposes it on the `web` listener for the host name in `host`.
+- `NOTES.txt` is printed after each install and upgrade:
+  `{{ .Release.Name }} serves http://{{ .Values.host }}/ through the gateway listener {{ .Values.listener }}.`
+
+### The host
+
+Once per host, as a member of the `karga` group:
+
+```console
+$ karga gateway listener list
+NAME       PORT  PROTOCOL  SERVICES
+web        80    http
+websecure  443   https
+$ karga gateway set listen 0.0.0.0        # every interface; the default 127.0.0.1 is local only
+```
+
+Point the domain's DNS record (`A` or `AAAA`) at the host and let port 80 (and 443 for https)
+through its firewall.
+
+### Install
+
+Keep the password in a values file outside the package and outside git:
+
+```console
+$ cat > notes-secrets.yaml <<'YAML'
+database:
+  password: "correct-horse-battery"
+YAML
+$ chmod 600 notes-secrets.yaml
+
+$ karga lint notes -f notes-secrets.yaml
+1 package(s) linted, 0 failed
+$ karga install notes notes -f notes-secrets.yaml --dry-run
+Deployment Plan
+
+Release:  notes
+Revision: 1
+
+  + NETWORK backend
+  + VOLUME db-data
+  + SECRET db
+  + WORKLOAD postgres
+  + SERVICE postgres
+  + WORKLOAD api
+  + SERVICE api
+  + PROXY proxy
+
+8 to create, 0 to update, 0 to delete, 0 unchanged.
+
+$ karga install notes notes -f notes-secrets.yaml
+[  0s] workload postgres: image postgres:17 (if-not-present)
+[  0s] workload api: image postgrest/postgrest:v12.2.3 (if-not-present)
+[ 25s] workload postgres: creating notes-postgres
+[ 28s] workload notes-postgres: waiting for notes-postgres to be ready (health starting, 2s)
+[ 31s] workload api: waiting for postgres
+[ 31s] workload api: creating notes-api
+[ 33s] workload notes-api: waiting for notes-api to be ready (GET /ready: 503 Service Unavailable, 2s)
+[ 36s] gateway karga-gateway: updating the host gateway
+Release "notes" installed (revision 1).
+  ...
+
+NOTES:
+notes serves http://notes.example.com/ through the gateway listener web.
+
+$ karga status notes
+KIND      NAME      RUNTIME NAME       REVISION  DESIRED  ACTUAL   RESTARTS  HEALTH/BACKEND
+Network   backend   notes-backend      1         applied  present
+Proxy     proxy     notes-karga-proxy  1         applied  running  0         -> karga-api-r1, karga-postgres-r1
+Secret    db        notes-db           1         applied  file
+Service   api       notes-karga-proxy  1         applied  routed             -> karga-api-r1
+Service   postgres  notes-karga-proxy  1         applied  routed             -> karga-postgres-r1
+Volume    db-data   notes-db-data      1         applied  present
+Workload  api       notes-api          1         applied  running  0         healthy
+Workload  postgres  notes-postgres     1         applied  running  0         healthy
+```
+
+Create a table and use the API (PostgREST reloads its schema on `NOTIFY pgrst`):
+
+```console
+$ karga exec notes postgres -- psql -U app -d app -c "create table notes (id serial primary key, body text not null); notify pgrst, 'reload schema';"
+CREATE TABLE
+NOTIFY
+$ curl -s -H "Content-Type: application/json" -d '{"body":"hello"}' -w "%{http_code}\n" http://notes.example.com/notes
+201
+$ curl -s http://notes.example.com/notes
+[{"id":1,"body":"hello"}]
+```
+
+### Upgrade, look back, roll back
+
+Upgrade with the same values file and what changes; read the plan first:
+
+```console
+$ karga upgrade notes notes -f notes-secrets.yaml --set image=postgrest/postgrest:v12.2.8 --dry-run
+Release:  notes
+Revision: 1 -> 2
+
+  ~ WORKLOAD api (replace)
+
+0 to create, 1 to update, 0 to delete, 7 unchanged. --verbose shows the changed fields.
+$ karga upgrade notes notes -f notes-secrets.yaml --set image=postgrest/postgrest:v12.2.8
+Release "notes" upgraded (revision 2).
+  update workload api (replace)
+
+$ karga history notes
+REVISION  STATUS    PACKAGE  VERSION  CREATED              DESCRIPTION
+1         deployed  notes    1.0.0    2026-11-18 12:00:42  Install complete
+2         deployed  notes    1.0.0    2026-11-18 12:02:36  Upgrade complete
+$ karga rollback notes 1
+Release "notes" rolled back (revision 3).
+  update workload api (replace)
+```
+
+The data stays: the volume is not part of the change, and the API is replaced next to the old one.
+A new package version (a new `version` in `Package.yaml`) is upgraded the same way.
+
+### Day to day
+
+- `karga status notes` (exit code 6 when something is not as declared) and `karga logs notes -f`.
+- karga-server repairs what goes missing (section 11, "Repairs").
+- Back up the database volume (section 8) and `$KARGA_HOME` (section 12).
+- HTTPS: add an exposure on `websecure` with a certificate Secret (section 6, "TLS").
+- Remove it all: `karga uninstall notes` keeps the volume; `--delete-volumes` removes it too.
+
+## 16. Limits to know
 
 - karga needs Linux with a local Docker daemon.
 - Services carry TCP only; a release's Service ports must be distinct numbers.
@@ -917,5 +1241,11 @@ db-postgres-data
 - Images are pulled anonymously; private registries are not supported yet.
 - Packages come from local directories or archives; there is no repository or dependency support.
 - There are no lifecycle tasks (e.g. running migrations before an upgrade) yet.
+- A workload is one container; there are no replicas.
+- An upgrade that recreates a workload stops the old container first: if the new one does not get
+  ready, the workload is down (stopped, so its logs can be read) until you upgrade again or
+  `karga rollback`. The `replace` strategy avoids this where it applies (section 7).
+- TLS certificates come from Secrets: you get and renew them yourself (renew by upgrading with the
+  new one); there is no ACME.
 
 The full list, with what is planned, is in karga-server's [docs/roadmap.md](https://github.com/hasankaradmir/karga-server/blob/master/docs/roadmap.md).
