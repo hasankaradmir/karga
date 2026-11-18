@@ -40,21 +40,14 @@ type app struct {
 	cancel         context.CancelFunc
 
 	log *slog.Logger
-
-	// backend returns karga-server's client; tests replace it.
-	backend func() api.Remote
 }
+
+// backend is karga-server's client, on --socket (tests serve a fake there).
+func (a *app) backend() api.Remote { return api.NewClient(a.socket) }
 
 // NewRootCmd builds the karga command tree.
 func NewRootCmd(stdout, stderr io.Writer) *cobra.Command {
-	return newRootCmd(stdout, stderr, nil)
-}
-
-func newRootCmd(stdout, stderr io.Writer, backend func() api.Remote) *cobra.Command {
-	a := &app{stdout: stdout, stderr: stderr, backend: backend}
-	if a.backend == nil {
-		a.backend = func() api.Remote { return api.NewClient(a.socket) }
-	}
+	a := &app{stdout: stdout, stderr: stderr}
 
 	root := &cobra.Command{
 		Use:           "karga",

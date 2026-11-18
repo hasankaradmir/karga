@@ -235,7 +235,9 @@ func newCLIEnv(t *testing.T) *cliEnv {
 }
 
 func (e *cliEnv) root(stdout, stderr io.Writer) *cobra.Command {
-	return newRootCmd(stdout, stderr, func() api.Remote { return api.NewClient(e.socket) })
+	cmd := NewRootCmd(stdout, stderr)
+	_ = cmd.PersistentFlags().Set("socket", e.socket)
+	return cmd
 }
 
 func (e *cliEnv) run(args ...string) (string, error) {
