@@ -3,9 +3,9 @@
 All notable changes are listed here, newest first ([Keep a Changelog](https://keepachangelog.com),
 [Semantic Versioning](https://semver.org)).
 
-## [Unreleased]
+## [0.1.1] - 2026-11-18
 
-First release.
+First release (the v0.1.0 tag has no release: its release workflow failed).
 
 ### Repositories
 - karga is split into three repositories with their history: the karga CLI (this one),
