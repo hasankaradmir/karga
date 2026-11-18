@@ -15,6 +15,8 @@ First release.
 - The CLI's tests run against a fake karga-server; the server's tests cover what it does.
 
 ### Changed
+- `karga state backup` is gone: karga-server keeps its state in files, and a backup is a copy of
+  its `$KARGA_HOME` (USAGE.md, "Back up and move a host").
 - The module is `github.com/hasankaradmir/karga-cli` (the repository is karga-cli); the binary is
   still `karga`.
 - API 2.0: works with any karga-server of the same major API version.
@@ -78,7 +80,7 @@ First release.
   stored), `karga create` to start one, `lint`, `template`, notes (`NOTES.txt`).
 - Resources: Workload, Service, Volume, Network, Config, Secret.
 - Releases: install, upgrade (`--reuse-values`, `--install`), rollback, uninstall; immutable
-  revisions in SQLite; `history`, `diff`, `status --watch`, `get values|manifest|notes`.
+  revisions in karga-server's state; `history`, `diff`, `status --watch`, `get values|manifest|notes`.
 - Plans as a summary (`--verbose` for fields) and live progress while applying.
 - An upgrade recreates containers, networks and volumes removed outside karga; an install that
   fails before creating anything leaves no release behind.
@@ -97,7 +99,7 @@ First release.
 - `tcp`/`http` health checks need no tool in the image.
 
 ### Operations
-- `karga logs`, `karga exec`, `karga gateway status`, `karga state backup`,
+- `karga logs`, `karga exec`, `karga gateway status`,
   `karga volume backup|restore`, shell completion.
 - Memory (without extra swap), CPU and process limits; OOM kills and restarts in `status`;
   container log rotation; `no-new-privileges` by default and a `security` block.

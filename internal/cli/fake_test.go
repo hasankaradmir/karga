@@ -162,11 +162,6 @@ func (f *fake) RestoreVolume(_ context.Context, _ api.VolumeRestoreRequest, r io
 	return f.err
 }
 
-func (f *fake) BackupState(_ context.Context, w io.Writer) error {
-	_, _ = io.WriteString(w, "SQLite format 3")
-	return f.err
-}
-
 func (f *fake) Reconcile(context.Context, string, bool) (*api.ReconcileResult, error) {
 	f.call("reconcile")
 	return f.recon, f.err

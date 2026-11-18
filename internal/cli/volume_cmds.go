@@ -11,32 +11,6 @@ import (
 	"github.com/hasankaradmir/karga-sdk/api"
 )
 
-func newStateCmd(a *app) *cobra.Command {
-	cmd := &cobra.Command{
-		Use:   "state",
-		Short: "Manage karga's state database",
-	}
-	cmd.AddCommand(&cobra.Command{
-		Use:   "backup <file>",
-		Short: "Write a consistent copy of the state database (safe while karga runs)",
-		Long: "Write a consistent copy of the server's state database to <file> (mode 0600, must not exist).\n" +
-			"To restore, stop karga-server and copy the file over karga.db in its KARGA_HOME; proxy and\n" +
-			"gateway configuration is rebuilt from the state on the next upgrade.",
-		Args: cobra.ExactArgs(1),
-		RunE: func(cmd *cobra.Command, args []string) error {
-			s := a.backend()
-			if err := writeNew(args[0], func(w io.Writer) error { return s.BackupState(cmd.Context(), w) }); err != nil {
-				return err
-			}
-			return a.report(map[string]any{"file": args[0]}, "state written to %s\n"+
-				"The backup does not hold state.key and gateway.json from the server's KARGA_HOME (default\n"+
-				"/var/lib/karga): copy them too and keep them safe. Restored without state.key, each release\n"+
-				"applies its Secrets once more on its next upgrade.\n", args[0])
-		},
-	})
-	return cmd
-}
-
 func newVolumeCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{Use: "volume", Short: "Back up and restore a release's volumes"}
 	var backup api.VolumeBackupRequest

@@ -4,7 +4,7 @@ Package management for containers on a **single host**, without Kubernetes.
 
 karga renders a versioned package (templates + values + schema) into its own small resource model
 (Workload, Service, Volume, Network, Config, Secret), applies it to Docker, and keeps every install,
-upgrade and rollback as an immutable revision in a local SQLite database.
+upgrade and rollback as an immutable revision in karga-server's state.
 
 karga is two programs: **[karga-server](https://github.com/hasankaradmir/karga-server)** owns the
 state, talks to Docker and keeps every release running as declared (it repairs removed, stopped,
@@ -118,7 +118,6 @@ logs). The state lives in karga-server's `KARGA_HOME` (`/var/lib/karga` for the 
 | `gateway listener list\|add\|remove` | The ports Services can be exposed on: `add <name> --port <port> --protocol tcp\|http\|https`; a listener in use cannot be removed |
 | `gateway set listen <ip>[,<ip>]` | Where every listener binds (default `127.0.0.1`; `0.0.0.0` is every interface) |
 | `gateway set access-log on\|off` | Log every request and connection the gateway handles (off by default) |
-| `state backup <file>` | Consistent copy of the state database, safe while karga runs |
 | `volume backup\|restore <release> <volume> <file>` | Copy a volume's files to/from a gzipped tar; `--stop` for a consistent backup, `--from-other-volume` to restore another volume's backup |
 | `completion bash\|zsh\|fish\|powershell` | Shell completion |
 
@@ -151,7 +150,7 @@ apiVersion: karga.io/v1alpha1
 name: redis
 version: 1.0.0
 runtime:
-  supported: [docker, podman]
+  supported: [docker]
 ```
 
 A package can also be a `.tgz` with the directory at its root.
@@ -270,10 +269,10 @@ migrations. Changing a Network or Volume spec in an upgrade is refused.
 
 ## State and security
 
-karga-server keeps the state (`$KARGA_HOME/karga.db`, SQLite) and runs as an unprivileged user;
-access to its socket is as powerful as access to Docker. Backups (`karga state backup`, `karga
-volume backup|restore`), the state key and the security model are described in karga-server's
-[README](https://github.com/hasankaradmir/karga-server#state).
+karga-server keeps the state (YAML files under `$KARGA_HOME/state`) and runs as an unprivileged
+user; access to its socket is as powerful as access to Docker. Backups (a copy of `$KARGA_HOME`,
+`karga volume backup|restore`), the state key and the security model are described in
+karga-server's [README](https://github.com/hasankaradmir/karga-server#state).
 
 ## Development
 

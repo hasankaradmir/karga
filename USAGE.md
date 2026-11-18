@@ -41,9 +41,9 @@ Where things live:
   client on `/run/karga/karga.sock`; it sends packages and values files over the socket and runs
   nothing itself.
 - Docker runs the containers, the gateway and the release proxies, and restarts them.
-- The server's `KARGA_HOME` (`/var/lib/karga` for the service) holds the state database `karga.db`,
-  the key `state.key`, rendered Config and Secret files, the gateway settings `gateway.json` and the
-  Envoy configuration. Only the `karga` user can read it (mode 0700).
+- The server's `KARGA_HOME` (`/var/lib/karga` for the service) holds the state (YAML files under
+  `state/`), the key `state.key`, rendered Config and Secret files, the gateway settings
+  `gateway.yaml` and the Envoy configuration. Only the `karga` user can read it (mode 0700).
 
 ## 2. Install karga
 
@@ -223,7 +223,7 @@ See a package's defaults with `karga show values <package>`. Override them, late
 $ karga install db examples/postgres -f prod.yaml --set service.listener=pg --set database.password=s3cret-pw
 ```
 
-- `-f file.yaml` (repeatable), then `--set a.b=c` (types inferred), then `--set-string a=007`.
+- `-f file.yaml` (repeatable), then `--set a.b=c`, then `--set-string a=007`. `--set` makes `true`, `false`, `null` and integers typed; decimals such as `7.4` stay strings (an image tag), so put a number-typed decimal in a `-f` file.
 - `--set key=null` removes a default.
 - `upgrade` starts from the package defaults; add `--reuse-values` to keep the last revision's
   overrides and change only what you pass.
@@ -780,22 +780,21 @@ karga-server` shows the server's side.
 
 ## 12. Back up and move a host
 
-A complete backup is the state, its key, the gateway settings and the volumes:
+A complete backup is `$KARGA_HOME` (the state, its key, the gateway settings and the revisions'
+Config and Secret files) and the volumes:
 
 ```console
-$ karga state backup ~/backup/karga.db
-state written to ~/backup/karga.db
-The backup does not hold state.key and gateway.json from the server's KARGA_HOME (default
-/var/lib/karga): copy them too and keep them safe. (...)
-$ sudo cp /var/lib/karga/state.key /var/lib/karga/gateway.json ~/backup/
+$ sudo systemctl stop karga-server
+$ sudo tar -C /var/lib -czf ~/backup/karga-home.tar.gz karga
+$ sudo systemctl start karga-server
 $ karga volume backup db postgres-data ~/backup/db-postgres-data.tar.gz --stop
 ```
 
 Restore on a new host, in this order:
 
 1. Install karga and Docker.
-2. Stop karga-server, copy `karga.db`, `state.key` and `gateway.json` into `/var/lib/karga`
-   (owner `karga`, mode 0600) and start it again. `karga list` and `karga history` now show your releases.
+2. Stop karga-server, unpack the backup into `/var/lib` (owner `karga`) and start it again.
+   `karga list` and `karga history` now show your releases.
 3. For each release, upgrade from its package; the plan creates everything missing on this host:
 
    ```console
@@ -807,11 +806,11 @@ Restore on a new host, in this order:
 
 4. Restore the volumes with `karga volume restore`.
 
-Without the old state (a fresh host), install each release and restore its volumes; only the history
-is lost.
+Without the old `$KARGA_HOME` (a fresh host), install each release and restore its volumes; only
+the history is lost.
 
 Without `state.key`, karga creates a new one and each release applies its Secrets once more on its
-next upgrade. Keep both files safe: the database holds your values.
+next upgrade. Keep the backup safe: it holds your values and Secrets.
 
 ## 13. Write a package
 

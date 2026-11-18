@@ -227,14 +227,6 @@ func TestStreams(t *testing.T) {
 	if _, err := os.Stat(failed); err == nil {
 		t.Fatal("a failed backup leaves no file")
 	}
-	e.f.err = nil
-	state := filepath.Join(dir, "state.db")
-	if out := e.mustRun("state", "backup", state); !strings.Contains(out, "state written to") || !strings.Contains(out, "state.key") {
-		t.Fatalf("state backup: %s", out)
-	}
-	if b, _ := os.ReadFile(state); string(b) != "SQLite format 3" {
-		t.Fatalf("state content: %q", b)
-	}
 }
 
 func TestGatewayCommands(t *testing.T) {

@@ -121,7 +121,7 @@ func newRootCmd(stdout, stderr io.Writer, backend func() api.Backend) *cobra.Com
 
 	root.AddCommand(newVersionCmd(a), newCreateCmd(a), newTemplateCmd(a), newLintCmd(a), newShowCmd(a),
 		newInstallCmd(a), newUpgradeCmd(a), newRollbackCmd(a), newUninstallCmd(a),
-		newHistoryCmd(a), newListCmd(a), newStatusCmd(a), newGetCmd(a), newGatewayCmd(a), newStateCmd(a), newLogsCmd(a), newVolumeCmd(a), newExecCmd(a), newDiffCmd(a))
+		newHistoryCmd(a), newListCmd(a), newStatusCmd(a), newGetCmd(a), newGatewayCmd(a), newLogsCmd(a), newVolumeCmd(a), newExecCmd(a), newDiffCmd(a))
 	root.AddCommand(newReconcileCmds(a)...)
 	addCompletion(a, root)
 	for flag, values := range map[string][]string{"output": {outputText, outputJSON, outputYAML}, "color": {"auto", "always", "never"}, "log-format": {"text", "json"}} {
