@@ -39,6 +39,7 @@ First release.
   with 3 when the CLI and the server do not work together.
 
 ### Release
+- Built with Go 1.27.4 (net/http fix GO-2026-6859); CI runs govulncheck 1.10.0.
 - Releases carry an SBOM per archive and a keyless (Sigstore) signature of `checksums.txt`;
   `install.sh` verifies it when `cosign` is installed (`KARGA_SKIP_SIGNATURE=1` skips it).
 - The release workflow runs the tests and the linter before it publishes; CI runs `govulncheck`, and
