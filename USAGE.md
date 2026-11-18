@@ -915,7 +915,10 @@ $ karga install demo shop --dry-run    # what it would do
 ```
 
 A resource that does not decode names its file, document and line in the rendered output; look at
-that line with `karga template`. The package format is `karga.io/v1alpha1` and may still change.
+that line with `karga template`. It renders revision 1 of the release (`--revision N` another, as
+`.Release.Revision`) from the values given, not the release's stored ones: `karga upgrade <release>
+<package> --dry-run -o yaml` shows what an upgrade would deploy. The package format is
+`karga.io/v1alpha1` and may still change.
 
 A workload that needs another one at start (an application and its database) waits for its
 Service with `dependsOn`:

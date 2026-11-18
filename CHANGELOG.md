@@ -29,6 +29,8 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
   with this change); USAGE §5.
 
 ### Added
+- `karga template --revision N` renders as revision N (`.Release.Revision`); its help says that
+  `upgrade --dry-run -o yaml` shows what an upgrade would deploy.
 - `make dist` builds the release archives and `checksums.txt` without a release; `install.sh`
   installs them from `file://`. USAGE: requirements, installing from source, and a new section 15
   that puts an API and its database online on a domain.

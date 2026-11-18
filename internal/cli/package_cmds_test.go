@@ -135,3 +135,27 @@ func TestCreateCmd(t *testing.T) {
 		t.Fatal("create must refuse a name that is not a DNS label")
 	}
 }
+
+// --revision is what templates see as .Release.Revision, as a deployment of that revision would.
+func TestTemplateRevision(t *testing.T) {
+	pkg := filepath.Join(t.TempDir(), "demo")
+	if err := os.CopyFS(pkg, os.DirFS(demo)); err != nil {
+		t.Fatal(err)
+	}
+	rev := "apiVersion: karga.io/v1alpha1\nkind: Config\nmetadata: {name: rev}\nspec: {files: {rev: \"r{{ .Release.Revision }}\"}}\n"
+	if err := os.WriteFile(filepath.Join(pkg, "templates", "rev.yaml"), []byte(rev), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	for args, want := range map[string]string{"": `rev: "r1"`, "--revision=4": `rev: "r4"`} {
+		cmd := []string{"template", "web", pkg}
+		if args != "" {
+			cmd = append(cmd, args)
+		}
+		if out, _, err := run(t, cmd...); err != nil || !strings.Contains(out, want) {
+			t.Errorf("%v: want %q, err=%v\n%s", cmd, want, err, out)
+		}
+	}
+	if _, _, err := run(t, "template", "web", pkg, "--revision", "0"); ExitCode(err) != ExitUsage {
+		t.Fatalf("--revision 0: %v", err)
+	}
+}
