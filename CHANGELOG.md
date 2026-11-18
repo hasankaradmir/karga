@@ -33,6 +33,12 @@ First release.
 - `karga version` says why it cannot reach the server (not running, permission denied) and exits
   with 3 when the CLI and the server do not work together.
 
+### Release
+- Releases carry an SBOM per archive and a keyless (Sigstore) signature of `checksums.txt`;
+  `install.sh` verifies it when `cosign` is installed (`KARGA_SKIP_SIGNATURE=1` skips it).
+- The release workflow runs the tests and the linter before it publishes; CI runs `govulncheck`, and
+  every GitHub Action is pinned by commit.
+
 ### Fixed
 - `exec -t` without `-i` always failed.
 - `events` said newest first but printed oldest first; long messages are cut at a character.
