@@ -28,7 +28,7 @@ func newStatusCmd(a *app) *cobra.Command {
 			s := a.backend()
 			if !watch {
 				rep, err := a.printStatus(cmd.Context(), s, args[0])
-				if err == nil && !healthy(rep) {
+				if err == nil && !rep.Healthy() {
 					return errUnhealthy
 				}
 				return err
@@ -69,19 +69,6 @@ func newStatusCmd(a *app) *cobra.Command {
 	cmd.Flags().DurationVar(&interval, "interval", 2*time.Second, "time between refreshes with --watch")
 	cmd.Flags().IntVar(&count, "count", 0, "with --watch, stop after this many refreshes (0: until interrupted)")
 	return cmd
-}
-
-// healthy reports whether a release is deployed and every resource is applied and running well.
-func healthy(rep *api.StatusReport) bool {
-	if rep.Release.Status != api.StatusDeployed || rep.Interrupted != "" {
-		return false
-	}
-	for _, x := range rep.Resources {
-		if x.Desired != "applied" || x.Actual == "missing" || x.Actual == "exited" || x.Health == "unhealthy" || x.Health == "starting" {
-			return false
-		}
-	}
-	return true
 }
 
 func (a *app) printStatus(ctx context.Context, s api.Backend, name string) (*api.StatusReport, error) {

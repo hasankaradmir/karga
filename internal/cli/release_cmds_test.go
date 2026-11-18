@@ -93,7 +93,7 @@ func TestProgressAndErrors(t *testing.T) {
 	if !strings.Contains(e.stderr, "workload web: creating r-web") {
 		t.Fatalf("progress on stderr:\n%s", e.stderr)
 	}
-	if _, err := e.run("upgrade", "x", demo, "--strategy", "rolling"); err == nil || !strings.Contains(err.Error(), `invalid --strategy "rolling"`) {
+	if _, err := e.run("upgrade", "x", demo, "--strategy", "rolling"); err == nil || !strings.Contains(err.Error(), `invalid --strategy: "rolling" must be recreate or replace`) {
 		t.Fatalf("strategy checked locally: %v", err)
 	}
 	if _, err := e.run("install", "d", "does/not/exist"); err == nil || !strings.Contains(err.Error(), "does/not/exist") {
