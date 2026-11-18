@@ -615,15 +615,34 @@ volume postgres-data of db restored from db.tar.gz
 There are two kinds of secret input:
 
 - **Secret resources** become files mounted read-only in the container (e.g.
-  `POSTGRES_PASSWORD_FILE: /run/secrets/postgres/password`).
+  `POSTGRES_PASSWORD_FILE: /run/secrets/postgres/password`), or environment variables of a
+  workload with `environmentFrom`.
 - **Values marked `"writeOnly": true`** in the package schema.
+
+An application that reads its secrets only from the environment gets them from a Secret:
+
+```yaml
+kind: Workload
+metadata: {name: app}
+spec:
+  image: shop:1.4
+  environment:
+    DATABASE_USER: app
+  environmentFrom:
+    - {name: DATABASE_PASSWORD, secret: db-credentials, key: password}
+```
+
+karga stores and shows only the reference; the value is set when the container is created, and a
+new value in the Secret recreates the container (`update` in the plan). The value is visible to
+anyone who can inspect the container through Docker (`docker inspect`): the host's administrators,
+who can read the mounted files too. Prefer a mounted file where the image supports one (`*_FILE`).
 
 What karga keeps:
 
 | Where | Secret values |
 |-------|---------------|
 | Output, logs, `get values`, `get manifest`, `diff` | `<redacted>` or `(changed)` |
-| State database | HMAC digests keyed by `$KARGA_HOME/state.key`, to detect changes |
+| State files (`$KARGA_HOME/state`) | HMAC digests keyed by `$KARGA_HOME/state.key`, to detect changes |
 | `$KARGA_HOME/releases/<release>/<revision>/` | the files mounted into the container (directory 0700) |
 
 `karga template` shows secrets only with `--show-secrets`: Secret values and `writeOnly` values are
