@@ -120,9 +120,9 @@ $ KARGA_SOCKET=/tmp/karga.sock bin/karga list
 
 ### Docker
 
-karga needs Linux with a local Docker daemon: its Envoys share files, unix sockets and the host
+karga needs Linux with a local, rootful (not rootless) Docker daemon: its Envoys share files, unix sockets and the host
 network with it. On macOS, `lint` and `template` work, but a plan with Services is refused
-(`services ... need karga's gateway and release proxy (Linux with a local Docker)`).
+(`services ... need karga's gateway and release proxy (Linux with a local, rootful Docker)`).
 
 ### Shell completion
 
@@ -713,7 +713,7 @@ restore`, `gateway set listen` with an address other than loopback, `gateway lis
 | `another operation is running on this release` | Another karga command works on the release; wait for it. |
 | `a previous operation on this release was interrupted` | An operation was left by a process that is gone (karga-server finishes its own when it starts); check `karga status`, then rerun with `--force`. |
 | `gateway: proxy does not route to ... : <reason>` | The gateway did not accept or reach the new backend; the reason (and Envoy's own message, if it refused the configuration) follows. |
-| `services ... need karga's gateway and release proxy (Linux with a local Docker)` | karga runs on Linux with a local Docker daemon. |
+| `services ... need karga's gateway and release proxy (Linux with a local, rootful Docker)` | karga runs on Linux with a local, rootful Docker daemon. |
 | `karga speaks API N, karga-server API M` | The CLI and the server are of incompatible releases; upgrade the one named. |
 | `karga-server is not running` | Start it: `sudo systemctl start karga-server`; see `journalctl -u karga-server`. |
 | `permission denied` on `/run/karga/karga.sock` | Your user is not in the `karga` group (or has not logged in again since). |
