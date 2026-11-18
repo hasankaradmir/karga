@@ -677,7 +677,9 @@ Tables are colored on a terminal (`--color never`, `NO_COLOR=1` or `TERM=dumb` t
 
 Every command takes `-o text` (the default, for people), `-o json` or `-o yaml`. Streams
 (`status --watch`, `events -f`) write one JSON document per line, or YAML documents separated by
-`---`. `logs` always writes the containers' lines.
+`---`. `logs` always writes the containers' lines. The JSON and YAML shapes are the API's views:
+fields are only added within an API major version, never renamed or removed, so scripts may rely
+on them.
 
 Commands that only ask karga-server something give up after `--request-timeout` (default `30s`;
 `0` waits for ever). Deployments, `uninstall`, `reconcile`, `logs`, `exec`, backups and
@@ -693,7 +695,7 @@ restore`, `gateway set listen` with an address other than loopback, `gateway lis
 | 0 | Done; `karga status`: the release is deployed and healthy |
 | 1 | Any other failure |
 | 2 | Wrong arguments or flags, or a confirmation needs `--yes` |
-| 3 | karga-server is not running, did not answer in time, went away or speaks another API |
+| 3 | karga-server is not running, did not answer in time, went away, or is too old for the request (another API major, or a field or endpoint it does not know) |
 | 4 | The release, revision or resource does not exist |
 | 5 | Another operation holds the release, or it exists already |
 | 6 | `karga status`: the release is not deployed and healthy (failed, missing, unhealthy or starting) |

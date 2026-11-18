@@ -35,8 +35,8 @@ only lints and renders packages).
 ## Requirements
 
 - karga-server on a Linux host with a local Docker Engine and systemd.
-- The CLI runs on Linux and macOS (on macOS it writes, lints and renders packages, or talks to a
-  server through a forwarded socket). Go 1.27 to build.
+- The CLI runs on Linux and macOS. On macOS it writes, lints and renders packages; to manage a
+  server, run karga on its host (`ssh host karga …`). Go 1.27 to build.
 
 ## Install
 

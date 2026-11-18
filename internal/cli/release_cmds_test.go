@@ -366,6 +366,10 @@ func TestExitCodes(t *testing.T) {
 	if c := code("list"); c != ExitConflict {
 		t.Fatalf("conflict: %d", c)
 	}
+	e.f.err = fmt.Errorf("%w: karga-server (API 2.0) does not know field x; upgrade karga-server", api.ErrIncompatible)
+	if c := code("list"); c != ExitUnavailable {
+		t.Fatalf("incompatible: %d", c)
+	}
 	e.f.err = errors.New("boom")
 	if c := code("list"); c != ExitFailure {
 		t.Fatalf("other failure: %d", c)

@@ -19,7 +19,10 @@ First release.
   its `$KARGA_HOME` (USAGE.md, "Back up and move a host").
 - The module is `github.com/hasankaradmir/karga-cli` (the repository is karga-cli); the binary is
   still `karga`.
-- API 2.0: works with any karga-server of the same major API version.
+- API 2.0: works with any karga-server of the same major API version. A request an older server
+  does not understand (an unknown field or endpoint) exits with 3 and says to upgrade it.
+- `-o json` and `-o yaml` are the API's views and stable within an API major version.
+- Managing a server from another machine is `ssh host karga …`; forwarding its socket is not supported.
 - `-o text|json|yaml` on every command (`table` is an older name for `text`); `status --watch` and
   `events -f` stream one JSON document per line, or YAML documents.
 - Exit codes tell scripts why karga failed: 2 usage, 3 server unavailable or incompatible, 4 not
