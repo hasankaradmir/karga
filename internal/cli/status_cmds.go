@@ -36,7 +36,7 @@ func newStatusCmd(a *app) *cobra.Command {
 			tty := isTerminal(a.stdout)
 			for n := 1; ; n++ {
 				if a.structured() { // one document per refresh
-					rep, err := s.Status(cmd.Context(), args[0])
+					rep, err := s.Status(cmd.Context(), api.ReleaseRequest{Name: args[0]})
 					if err != nil {
 						return err
 					}
@@ -85,7 +85,7 @@ func healthy(rep *api.StatusReport) bool {
 }
 
 func (a *app) printStatus(ctx context.Context, s api.Backend, name string) (*api.StatusReport, error) {
-	rep, err := s.Status(ctx, name)
+	rep, err := s.Status(ctx, api.ReleaseRequest{Name: name})
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +151,7 @@ func newReconcileCmds(a *app) []*cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s := a.backend()
-			res, err := s.Reconcile(cmd.Context(), args[0], true)
+			res, err := s.Reconcile(cmd.Context(), api.ReconcileRequest{Name: args[0], Force: true})
 			if err != nil {
 				return err
 			}
@@ -183,7 +183,11 @@ func newReconcileCmds(a *app) []*cobra.Command {
 			Args:  cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				s := a.backend()
-				if err := s.Pause(cmd.Context(), args[0], paused); err != nil {
+				set := s.Resume
+				if paused {
+					set = s.Pause
+				}
+				if err := set(cmd.Context(), api.ReleaseRequest{Name: args[0]}); err != nil {
 					return err
 				}
 				return a.report(map[string]any{"release": args[0], "paused": paused},
@@ -203,7 +207,7 @@ func newReconcileCmds(a *app) []*cobra.Command {
 				name = args[0]
 			}
 			s := a.backend()
-			ops, err := s.Events(cmd.Context(), name, 0, limit)
+			ops, err := s.Events(cmd.Context(), api.EventsRequest{Name: name, Limit: limit})
 			if err != nil {
 				return err
 			}
@@ -235,7 +239,7 @@ func newReconcileCmds(a *app) []*cobra.Command {
 					return nil
 				case <-time.After(2 * time.Second):
 				}
-				more, err := s.Events(cmd.Context(), name, last, 100)
+				more, err := s.Events(cmd.Context(), api.EventsRequest{Name: name, AfterID: last, Limit: 100})
 				if err != nil {
 					return err
 				}

@@ -42,7 +42,7 @@ type app struct {
 	log *slog.Logger
 
 	// backend returns karga-server's client; tests replace it.
-	backend func() api.Backend
+	backend func() api.Remote
 }
 
 // NewRootCmd builds the karga command tree.
@@ -50,10 +50,10 @@ func NewRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	return newRootCmd(stdout, stderr, nil)
 }
 
-func newRootCmd(stdout, stderr io.Writer, backend func() api.Backend) *cobra.Command {
+func newRootCmd(stdout, stderr io.Writer, backend func() api.Remote) *cobra.Command {
 	a := &app{stdout: stdout, stderr: stderr, backend: backend}
 	if a.backend == nil {
-		a.backend = func() api.Backend { return api.NewClient(a.socket) }
+		a.backend = func() api.Remote { return api.NewClient(a.socket) }
 	}
 
 	root := &cobra.Command{

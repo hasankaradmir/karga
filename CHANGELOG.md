@@ -6,6 +6,10 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Changed
+- API 3.0 (karga-sdk): this karga works with karga-server of API 3 only; `karga version` shows
+  both. Release names that are not DNS labels, or that start with `karga`, are refused by every
+  command, not only `install`; USAGE §1.
+- Template loops are limited to 1,000,000 iterations per render.
 - `karga history` shows `superseded` for deployed revisions a later one replaced (karga-server
   with this change); USAGE §5.
 

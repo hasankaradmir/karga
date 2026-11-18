@@ -105,28 +105,32 @@ func (f *fake) List(ctx context.Context) ([]api.Release, error) {
 	return f.releases, f.err
 }
 
-func (f *fake) History(context.Context, string) ([]api.Revision, error) {
+func (f *fake) History(context.Context, api.ReleaseRequest) ([]api.Revision, error) {
 	return f.history, f.err
 }
 
-func (f *fake) GetValues(context.Context, string, int, bool) (map[string]any, error) {
+func (f *fake) Values(context.Context, api.ValuesRequest) (map[string]any, error) {
 	return map[string]any{"password": "<redacted>", "replicas": 2}, f.err
 }
 
-func (f *fake) GetNotes(context.Context, string, int) (string, error) { return "notes here", f.err }
+func (f *fake) Notes(context.Context, api.RevisionRequest) (string, error) {
+	return "notes here", f.err
+}
 
-func (f *fake) GetManifest(context.Context, string, int) ([]resource.Resource, error) {
+func (f *fake) Manifest(context.Context, api.RevisionRequest) ([]resource.Resource, error) {
 	r, err := resource.Decode([]byte("apiVersion: karga.io/v1alpha1\nkind: Network\nmetadata: {name: net}\n"))
 	return []resource.Resource{r}, errors.Join(err, f.err)
 }
 
-func (f *fake) Status(context.Context, string) (*api.StatusReport, error) { return f.status, f.err }
+func (f *fake) Status(context.Context, api.ReleaseRequest) (*api.StatusReport, error) {
+	return f.status, f.err
+}
 
-func (f *fake) Diff(context.Context, string, int, int) (*api.RevisionDiff, error) {
+func (f *fake) Diff(context.Context, api.DiffRequest) (*api.RevisionDiff, error) {
 	return f.diff, f.err
 }
 
-func (f *fake) Resources(context.Context, string) ([]api.AppliedResource, error) {
+func (f *fake) Resources(context.Context, api.ReleaseRequest) ([]api.AppliedResource, error) {
 	return f.applied, f.err
 }
 
@@ -135,7 +139,8 @@ func (f *fake) Logs(_ context.Context, _ api.LogsRequest, w io.Writer) error {
 	return f.err
 }
 
-func (f *fake) Exec(_ context.Context, _, _ string, opts api.ExecOptions) (int, error) {
+func (f *fake) Exec(_ context.Context, req api.ExecRequest) (int, error) {
+	opts := req.ExecOptions
 	f.execCmd = opts.Cmd
 	if opts.Stdin != nil {
 		b, _ := io.ReadAll(opts.Stdin)
@@ -159,24 +164,29 @@ func (f *fake) RestoreVolume(_ context.Context, _ api.VolumeRestoreRequest, r io
 	return f.err
 }
 
-func (f *fake) Reconcile(context.Context, string, bool) (*api.ReconcileResult, error) {
+func (f *fake) Reconcile(context.Context, api.ReconcileRequest) (*api.ReconcileResult, error) {
 	f.call("reconcile")
 	return f.recon, f.err
 }
 
-func (f *fake) Pause(_ context.Context, _ string, paused bool) error {
-	f.call(map[bool]string{true: "pause", false: "resume"}[paused])
+func (f *fake) Pause(context.Context, api.ReleaseRequest) error {
+	f.call("pause")
 	return f.err
 }
 
-func (f *fake) Events(_ context.Context, _ string, after int64, _ int) ([]api.Operation, error) {
-	if after > 0 {
+func (f *fake) Resume(context.Context, api.ReleaseRequest) error {
+	f.call("resume")
+	return f.err
+}
+
+func (f *fake) Events(_ context.Context, req api.EventsRequest) ([]api.Operation, error) {
+	if req.AfterID > 0 {
 		return nil, f.err
 	}
 	return f.ops, f.err
 }
 
-func (f *fake) Gateway(context.Context) ([]api.Exposed, error) { return f.exposed, f.err }
+func (f *fake) GatewayRoutes(context.Context) ([]api.Exposed, error) { return f.exposed, f.err }
 
 func (f *fake) GatewayHealth(context.Context) (api.State, error) { return f.health, f.err }
 
@@ -184,13 +194,13 @@ func (f *fake) GatewaySettings(context.Context) (api.Settings, map[string][]stri
 	return f.settings, f.users, f.err
 }
 
-func (f *fake) SetGatewayAccessLog(_ context.Context, on bool) error {
-	f.call(map[bool]string{true: "access-log on", false: "access-log off"}[on])
+func (f *fake) SetGatewayAccessLog(_ context.Context, req api.GatewayAccessLogRequest) error {
+	f.call(map[bool]string{true: "access-log on", false: "access-log off"}[req.Enabled])
 	return f.err
 }
 
-func (f *fake) SetGatewayListen(_ context.Context, addrs []string) error {
-	f.settings.Listen = addrs
+func (f *fake) SetGatewayListen(_ context.Context, req api.GatewayListenRequest) error {
+	f.settings.Listen = req.Addresses
 	f.call("listen")
 	return f.err
 }
@@ -200,8 +210,8 @@ func (f *fake) AddGatewayListener(_ context.Context, l api.Listener) error {
 	return f.err
 }
 
-func (f *fake) RemoveGatewayListener(_ context.Context, name string) error {
-	f.call("remove " + name)
+func (f *fake) RemoveGatewayListener(_ context.Context, req api.GatewayListenerRequest) error {
+	f.call("remove " + req.Name)
 	return f.err
 }
 
@@ -222,7 +232,7 @@ func newCLIEnv(t *testing.T) *cliEnv {
 }
 
 func (e *cliEnv) root(stdout, stderr io.Writer) *cobra.Command {
-	return newRootCmd(stdout, stderr, func() api.Backend { return api.NewClient(e.socket) })
+	return newRootCmd(stdout, stderr, func() api.Remote { return api.NewClient(e.socket) })
 }
 
 func (e *cliEnv) run(args ...string) (string, error) {

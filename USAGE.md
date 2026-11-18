@@ -29,7 +29,7 @@ replaced by documentation addresses.
 | **Package** | A directory (or `.tgz`) with `Package.yaml`, `values.yaml`, an optional `values.schema.json`, `templates/` and an optional `NOTES.txt`. |
 | **Values** | The settings of a package: its defaults, overridden with `-f file.yaml` and `--set key=value`. |
 | **Resources** | What templates render to: `Workload` (a container), `Service`, `Volume`, `Network`, `Config` (files), `Secret`. |
-| **Release** | A package installed under a name, e.g. `shop`. Its containers are named `<release>-<name>` (`shop-web`). |
+| **Release** | A package installed under a name, e.g. `shop`: a DNS label (lowercase letters, digits and `-`, at most 63) that does not start with `karga`, which karga keeps for its own objects. Its containers are named `<release>-<name>` (`shop-web`). |
 | **Revision** | Each install, upgrade and rollback is a new, immutable revision of the release. |
 | **Plan** | What a command will change: created (`+`), updated (`~`) and deleted (`-`) resources, and for workloads how (recreate or replace). |
 | **Service** | The only way to reach a workload: a name inside the release (`web:80`), and optionally an exposure on a gateway listener. A workload alone publishes nothing. |
@@ -111,8 +111,8 @@ The example packages used below (`examples/redis`, `examples/postgres`) are in
 ```console
 $ systemctl status karga-server
 $ karga version
-karga v0.1.1 (commit 55fb34d8c63c, go1.27.4, API 2.0)
-karga-server v0.1.0 (API 2.0)
+karga v0.1.1 (commit 55fb34d8c63c, go1.27.4, API 3.0)
+karga-server v0.1.0 (API 3.0)
 $ journalctl -u karga-server -f          # the server's log
 ```
 
@@ -127,7 +127,7 @@ Error: karga-server is not running (no server on /run/karga/karga.sock): start i
 ```
 
 The CLI and the server work together when they speak the same major API version (`karga
-version` shows both, e.g. `2.0` and `2.1`), whatever their release versions; otherwise every
+version` shows both, e.g. `3.0` and `3.1`), whatever their release versions; otherwise every
 command stops with `karga speaks API N, karga-server API M: upgrade ...` (exit code 3). A newer
 CLI still works with an older server of the same major; what the server lacks fails with a
 message to upgrade it. Every operation records the user of the CLI that asked
