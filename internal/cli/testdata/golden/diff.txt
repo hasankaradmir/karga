@@ -1,0 +1,9 @@
+Release r: revision 1 -> 2
+
+Values:
+  tag: "a" -> "b"
+
+Resources:
+  ~ WORKLOAD web
+      spec.image: "nginx:1" -> "nginx:2"
+  + VOLUME cache

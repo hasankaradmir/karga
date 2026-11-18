@@ -5,10 +5,6 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net"
-	"net/http"
-	"os"
-	"path/filepath"
 	"sync"
 	"testing"
 	"time"
@@ -16,6 +12,7 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hasankaradmir/karga-sdk/api"
+	"github.com/hasankaradmir/karga-sdk/api/apitest"
 	"github.com/hasankaradmir/karga-sdk/packages"
 	"github.com/hasankaradmir/karga-sdk/resource"
 )
@@ -220,21 +217,8 @@ type cliEnv struct {
 
 func newCLIEnv(t *testing.T) *cliEnv {
 	t.Helper()
-	// Unix socket paths are short (104 bytes on macOS): t.TempDir() can be too long.
-	dir, err := os.MkdirTemp("", "kcli")
-	if err != nil {
-		t.Fatal(err)
-	}
-	t.Cleanup(func() { _ = os.RemoveAll(dir) })
-	e := &cliEnv{t: t, f: &fake{}, socket: filepath.Join(dir, "s.sock")}
-	l, err := net.Listen("unix", e.socket)
-	if err != nil {
-		t.Fatal(err)
-	}
-	hs := &http.Server{Handler: api.NewServer(e.f, "dev", api.Options{}), ReadHeaderTimeout: 5 * time.Second}
-	go func() { _ = hs.Serve(l) }()
-	t.Cleanup(func() { _ = hs.Close() })
-	return e
+	f := &fake{}
+	return &cliEnv{t: t, f: f, socket: apitest.Serve(t, f)}
 }
 
 func (e *cliEnv) root(stdout, stderr io.Writer) *cobra.Command {

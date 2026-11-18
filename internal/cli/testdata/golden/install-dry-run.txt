@@ -1,0 +1,9 @@
+Deployment Plan
+
+Release:  r
+Revision: 1 -> 2
+
+  ~ WORKLOAD web (replace)
+  - VOLUME cache (its data is deleted)
+
+0 to create, 1 to update, 1 to delete, 1 unchanged. --verbose shows the changed fields.
