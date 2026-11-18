@@ -9,7 +9,7 @@
 # karga needs karga-server on the host it manages: https://github.com/hasankaradmir/karga-server
 set -eu
 
-repo=hasankaradmir/karga
+repo=hasankaradmir/karga-cli
 bin_dir=${KARGA_BIN_DIR:-/usr/local/bin}
 
 os=$(uname -s | tr '[:upper:]' '[:lower:]')

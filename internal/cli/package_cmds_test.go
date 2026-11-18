@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -31,7 +32,7 @@ func TestTemplateCmd(t *testing.T) {
 
 func TestTemplateCmdErrors(t *testing.T) {
 	cases := [][]string{
-		{"template", "web", demo, "-o", "json"},
+		{"template", "web", demo, "-o", "xml"},
 		{"template", "web", demo, "--set", "image.tag=1"},
 		{"template", "web", demo, "--set", "typo=x", "--strict"},
 		{"template", "web"},
@@ -77,5 +78,25 @@ func TestShowCmd(t *testing.T) {
 	out, _, err = run(t, "show", "package", demo, "-o", "json")
 	if err != nil || !strings.Contains(out, `"apiVersion": "karga.io/v1alpha1"`) {
 		t.Fatalf("show package json: %v\n%s", err, out)
+	}
+}
+
+// The scaffold karga create writes must be a working package.
+func TestCreateCmd(t *testing.T) {
+	dir := filepath.Join(t.TempDir(), "shop")
+	if _, _, err := run(t, "create", dir); err != nil {
+		t.Fatal(err)
+	}
+	if out, _, err := run(t, "lint", dir); err != nil {
+		t.Fatalf("scaffold does not lint clean: %v\n%s", err, out)
+	}
+	if out, _, err := run(t, "template", "shop", dir); err != nil || !strings.Contains(out, "kind: Workload") {
+		t.Fatalf("scaffold does not render: %v\n%s", err, out)
+	}
+	if _, _, err := run(t, "create", dir); err == nil {
+		t.Fatal("create must refuse an existing directory")
+	}
+	if _, _, err := run(t, "create", filepath.Join(t.TempDir(), "Bad_Name")); err == nil {
+		t.Fatal("create must refuse a name that is not a DNS label")
 	}
 }

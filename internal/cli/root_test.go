@@ -2,14 +2,24 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
+	"time"
 )
 
+// run runs karga with args. Without --socket it points at a socket nothing listens on, so the tests
+// never reach a karga-server running on the machine.
 func run(t *testing.T, args ...string) (stdout, stderr string, err error) {
 	t.Helper()
+	if !slices.Contains(args, "--socket") {
+		args = append([]string{"--socket", filepath.Join(t.TempDir(), "none.sock")}, args...)
+	}
 	var out, errOut bytes.Buffer
 	cmd := NewRootCmd(&out, &errOut)
 	cmd.SetArgs(args)
@@ -48,11 +58,12 @@ func TestInvalidLogFormat(t *testing.T) {
 }
 
 func TestDebugLogsToStderr(t *testing.T) {
-	out, errOut, err := run(t, "--debug", "--socket", "/tmp/karga-test.sock", "version", "-o", "json")
+	sock := filepath.Join(t.TempDir(), "karga-test.sock")
+	out, errOut, err := run(t, "--debug", "--socket", sock, "version", "-o", "json")
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !strings.Contains(errOut, "socket=/tmp/karga-test.sock") {
+	if !strings.Contains(errOut, "socket="+sock) {
 		t.Fatalf("debug log missing on stderr: %q", errOut)
 	}
 	if strings.Contains(out, "karga-server") && strings.Contains(out, "socket=") {
@@ -61,8 +72,10 @@ func TestDebugLogsToStderr(t *testing.T) {
 }
 
 func TestInvalidOutput(t *testing.T) {
-	if _, _, err := run(t, "version", "-o", "yaml"); err == nil {
-		t.Fatal("expected error for -o yaml")
+	for _, args := range [][]string{{"version", "-o", "xml"}, {"version", "--color", "sometimes"}} {
+		if _, _, err := run(t, args...); ExitCode(err) != ExitUsage {
+			t.Fatalf("%v: want a usage error, got %v", args, err)
+		}
 	}
 }
 
@@ -77,5 +90,25 @@ func TestVersionAsksTheServer(t *testing.T) {
 	}
 	if _, _, err := run(t, "--socket", filepath.Join(t.TempDir(), "none.sock"), "list"); err == nil || !strings.Contains(err.Error(), "karga-server is not running") {
 		t.Fatalf("list without a server: %v", err)
+	}
+}
+
+func TestRequestTimeout(t *testing.T) {
+	e := newCLIEnv(t)
+	e.f.slow = 5 * time.Second
+	start := time.Now()
+	_, err := e.run("list", "--request-timeout", "100ms")
+	if !errors.Is(err, context.DeadlineExceeded) || time.Since(start) > 2*time.Second {
+		t.Fatalf("list should give up after the timeout: %v after %s", err, time.Since(start))
+	}
+	cmd := e.root(io.Discard, io.Discard)
+	for path, want := range map[string]bool{"install": true, "logs": true, "list": false, "status": false} {
+		c, _, err := cmd.Find([]string{path})
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got := untimed(c); got != want {
+			t.Errorf("%s: untimed %v, want %v", path, got, want)
+		}
 	}
 }

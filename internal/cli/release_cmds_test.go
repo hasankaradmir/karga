@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -11,18 +12,18 @@ import (
 	"testing"
 	"time"
 
+	"go.yaml.in/yaml/v3"
+
 	"github.com/hasankaradmir/karga-sdk/api"
-	"github.com/hasankaradmir/karga-sdk/plan"
-	"github.com/hasankaradmir/karga-sdk/release"
 )
 
 func installed() *api.Result {
-	return &api.Result{Release: "r", Revision: 2, From: 1, Status: release.StatusDeployed,
-		Plan: plan.Plan{Changes: []plan.Change{
-			{Kind: "Workload", Name: "web", Action: plan.ActionUpdate, Strategy: "replace",
-				Fields: []plan.FieldChange{{Path: "spec.image", Old: `"nginx:1"`, New: `"nginx:2"`}}},
-			{Kind: "Volume", Name: "cache", Action: plan.ActionDelete, Notice: "its data is deleted"},
-			{Kind: "Network", Name: "net", Action: plan.ActionUnchanged},
+	return &api.Result{Release: "r", Revision: 2, From: 1, Status: api.StatusDeployed,
+		Plan: api.Plan{Changes: []api.Change{
+			{Kind: "Workload", Name: "web", Action: api.ActionUpdate, Strategy: "replace",
+				Fields: []api.FieldChange{{Path: "spec.image", Old: `"nginx:1"`, New: `"nginx:2"`}}},
+			{Kind: "Volume", Name: "cache", Action: api.ActionDelete, Notice: "its data is deleted"},
+			{Kind: "Network", Name: "net", Action: api.ActionUnchanged},
 		}},
 		Warnings: []string{"workload web keeps image VOLUME /data in an anonymous volume"},
 		Notes:    "r (revision 2) runs nginx:2."}
@@ -36,17 +37,17 @@ func TestDeploySendsPackageAndValues(t *testing.T) {
 		t.Fatal(err)
 	}
 	out := e.mustRun("upgrade", "r", demo, "-f", vals, "--set", "a=1", "--set-string", "b=007",
-		"--reuse-values", "--strategy", "recreate", "--delete-volumes", "--timeout", "1m")
+		"--reuse-values", "--strategy", "recreate", "--delete-volumes", "--timeout", "1m", "--yes")
 	u := e.f.upgrade
-	if u == nil || u.Name != "r" || !u.ReuseValues || u.Strategy != "recreate" || !u.DeleteVolumes || u.Timeout != time.Minute {
+	if u == nil || u.Name != "r" || !u.ReuseValues || u.Strategy != "recreate" || !u.DeleteVolumes || u.Timeout != api.Duration(time.Minute) || u.HistoryMax != nil {
 		t.Fatalf("request: %+v", u)
 	}
 	// The server cannot read the client's files: the package and the values file travel as content.
 	if e.f.pkg == nil || e.f.pkg.Metadata.Name != "demo" {
 		t.Fatalf("package archive not received: %+v", e.f.pkg)
 	}
-	if len(u.Values.ValueFiles) != 0 || len(u.Values.ValueData) != 1 || string(u.Values.ValueData[0]) != "replicas: 3\n" ||
-		u.Values.Sets[0] != "a=1" || u.Values.SetStrings[0] != "b=007" {
+	if len(u.Values.Files) != 1 || string(u.Values.Files[0]) != "replicas: 3\n" ||
+		u.Values.Set[0] != "a=1" || u.Values.SetString[0] != "b=007" {
 		t.Fatalf("values: %+v", u.Values)
 	}
 	for _, want := range []string{`Release "r" upgraded (revision 2).`, "update workload web (replace)",
@@ -82,7 +83,7 @@ func TestDryRunPlan(t *testing.T) {
 
 func TestProgressAndErrors(t *testing.T) {
 	e := newCLIEnv(t)
-	e.f.events = []plan.Event{{Kind: "Workload", Name: "web", Phase: plan.PhaseCreate, Detail: "creating r-web"}}
+	e.f.events = []api.Event{{Kind: "Workload", Name: "web", Phase: api.PhaseCreate, Detail: "creating r-web"}}
 	e.f.result = installed()
 	e.f.err = errors.New("Workload \"web\": image nginx:9 was not found")
 	_, err := e.run("rollback", "r", "1")
@@ -98,7 +99,7 @@ func TestProgressAndErrors(t *testing.T) {
 	if _, err := e.run("install", "d", "does/not/exist"); err == nil || !strings.Contains(err.Error(), "does/not/exist") {
 		t.Fatalf("missing package: %v", err)
 	}
-	if _, err := e.run("list", "-o", "yaml"); err == nil || !strings.Contains(err.Error(), `invalid --output "yaml"`) {
+	if _, err := e.run("list", "-o", "xml"); err == nil || !strings.Contains(err.Error(), `invalid --output "xml"`) {
 		t.Fatalf("output: %v", err)
 	}
 }
@@ -106,7 +107,7 @@ func TestProgressAndErrors(t *testing.T) {
 func TestStatusTable(t *testing.T) {
 	e := newCLIEnv(t)
 	e.f.status = &api.StatusReport{
-		Release: release.Release{Name: "r", Status: release.StatusDeployed, CurrentRevision: 3, PackageName: "shop", PackageVersion: "1.0.0", UpdatedAt: time.Now()},
+		Release: api.Release{Name: "r", Status: api.StatusDeployed, CurrentRevision: 3, PackageName: "shop", PackageVersion: "1.0.0", UpdatedAt: time.Now()},
 		Resources: []api.ResourceStatus{
 			{Kind: "Workload", Name: "web", RuntimeName: "r-web", Revision: 3, Desired: "applied", Actual: "running", Health: "healthy", Restarts: 4, OOMKilled: true},
 			{Kind: "Service", Name: "web", RuntimeName: "r-karga-proxy", Revision: 3, Desired: "applied", Actual: "routed", Backend: "karga-web-r3"},
@@ -133,7 +134,7 @@ func TestStatusTable(t *testing.T) {
 
 func TestColorsAlignTables(t *testing.T) {
 	e := newCLIEnv(t)
-	e.f.releases = []release.Release{{Name: "web", Status: release.StatusDeployed, CurrentRevision: 1}, {Name: "db", Status: release.StatusFailed, CurrentRevision: 2}}
+	e.f.releases = []api.Release{{Name: "web", Status: api.StatusDeployed, CurrentRevision: 1}, {Name: "db", Status: api.StatusFailed, CurrentRevision: 2}}
 	plain := e.mustRun("list", "--color", "never")
 	colored := e.mustRun("list", "--color", "always")
 	if !strings.Contains(colored, "\x1b[") {
@@ -146,18 +147,16 @@ func TestColorsAlignTables(t *testing.T) {
 
 func TestHistoryAndDiff(t *testing.T) {
 	e := newCLIEnv(t)
-	m1 := json.RawMessage(`[{"apiVersion":"karga.io/v1alpha1","kind":"Workload","metadata":{"name":"web"},"spec":{"image":"a"}}]`)
-	m2 := json.RawMessage(`[{"apiVersion":"karga.io/v1alpha1","kind":"Workload","metadata":{"name":"web"},"spec":{"image":"b"}}]`)
-	e.f.history = []release.Revision{
-		{Number: 1, Status: release.RevisionDeployed, Description: "Install complete", Manifest: m1, ValuesAll: map[string]any{"tag": "a"}},
-		{Number: 2, Status: release.RevisionDeployed, Description: "Upgrade complete", Manifest: m2, ValuesAll: map[string]any{"tag": "b"}},
+	e.f.history = []api.Revision{
+		{Release: "r", Number: 1, Status: api.RevisionDeployed, Description: "Install complete"},
+		{Release: "r", Number: 2, Status: api.RevisionDeployed, Description: "Upgrade complete"},
 	}
+	e.f.diff = &api.RevisionDiff{Release: "r", From: 1, To: 2,
+		Values:    []api.FieldChange{{Path: "tag", Old: `"a"`, New: `"b"`}},
+		Resources: []api.ResourceDiff{{Kind: "Workload", Name: "web", Action: api.ActionUpdate, Fields: []api.FieldChange{{Path: "spec.image", Old: `"a"`, New: `"b"`}}}}}
 	if out := e.mustRun("history", "r", "--diff"); !strings.Contains(out, "first") || !strings.Contains(out, "+0 ~1 -0, 1 values") {
 		t.Fatalf("history --diff:\n%s", out)
 	}
-	e.f.diff = &api.RevisionDiff{Release: "r", From: 1, To: 2,
-		Values:    []plan.FieldChange{{Path: "tag", Old: `"a"`, New: `"b"`}},
-		Resources: []plan.ResourceDiff{{Kind: "Workload", Name: "web", Action: plan.ActionUpdate, Fields: []plan.FieldChange{{Path: "spec.image", Old: `"a"`, New: `"b"`}}}}}
 	out := e.mustRun("diff", "r", "1")
 	for _, want := range []string{"revision 1 -> 2", `tag: "a" -> "b"`, "~ WORKLOAD web", `spec.image: "a" -> "b"`} {
 		if !strings.Contains(out, want) {
@@ -217,7 +216,7 @@ func TestStreams(t *testing.T) {
 	if _, err := e.run("volume", "backup", "r", "data", file); err == nil {
 		t.Fatal("backup over an existing file must fail")
 	}
-	if out := e.mustRun("volume", "restore", "r", "data", file); !strings.Contains(out, "restored from") || e.f.restored != "TARBALL" {
+	if out := e.mustRun("volume", "restore", "--yes", "r", "data", file); !strings.Contains(out, "restored from") || e.f.restored != "TARBALL" {
 		t.Fatalf("restore: %s %q", out, e.f.restored)
 	}
 	e.f.err = errors.New("volume data is not mounted")
@@ -253,14 +252,14 @@ func TestGatewayCommands(t *testing.T) {
 	if out := e.mustRun("gateway", "status", "-o", "json"); !strings.Contains(out, `"routes": []`) {
 		t.Fatalf("json:\n%s", out)
 	}
-	e.f.settings = api.Settings{Listen: []string{"127.0.0.1"}, Listeners: api.DefaultListeners()}
+	e.f.settings = api.Settings{Listen: []string{"127.0.0.1"}, Listeners: []api.Listener{{Name: "web", Port: 80, Protocol: api.ProtocolHTTP}, {Name: "websecure", Port: 443, Protocol: api.ProtocolHTTPS}}}
 	e.f.users = map[string][]string{"web": {"shop/web"}}
 	if out := e.mustRun("gateway", "listener", "list"); !strings.Contains(out, "web        80    http      shop/web") {
 		t.Fatalf("listeners:\n%s", out)
 	}
 	e.mustRun("gateway", "listener", "add", "pg", "--port", "5432", "--protocol", "tcp")
-	e.mustRun("gateway", "listener", "remove", "pg")
-	e.mustRun("gateway", "set", "listen", "10.0.0.5,127.0.0.1")
+	e.mustRun("gateway", "listener", "remove", "pg", "--yes")
+	e.mustRun("gateway", "set", "listen", "10.0.0.5,127.0.0.1", "--yes")
 	e.mustRun("gateway", "set", "access-log", "on")
 	if got := strings.Join(e.f.calls, ","); got != "add pg,remove pg,listen,access-log on" || len(e.f.settings.Listen) != 2 {
 		t.Fatalf("calls: %s %v", got, e.f.settings.Listen)
@@ -272,7 +271,7 @@ func TestGatewayCommands(t *testing.T) {
 
 func TestReconcileCommands(t *testing.T) {
 	e := newCLIEnv(t)
-	e.f.recon = &api.ReconcileResult{Release: "r", Actions: []release.Step{{Kind: "Workload", Name: "web", Action: "start", Status: "done"}}}
+	e.f.recon = &api.ReconcileResult{Release: "r", Actions: []api.Step{{Kind: "Workload", Name: "web", Action: "start", Status: "done"}}}
 	if out := e.mustRun("reconcile", "r"); !strings.Contains(out, "start workload web: done") {
 		t.Fatalf("reconcile:\n%s", out)
 	}
@@ -286,10 +285,10 @@ func TestReconcileCommands(t *testing.T) {
 	}
 	e.mustRun("pause", "r")
 	e.mustRun("resume", "r")
-	e.f.ops = []release.Operation{
-		{ID: 2, Release: "r", Type: "reconcile", Revision: 1, Status: release.OperationSucceeded, StartedAt: time.Now(),
-			Steps: []release.Step{{Kind: "Workload", Name: "web", Action: "start"}}},
-		{ID: 1, Release: "r", Type: "install", Revision: 1, Status: release.OperationSucceeded, StartedAt: time.Now().Add(-time.Minute), Actor: "alice"},
+	e.f.ops = []api.Operation{
+		{ID: 2, Release: "r", Type: "reconcile", Revision: 1, Status: api.OperationSucceeded, StartedAt: time.Now(),
+			Steps: []api.Step{{Kind: "Workload", Name: "web", Action: "start"}}},
+		{ID: 1, Release: "r", Type: "install", Revision: 1, Status: api.OperationSucceeded, StartedAt: time.Now().Add(-time.Minute), Actor: "alice"},
 	}
 	out := e.mustRun("events", "r")
 	if !strings.Contains(out, "USER") || !strings.Contains(out, "alice") || strings.Index(out, "install") > strings.Index(out, "reconcile") || !strings.Contains(out, "start workload web") {
@@ -315,9 +314,9 @@ func TestDynamicCompletion(t *testing.T) {
 		}
 		return strings.Join(vals, " ")
 	}
-	e.f.releases = []release.Release{{Name: "redis1"}, {Name: "web1"}}
-	e.f.applied = []release.AppliedResource{{Kind: "Workload", Name: "api"}, {Kind: "Workload", Name: "web"}, {Kind: "Volume", Name: "data"}}
-	e.f.history = []release.Revision{{Number: 1, Status: release.RevisionDeployed}, {Number: 2, Status: release.RevisionDeployed}}
+	e.f.releases = []api.Release{{Name: "redis1"}, {Name: "web1"}}
+	e.f.applied = []api.AppliedResource{{Kind: "Workload", Name: "api"}, {Kind: "Workload", Name: "web"}, {Kind: "Volume", Name: "data"}}
+	e.f.history = []api.Revision{{Number: 1, Status: api.RevisionDeployed}, {Number: 2, Status: api.RevisionDeployed}}
 	for _, tc := range []struct {
 		args []string
 		want string
@@ -343,5 +342,114 @@ func TestServerNotRunning(t *testing.T) {
 	// Package commands need no server.
 	if _, _, err := run(t, "--socket", filepath.Join(t.TempDir(), "none.sock"), "lint", demo); err != nil {
 		t.Fatalf("lint without a server: %v", err)
+	}
+}
+
+func TestExitCodes(t *testing.T) {
+	e := newCLIEnv(t)
+	code := func(args ...string) int {
+		t.Helper()
+		_, err := e.run(args...)
+		return ExitCode(err)
+	}
+	e.f.status = &api.StatusReport{Release: api.Release{Name: "r", Status: api.StatusDeployed},
+		Resources: []api.ResourceStatus{{Kind: "Workload", Name: "web", Desired: "applied", Actual: "running", Health: "healthy"}}}
+	if c := code("status", "r"); c != 0 {
+		t.Fatalf("healthy status: %d", c)
+	}
+	e.f.status.Resources[0].Health = "unhealthy"
+	if c := code("status", "r"); c != ExitUnhealthy {
+		t.Fatalf("unhealthy status: %d", c)
+	}
+	for _, args := range [][]string{{"status"}, {"list", "--nope"}, {"nope"}} {
+		if c := code(args...); c != ExitUsage {
+			t.Errorf("%v: %d, want %d", args, c, ExitUsage)
+		}
+	}
+	e.f.err = fmt.Errorf("release x: %w", api.ErrNotFound)
+	if c := code("list"); c != ExitNotFound {
+		t.Fatalf("not found: %d", c)
+	}
+	e.f.err = fmt.Errorf("%w: busy", api.ErrConflict)
+	if c := code("list"); c != ExitConflict {
+		t.Fatalf("conflict: %d", c)
+	}
+	e.f.err = errors.New("boom")
+	if c := code("list"); c != ExitFailure {
+		t.Fatalf("other failure: %d", c)
+	}
+	_, _, err := run(t, "--socket", filepath.Join(t.TempDir(), "none.sock"), "list")
+	if c := ExitCode(err); c != ExitUnavailable {
+		t.Fatalf("no server: %d", c)
+	}
+}
+
+// Commands that delete data or expose services need --yes when nobody can be asked.
+func TestConfirmations(t *testing.T) {
+	e := newCLIEnv(t)
+	e.f.result = installed()
+	for _, args := range [][]string{
+		{"uninstall", "r"},
+		{"uninstall", "r", "--delete-volumes"},
+		{"gateway", "set", "listen", "0.0.0.0"},
+		{"gateway", "listener", "remove", "web"},
+		{"upgrade", "r", demo, "--delete-volumes"},
+		{"rollback", "r", "--delete-volumes"},
+	} {
+		if _, err := e.run(args...); err == nil || !strings.Contains(err.Error(), "--yes") || ExitCode(err) != ExitUsage {
+			t.Errorf("%v: want a refusal asking for --yes, got %v", args, err)
+		}
+		if _, err := e.run(append(args, "--yes")...); err != nil {
+			t.Errorf("%v --yes: %v", args, err)
+		}
+	}
+	// Nothing to confirm: a dry run, loopback addresses.
+	for _, args := range [][]string{{"uninstall", "r", "--dry-run"}, {"gateway", "set", "listen", "127.0.0.1, ::1"}, {"upgrade", "r", demo, "--delete-volumes", "--dry-run"}} {
+		if _, err := e.run(args...); err != nil {
+			t.Errorf("%v: %v", args, err)
+		}
+	}
+	if got := e.f.settings.Listen; len(got) != 2 || got[1] != "::1" {
+		t.Errorf("listen addresses are trimmed: %q", got)
+	}
+}
+
+// Every command speaks json and yaml; streams write one document per item.
+func TestStructuredOutput(t *testing.T) {
+	e := newCLIEnv(t)
+	e.f.status = &api.StatusReport{Release: api.Release{Name: "r", Status: api.StatusDeployed}}
+	e.f.ops = []api.Operation{{ID: 2, Release: "r", Type: "upgrade"}, {ID: 1, Release: "r", Type: "install"}}
+	for _, args := range [][]string{
+		{"pause", "r"}, {"resume", "r"}, {"gateway", "set", "access-log", "on"},
+		{"gateway", "listener", "add", "pg", "--port", "5432", "--protocol", "tcp"},
+		{"gateway", "listener", "remove", "pg", "--yes"}, {"uninstall", "r", "--yes"},
+		{"status", "r"}, {"events", "r"}, {"template", "web", demo}, {"show", "readme", demo},
+	} {
+		out, err := e.run(append(args, "-o", "json")...)
+		var v any
+		if err != nil || json.Unmarshal([]byte(out), &v) != nil {
+			t.Errorf("%v -o json: %v\n%s", args, err, out)
+		}
+		out, err = e.run(append(args, "-o", "yaml")...)
+		if err != nil || yaml.Unmarshal([]byte(out), &v) != nil || strings.HasPrefix(out, "{") {
+			t.Errorf("%v -o yaml: %v\n%s", args, err, out)
+		}
+	}
+	// --watch: one JSON document per line, nothing else.
+	out := e.mustRun("status", "r", "--watch", "--count", "2", "--interval", "1ms", "-o", "json")
+	lines := strings.Split(strings.TrimSpace(out), "\n")
+	if len(lines) != 2 {
+		t.Fatalf("status --watch -o json:\n%s", out)
+	}
+	for _, l := range lines {
+		var rep api.StatusReport
+		if err := json.Unmarshal([]byte(l), &rep); err != nil || rep.Release.Name != "r" {
+			t.Fatalf("line %q: %v", l, err)
+		}
+	}
+	// events: oldest first.
+	var ops []api.Operation
+	if err := json.Unmarshal([]byte(e.mustRun("events", "r", "-o", "json")), &ops); err != nil || ops[0].ID != 1 {
+		t.Fatalf("events order: %+v %v", ops, err)
 	}
 }

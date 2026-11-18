@@ -14,6 +14,33 @@ First release.
   API and the example packages). Each installs with a public script, without credentials.
 - The CLI's tests run against a fake karga-server; the server's tests cover what it does.
 
+### Changed
+- The module is `github.com/hasankaradmir/karga-cli` (the repository is karga-cli); the binary is
+  still `karga`.
+- API 2.0: works with any karga-server of the same major API version.
+- `-o text|json|yaml` on every command (`table` is an older name for `text`); `status --watch` and
+  `events -f` stream one JSON document per line, or YAML documents.
+- Exit codes tell scripts why karga failed: 2 usage, 3 server unavailable or incompatible, 4 not
+  found, 5 conflict, 6 `karga status` not healthy (see USAGE.md).
+- `uninstall`, `volume restore`, `gateway set listen` (beyond loopback), `gateway listener remove`
+  and `upgrade`/`rollback --delete-volumes` ask first; in scripts they need `--yes`.
+- `--request-timeout` (default 30s) bounds commands that only ask karga-server something.
+- `uninstall --dry-run`. `get values|manifest|notes <release> [revision]` take the revision as an
+  argument instead of `--revision`. `volume restore --from-other-volume` replaces `--force`.
+- `--timeout` and `--history-max` are sent only when given: karga-server's defaults apply.
+- `karga template` masks writeOnly values wherever they occur, and takes `-o json|yaml`.
+- `history --diff` asks karga-server for the differences.
+- `karga version` says why it cannot reach the server (not running, permission denied) and exits
+  with 3 when the CLI and the server do not work together.
+
+### Fixed
+- `exec -t` without `-i` always failed.
+- `events` said newest first but printed oldest first; long messages are cut at a character.
+- Status colors covered states that do not exist and missed upgrading, uninstalling and aborted;
+  only state columns are colored now.
+- A second Ctrl-C ends karga at once.
+- Released binaries report `v0.1.0` like local builds.
+
 ### Breaking (compared with earlier builds)
 - Workloads no longer expose ports: `hostPort`, `hostIP` and `routes` are gone from the Workload
   (a clear error points to Services). Ports are named, and a `kind: Service` gives a workload a name

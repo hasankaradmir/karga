@@ -51,7 +51,7 @@ sudo usermod -aG karga $USER      # then log in again: members of the karga grou
 Then the CLI (Linux or macOS, amd64 or arm64), checked against the release checksums:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga/master/scripts/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga-cli/master/scripts/install.sh | sh
 # KARGA_VERSION=v0.1.0 picks a version, KARGA_BIN_DIR another directory (default /usr/local/bin)
 ```
 
@@ -84,10 +84,12 @@ karga get values cache
 karga get manifest cache
 
 karga rollback cache 1
-karga uninstall cache                    # keeps the volume; --delete-volumes removes it
+karga uninstall cache                    # asks first; keeps the volume; --delete-volumes removes it
 ```
 
-Every command accepts `-o json`. `--debug` writes logs to stderr (`--log-format json` for structured
+Every command accepts `-o text|json|yaml` (streams write one JSON document per line) and exits
+with a code scripts can test (`USAGE.md`, "Output and exit codes"); commands that delete data or
+expose services ask first, or need `--yes` in a script. `--debug` writes logs to stderr (`--log-format json` for structured
 logs). The state lives in karga-server's `KARGA_HOME` (`/var/lib/karga` for the service; the server's
 `--home` or `KARGA_HOME`, else `~/.local/share/karga`). Below, `$KARGA_HOME` means that directory.
 
@@ -97,19 +99,19 @@ logs). The state lives in karga-server's `KARGA_HOME` (`/var/lib/karga` for the 
 |---|---|
 | `create <dir>` | Start a new package: a web workload with an http health check, replace updates and notes |
 | `lint <package>...` | Validate `Package.yaml`, values and schema, render and check every resource |
-| `template <release> <package>` | Render locally; Secret values are shown as `<redacted>` unless `--show-secrets` |
+| `template <release> <package>` | Render locally; Secret and writeOnly values are shown as `<redacted>` unless `--show-secrets` |
 | `show package\|values\|readme <package>` | Show package metadata, default values or README |
-| `version` | Versions of karga and karga-server and their API version (a warning if the API differs) |
+| `version` | Versions of karga and karga-server and their API version (exit code 3 if they do not work together) |
 | `reconcile <release>` | Repair now: bring what runs back to the current revision (karga-server also does it on its own) |
 | `pause\|resume <release>` | Stop or restart karga-server's repairs of a release (maintenance) |
-| `events [release]` | Commands and repairs, newest last (`-f` follows, `-n` how many) |
+| `events [release]` | Commands and repairs, oldest first (`-f` follows, `-n` how many) |
 | `install <release> <package>` | Install. Re-running with the same package and values does nothing |
 | `upgrade <release> <package>` | Apply new values or a new package version. `--reuse-values`, `--install`, `--strategy`, `--delete-volumes` |
 | `rollback <release> [revision]` | Re-apply an earlier revision as a new revision. `--strategy`, `--delete-volumes` |
-| `uninstall <release>` | Remove workloads and networks. `--delete-volumes`, `--keep-history` |
+| `uninstall <release>` | Remove workloads and networks (asks first). `--dry-run`, `--delete-volumes`, `--keep-history`, `--force` |
 | `history`, `list`, `status <release>` | Revisions (`--diff` adds what changed), releases, and desired vs actual state (`--watch`) |
 | `diff <release> <rev> [rev]` | What differs between two revisions (values, package, resource fields; secrets only as changed) |
-| `get values\|manifest\|notes <release>` | Stored values (`--all` merges defaults), rendered resources, or the package's notes |
+| `get values\|manifest\|notes <release> [revision]` | Stored values (`--all` merges defaults), rendered resources, or the package's notes |
 | `exec <release> <workload> [-it] [-- cmd]` | Run a command in a workload (default: an interactive `sh`); exits with its code |
 | `logs <release> [workload...]` | Container logs (`--tail`, `-f`); `--proxy` for the release proxy, `--gateway` for the gateway |
 | `gateway status` | Health, version, image and listen addresses of the host gateway, and what it serves |
@@ -117,11 +119,12 @@ logs). The state lives in karga-server's `KARGA_HOME` (`/var/lib/karga` for the 
 | `gateway set listen <ip>[,<ip>]` | Where every listener binds (default `127.0.0.1`; `0.0.0.0` is every interface) |
 | `gateway set access-log on\|off` | Log every request and connection the gateway handles (off by default) |
 | `state backup <file>` | Consistent copy of the state database, safe while karga runs |
-| `volume backup\|restore <release> <volume> <file>` | Copy a volume's files to/from a gzipped tar; `--stop` for a consistent backup |
+| `volume backup\|restore <release> <volume> <file>` | Copy a volume's files to/from a gzipped tar; `--stop` for a consistent backup, `--from-other-volume` to restore another volume's backup |
+| `completion bash\|zsh\|fish\|powershell` | Shell completion |
 
-Mutating commands take `--dry-run`, `--verbose` (every changed field of the plan), `--timeout`
-(default `5m`), `--history-max` (default 10 revisions kept) and `--force`; they show their progress
-on stderr. A package's `NOTES.txt` (a template) is shown after install and upgrade. Tables are
+`install`, `upgrade` and `rollback` take `--dry-run`, `--verbose` (every changed field of the
+plan), `--timeout` (how long to wait for workloads; karga-server's default `5m`), `--history-max`
+(revisions kept; karga-server's default 10) and `--force`; they show their progress on stderr. A package's `NOTES.txt` (a template) is shown after install and upgrade. Tables are
 colored on a terminal (`--color auto|always|never`, `NO_COLOR`). Values come from the package defaults, then each `-f/--values` file in
 order, then `--set` and `--set-string`; `--set a=null` deletes a default.
 
@@ -134,8 +137,13 @@ redis/
 ├── values.schema.json    # optional JSON Schema, checked before rendering
 ├── README.md
 ├── templates/            # *.yaml render to resources; _*.tpl only hold named templates
-└── files/                # read from templates with .Files.Get / .Files.Glob
+├── files/                # read from templates with .Files.Get / .Files.Glob
+└── .kargaignore          # optional: paths left out of the package (one pattern per line)
 ```
+
+A package directory is read without `.git` and without what `.kargaignore` lists (`*.env`,
+`build/`, ...), at most 10000 files and 32 MiB. Rendering is bounded too: `include` and `tpl` nest
+at most 100 deep, a render takes at most 10 seconds and writes at most 16 MiB.
 
 ```yaml
 # Package.yaml

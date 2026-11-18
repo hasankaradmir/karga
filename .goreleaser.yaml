@@ -13,7 +13,7 @@ builds:
     flags:
       - -trimpath
     ldflags:
-      - -s -w -X github.com/hasankaradmir/karga/internal/version.Version={{ .Version }}
+      - -s -w -X github.com/hasankaradmir/karga-cli/internal/version.Version=v{{ .Version }}
     goos: [linux, darwin]
     goarch: [amd64, arm64]
 

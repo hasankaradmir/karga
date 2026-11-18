@@ -1,13 +1,15 @@
 package cli
 
 import (
-	"errors"
 	"fmt"
+	"os"
+
+	"github.com/hasankaradmir/karga-sdk/api"
 
 	"github.com/spf13/cobra"
+	"go.yaml.in/yaml/v3"
 
 	"github.com/hasankaradmir/karga-sdk/packages"
-	"github.com/hasankaradmir/karga-sdk/renderer"
 )
 
 // valueOpts holds the value override flags shared by template, lint, install and upgrade.
@@ -30,6 +32,19 @@ func (v *valueOpts) options(release string) packages.Options {
 	return packages.Options{ReleaseName: release, ValueFiles: v.files, Sets: v.sets, SetStrings: v.setStrings, Strict: v.strict}
 }
 
+// input reads the values files: karga-server cannot read the client's files.
+func (v *valueOpts) input() (api.ValuesInput, error) {
+	in := api.ValuesInput{Set: v.sets, SetString: v.setStrings, Strict: v.strict}
+	for _, f := range v.files {
+		data, err := os.ReadFile(f)
+		if err != nil {
+			return in, err
+		}
+		in.Files = append(in.Files, data)
+	}
+	return in, nil
+}
+
 func newTemplateCmd(a *app) *cobra.Command {
 	var vals valueOpts
 	var showSecrets bool
@@ -38,9 +53,6 @@ func newTemplateCmd(a *app) *cobra.Command {
 		Short: "Render a package locally without touching the runtime",
 		Args:  cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
-			if a.output == outputJSON {
-				return errors.New("template output is YAML only; -o json is not supported")
-			}
 			p, err := packages.Load(args[1])
 			if err != nil {
 				return err
@@ -49,11 +61,33 @@ func newTemplateCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			return m.Print(a.stdout, showSecrets)
+			docs := m.Documents
+			if !showSecrets {
+				if docs, err = m.RedactedDocuments(); err != nil {
+					return err
+				}
+			}
+			if a.structured() {
+				out := make([]map[string]any, len(docs))
+				for i, d := range docs {
+					var doc map[string]any
+					if err := yaml.Unmarshal([]byte(d.Content), &doc); err != nil {
+						return fmt.Errorf("templates/%s: %w", d.Source, err)
+					}
+					out[i] = map[string]any{"source": "templates/" + d.Source, "resource": doc}
+				}
+				return a.write(out)
+			}
+			for _, d := range docs {
+				if _, err := fmt.Fprintf(a.stdout, "---\n# Source: %s/templates/%s\n%s\n", m.Package.Name, d.Source, d.Content); err != nil {
+					return err
+				}
+			}
+			return nil
 		},
 	}
 	addValueFlags(cmd, &vals)
-	cmd.Flags().BoolVar(&showSecrets, "show-secrets", false, "print Secret values instead of <redacted>")
+	cmd.Flags().BoolVar(&showSecrets, "show-secrets", false, "print secret values (Secret resources and writeOnly values) instead of <redacted>")
 	return cmd
 }
 
@@ -81,8 +115,8 @@ func newLintCmd(a *app) *cobra.Command {
 				}
 				results = append(results, lintResult{Path: path, Errors: issues})
 			}
-			if a.output == outputJSON {
-				if err := writeJSON(a.stdout, results); err != nil {
+			if a.structured() {
+				if err := a.write(results); err != nil {
 					return err
 				}
 			} else {
@@ -119,10 +153,10 @@ func newShowCmd(a *app) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if a.output == outputJSON {
-					return writeJSON(a.stdout, p.Metadata)
+				if a.structured() {
+					return a.write(p.Metadata)
 				}
-				out, err := renderer.ToYAML(p.Metadata)
+				out, err := toYAML(p.Metadata)
 				if err != nil {
 					return err
 				}
@@ -139,8 +173,8 @@ func newShowCmd(a *app) *cobra.Command {
 				if err != nil {
 					return err
 				}
-				if a.output == outputJSON {
-					return writeJSON(a.stdout, p.Values)
+				if a.structured() {
+					return a.write(p.Values)
 				}
 				_, err = a.stdout.Write(p.RawValues)
 				return err
@@ -154,6 +188,9 @@ func newShowCmd(a *app) *cobra.Command {
 				p, err := packages.Load(args[0])
 				if err != nil {
 					return err
+				}
+				if a.structured() {
+					return a.write(map[string]string{"readme": string(p.Readme)})
 				}
 				_, err = a.stdout.Write(p.Readme)
 				return err
@@ -169,11 +206,10 @@ func newCreateCmd(a *app) *cobra.Command {
 		Short: "Create a new package to start from (a web service with health checks and notes)",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := packages.Create(args[0]); err != nil {
+			if err := createPackage(args[0]); err != nil {
 				return err
 			}
-			_, err := fmt.Fprintf(a.stdout, "Created package %s. Try: karga lint %s && karga install <release> %s\n", args[0], args[0], args[0])
-			return err
+			return a.report(map[string]string{"package": args[0]}, "Created package %s. Try: karga lint %s && karga install <release> %s\n", args[0], args[0], args[0])
 		},
 	}
 }

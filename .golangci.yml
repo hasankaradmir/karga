@@ -25,4 +25,4 @@ formatters:
   settings:
     goimports:
       local-prefixes:
-        - github.com/hasankaradmir/karga
+        - github.com/hasankaradmir/karga-cli

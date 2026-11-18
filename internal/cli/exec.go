@@ -37,9 +37,10 @@ func newExecCmd(a *app) *cobra.Command {
 				opts.Stdin = cmd.InOrStdin()
 			}
 			if tty {
-				in, ok := opts.Stdin.(*os.File)
+				// The terminal is read from stdin, with or without -i (its keys are the input only with -i).
+				in, ok := cmd.InOrStdin().(*os.File)
 				if !ok || !term.IsTerminal(int(in.Fd())) {
-					return errors.New("-t needs a terminal on stdin; drop -t (and -i) for non-interactive use")
+					return usageError{errors.New("-t needs a terminal on stdin; drop -t (and -i) for non-interactive use")}
 				}
 				state, err := term.MakeRaw(int(in.Fd()))
 				if err != nil {
@@ -69,16 +70,15 @@ func newExecCmd(a *app) *cobra.Command {
 				}()
 				opts.Resize = resize
 			}
-			return a.withBackend(cmd.Context(), func(s api.Backend) error {
-				code, err := s.Exec(cmd.Context(), args[0], args[1], opts)
-				if err != nil {
-					return err
-				}
-				if code != 0 {
-					return &ExitCodeError{Code: code}
-				}
-				return nil
-			})
+			s := a.backend()
+			code, err := s.Exec(cmd.Context(), args[0], args[1], opts)
+			if err != nil {
+				return err
+			}
+			if code != 0 {
+				return &ExitCodeError{Code: code}
+			}
+			return nil
 		},
 	}
 	cmd.Flags().BoolVarP(&interactive, "stdin", "i", false, "pass stdin to the command")

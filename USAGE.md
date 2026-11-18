@@ -50,14 +50,14 @@ Where things live:
 ### From a release
 
 karga-server and the CLI are released from their own repositories
-([karga-server](https://github.com/hasankaradmir/karga-server), [karga](https://github.com/hasankaradmir/karga)).
+([karga-server](https://github.com/hasankaradmir/karga-server), [karga](https://github.com/hasankaradmir/karga-cli)).
 Each install script checks the archive against the release checksums:
 
 ```console
 $ curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga-server/master/scripts/install.sh | sh
 karga-server v0.1.0 installed to /usr/local/bin/karga-server
 karga-server is running; add users to the karga group to use karga: sudo usermod -aG karga $USER
-$ curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga/master/scripts/install.sh | sh
+$ curl -fsSL https://raw.githubusercontent.com/hasankaradmir/karga-cli/master/scripts/install.sh | sh
 karga v0.1.0 installed to /usr/local/bin/karga
 $ sudo usermod -aG karga $USER          # log in again afterwards
 ```
@@ -75,8 +75,8 @@ The example packages used below (`examples/redis`, `examples/postgres`) are in
 ```console
 $ systemctl status karga-server
 $ karga version
-karga v0.1.0 (commit ..., go1.27.4, API 1)
-karga-server v0.1.0 (API 1)
+karga v0.1.0 (commit ..., go1.27.4, API 2.0)
+karga-server v0.1.0 (API 2.0)
 $ journalctl -u karga-server -f          # the server's log
 ```
 
@@ -90,9 +90,11 @@ $ karga list
 Error: karga-server is not running (no server on /run/karga/karga.sock): start it with 'sudo systemctl start karga-server'
 ```
 
-The CLI and the server work together when they speak the same API version (`karga version`
-shows both), whatever their release versions; otherwise every command stops with `karga speaks
-API N, karga-server API M: upgrade ...`. Every operation records the user of the CLI that asked
+The CLI and the server work together when they speak the same major API version (`karga
+version` shows both, e.g. `2.0` and `2.1`), whatever their release versions; otherwise every
+command stops with `karga speaks API N, karga-server API M: upgrade ...` (exit code 3). A newer
+CLI still works with an older server of the same major; what the server lacks fails with a
+message to upgrade it. Every operation records the user of the CLI that asked
 for it, as the kernel reports it on the socket (`USER` in `karga events`; `karga-server` for its
 own repairs and resumes).
 
@@ -234,7 +236,7 @@ Error: values do not match values.schema.json:
 - at '/service/port': maximum: got 99,999, want 65,535
 ```
 
-What a release was installed with (`--all` adds the defaults, `--revision N` an older one):
+What a release was installed with (`--all` adds the defaults; `karga get values db 2` shows revision 2):
 
 ```console
 $ karga get values db
@@ -592,16 +594,18 @@ $ karga volume backup db postgres-data db.tar.gz --stop
 volume postgres-data of db written to db.tar.gz
 
 $ karga volume restore db postgres-data db.tar.gz
+This stops the workloads mounting volume postgres-data of db and overwrites its files with db.tar.gz. Continue? [y/N] y
 volume postgres-data of db restored from db.tar.gz
 ```
 
 - `--stop` stops the workloads that mount the volume during the copy, so the files are consistent;
   without it the copy is taken live. For databases prefer `--stop`, or the database's own dump:
   `karga exec db postgres -- pg_dump -U app app > app.sql`.
-- Restore stops those workloads, writes the files and starts them again. Files in the backup
-  overwrite files with the same name; other files in the volume stay.
+- Restore asks first (`--yes` in scripts), receives the whole backup, then stops those workloads,
+  writes the files and starts them again, to the end even if the CLI goes away. Files in the
+  backup overwrite files with the same name; other files in the volume stay.
 - The backup file is mode 0600 and names its release and volume; restoring it into another one needs
-  `--force`.
+  `--from-other-volume`.
 
 ## 9. Secrets
 
@@ -619,8 +623,12 @@ What karga keeps:
 | State database | HMAC digests keyed by `$KARGA_HOME/state.key`, to detect changes |
 | `$KARGA_HOME/releases/<release>/<revision>/` | the files mounted into the container (directory 0700) |
 
-`karga template` shows secrets only with `--show-secrets`. Values that are not marked `writeOnly`
-are stored as written, so mark every password and token in your schemas.
+`karga template` shows secrets only with `--show-secrets`: Secret values and `writeOnly` values are
+`<redacted>` wherever they occur. A `writeOnly` value may only be used in a Secret (mount it, and
+point the application at the file, e.g. `POSTGRES_PASSWORD_FILE`): a package that puts one in a
+Workload's environment or a Config is refused, because karga stores and shows those. Values that
+are not marked `writeOnly` are stored as written, so mark every password and token in your schemas.
+`writeOnly` is followed under `additionalProperties`, `patternProperties` and `items`.
 
 ## 10. Resources and hardening
 
@@ -663,8 +671,33 @@ lists the new fields.
 | What karga and karga-server did | `karga events [release] [-f]` |
 | The gateway | `karga gateway status` |
 
-Tables are colored on a terminal (`--color never` or `NO_COLOR=1` turns it off); `-o json` gives
-machine-readable output for every read command.
+Tables are colored on a terminal (`--color never`, `NO_COLOR=1` or `TERM=dumb` turns it off).
+
+### Output and exit codes for scripts
+
+Every command takes `-o text` (the default, for people), `-o json` or `-o yaml`. Streams
+(`status --watch`, `events -f`) write one JSON document per line, or YAML documents separated by
+`---`. `logs` always writes the containers' lines.
+
+Commands that only ask karga-server something give up after `--request-timeout` (default `30s`;
+`0` waits for ever). Deployments, `uninstall`, `reconcile`, `logs`, `exec`, backups and
+`--watch`/`-f` are not bounded.
+
+Commands that delete data or expose services ask first on a terminal: `uninstall`, `volume
+restore`, `gateway set listen` with an address other than loopback, `gateway listener remove`, and
+`upgrade`/`rollback` with `--delete-volumes`. In a script (stdin is not a terminal) they need
+`--yes` (`-y`); `--dry-run` shows what they would do.
+
+| Exit code | Meaning |
+|---|---|
+| 0 | Done; `karga status`: the release is deployed and healthy |
+| 1 | Any other failure |
+| 2 | Wrong arguments or flags, or a confirmation needs `--yes` |
+| 3 | karga-server is not running, did not answer in time, went away or speaks another API |
+| 4 | The release, revision or resource does not exist |
+| 5 | Another operation holds the release, or it exists already |
+| 6 | `karga status`: the release is not deployed and healthy (failed, missing, unhealthy or starting) |
+| other | `karga exec`: the command's own exit code |
 
 ### Common errors
 
@@ -837,7 +870,9 @@ person installing the package knows them (`karga gateway listener list`).
 ## 14. Uninstall and clean up
 
 ```console
+$ karga uninstall db --dry-run          # what would be removed
 $ karga uninstall db
+This removes release db and its containers. Continue? [y/N] y
 Release "db" uninstalled.
 $ docker volume ls --filter label=io.karga.release=db --format '{{.Name}}'
 db-postgres-data

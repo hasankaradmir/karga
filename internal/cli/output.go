@@ -1,19 +1,50 @@
 package cli
 
 import (
+	"bytes"
 	"encoding/json"
+	"fmt"
 	"io"
 	"os"
 	"strings"
 	"unicode/utf8"
 
-	"github.com/hasankaradmir/karga-sdk/renderer"
+	"go.yaml.in/yaml/v3"
 )
 
 func writeJSON(w io.Writer, v any) error {
 	enc := json.NewEncoder(w)
 	enc.SetIndent("", "  ")
 	return enc.Encode(v)
+}
+
+// structured reports whether the output is for programs (json or yaml).
+func (a *app) structured() bool { return a.output == outputJSON || a.output == outputYAML }
+
+// write prints v as JSON or YAML, as --output says.
+func (a *app) write(v any) error {
+	if a.output == outputYAML {
+		b, err := toYAMLViaJSON(v)
+		if err != nil {
+			return err
+		}
+		_, err = a.stdout.Write(b)
+		return err
+	}
+	return writeJSON(a.stdout, v)
+}
+
+// writeStreamed prints one item of a stream: a line of JSON, or a YAML document.
+func (a *app) writeStreamed(v any) error {
+	if a.output == outputYAML {
+		b, err := toYAMLViaJSON(v)
+		if err != nil {
+			return err
+		}
+		_, err = fmt.Fprintf(a.stdout, "---\n%s", b)
+		return err
+	}
+	return json.NewEncoder(a.stdout).Encode(v)
 }
 
 // toYAMLViaJSON prints v as YAML using its JSON field names (resources only have json tags).
@@ -26,7 +57,7 @@ func toYAMLViaJSON(v any) ([]byte, error) {
 	if err := json.Unmarshal(js, &generic); err != nil {
 		return nil, err
 	}
-	return renderer.ToYAML(generic)
+	return toYAML(generic)
 }
 
 // colorful reports whether tables are colored: --color always, or auto on a terminal without
@@ -38,7 +69,7 @@ func (a *app) colorful() bool {
 	case "never":
 		return false
 	}
-	return a.output != outputJSON && os.Getenv("NO_COLOR") == "" && isTerminal(a.stdout)
+	return !a.structured() && os.Getenv("NO_COLOR") == "" && os.Getenv("TERM") != "dumb" && isTerminal(a.stdout)
 }
 
 // ANSI colors used for state words.
@@ -58,20 +89,25 @@ func stateColor(cell string) string {
 		return colorRed
 	}
 	switch strings.SplitN(cell, ",", 2)[0] {
-	case "healthy", "running", "deployed", "applied", "present", "succeeded", "ready":
+	case "healthy", "running", "deployed", "applied", "present", "succeeded", "ready", "routed":
 		return colorGreen
-	case "failed", "missing", "exited", "dead":
+	case "failed", "missing", "exited", "dead", "aborted":
 		return colorRed
-	case "starting", "pending", "deploying", "pending-upgrade", "pending-rollback", "created", "restarting":
+	case "starting", "pending", "deploying", "upgrading", "uninstalling", "created", "restarting":
 		return colorYellow
 	}
 	return ""
 }
 
+// stateColumns are the table columns whose words stateColor colors; others (names, descriptions)
+// are never colored, whatever they say.
+var stateColumns = map[string]bool{"STATUS": true, "DESIRED": true, "ACTUAL": true, "HEALTH/BACKEND": true}
+
 // table writes aligned columns separated by two spaces. Cells are padded before they are colored,
 // so color codes never shift the columns.
 func (a *app) table(header string, rows [][]string) error {
-	all := append([][]string{strings.Split(header, "\t")}, rows...)
+	head := strings.Split(header, "\t")
+	all := append([][]string{head}, rows...)
 	var width []int
 	for _, r := range all {
 		for i, c := range r {
@@ -89,7 +125,7 @@ func (a *app) table(header string, rows [][]string) error {
 			if i < len(r)-1 {
 				cell += strings.Repeat(" ", width[i]-utf8.RuneCountInString(c)+2)
 			}
-			if code := stateColor(c); color && n > 0 && code != "" {
+			if code := stateColor(c); color && n > 0 && code != "" && i < len(head) && stateColumns[head[i]] {
 				cell = code + c + colorReset + cell[len(c):]
 			}
 			b.WriteString(cell)
@@ -106,4 +142,27 @@ func (a *app) paint(word string) string {
 		return code + word + colorReset
 	}
 	return word
+}
+
+// toYAML marshals v with 2-space indentation and sorted map keys.
+func toYAML(v any) ([]byte, error) {
+	var buf bytes.Buffer
+	enc := yaml.NewEncoder(&buf)
+	enc.SetIndent(2)
+	if err := enc.Encode(v); err != nil {
+		return nil, err
+	}
+	if err := enc.Close(); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// report ends a command that changed something: v for programs, the formatted line for people.
+func (a *app) report(v any, format string, args ...any) error {
+	if a.structured() {
+		return a.write(v)
+	}
+	_, err := fmt.Fprintf(a.stdout, format, args...)
+	return err
 }

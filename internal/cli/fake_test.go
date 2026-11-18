@@ -17,9 +17,6 @@ import (
 
 	"github.com/hasankaradmir/karga-sdk/api"
 	"github.com/hasankaradmir/karga-sdk/packages"
-	"github.com/hasankaradmir/karga-sdk/pkg"
-	"github.com/hasankaradmir/karga-sdk/plan"
-	"github.com/hasankaradmir/karga-sdk/release"
 	"github.com/hasankaradmir/karga-sdk/resource"
 )
 
@@ -31,13 +28,14 @@ type fake struct {
 
 	result   *api.Result
 	err      error
-	events   []plan.Event
-	releases []release.Release
-	history  []release.Revision
+	events   []api.Event
+	releases []api.Release
+	history  []api.Revision
 	status   *api.StatusReport
 	diff     *api.RevisionDiff
-	applied  []release.AppliedResource
-	ops      []release.Operation
+	slow     time.Duration // List takes this long
+	applied  []api.AppliedResource
+	ops      []api.Operation
 	logs     string
 	backup   string
 	exitCode int
@@ -52,7 +50,7 @@ type fake struct {
 	upgrade  *api.UpgradeRequest
 	rollback *api.RollbackRequest
 	uninst   *api.UninstallRequest
-	pkg      *pkg.Package // loaded from the archive the CLI sent
+	pkg      *packages.Package // loaded from the archive the CLI sent
 	restored string
 	execCmd  []string
 	stdin    string
@@ -65,7 +63,7 @@ func (f *fake) call(name string) {
 	f.calls = append(f.calls, name)
 }
 
-func (f *fake) deploy(progress func(plan.Event)) (*api.Result, error) {
+func (f *fake) deploy(progress func(api.Event)) (*api.Result, error) {
 	for _, e := range f.events {
 		if progress != nil {
 			progress(e)
@@ -74,35 +72,43 @@ func (f *fake) deploy(progress func(plan.Event)) (*api.Result, error) {
 	return f.result, f.err
 }
 
-func (f *fake) Install(_ context.Context, req api.InstallRequest) (*api.Result, error) {
+func (f *fake) Install(_ context.Context, req api.InstallRequest, progress func(api.Event)) (*api.Result, error) {
 	f.call("install")
 	f.install = &req
 	f.pkg, _ = packages.Load(req.Package)
-	return f.deploy(req.Progress)
+	return f.deploy(progress)
 }
 
-func (f *fake) Upgrade(_ context.Context, req api.UpgradeRequest) (*api.Result, error) {
+func (f *fake) Upgrade(_ context.Context, req api.UpgradeRequest, progress func(api.Event)) (*api.Result, error) {
 	f.call("upgrade")
 	f.upgrade = &req
 	f.pkg, _ = packages.Load(req.Package)
-	return f.deploy(req.Progress)
+	return f.deploy(progress)
 }
 
-func (f *fake) Rollback(_ context.Context, req api.RollbackRequest) (*api.Result, error) {
+func (f *fake) Rollback(_ context.Context, req api.RollbackRequest, progress func(api.Event)) (*api.Result, error) {
 	f.call("rollback")
 	f.rollback = &req
-	return f.deploy(req.Progress)
+	return f.deploy(progress)
 }
 
-func (f *fake) Uninstall(_ context.Context, req api.UninstallRequest) error {
+func (f *fake) Uninstall(_ context.Context, req api.UninstallRequest) (*api.Result, error) {
 	f.call("uninstall")
 	f.uninst = &req
-	return f.err
+	return &api.Result{Release: req.Name, DryRun: req.DryRun, Status: api.StatusUninstalled}, f.err
 }
 
-func (f *fake) List(context.Context) ([]release.Release, error) { return f.releases, f.err }
+func (f *fake) List(ctx context.Context) ([]api.Release, error) {
+	if f.slow > 0 {
+		select {
+		case <-time.After(f.slow):
+		case <-ctx.Done():
+		}
+	}
+	return f.releases, f.err
+}
 
-func (f *fake) History(context.Context, string) ([]release.Revision, error) {
+func (f *fake) History(context.Context, string) ([]api.Revision, error) {
 	return f.history, f.err
 }
 
@@ -123,7 +129,7 @@ func (f *fake) Diff(context.Context, string, int, int) (*api.RevisionDiff, error
 	return f.diff, f.err
 }
 
-func (f *fake) Resources(context.Context, string) ([]release.AppliedResource, error) {
+func (f *fake) Resources(context.Context, string) ([]api.AppliedResource, error) {
 	return f.applied, f.err
 }
 
@@ -145,13 +151,13 @@ func (f *fake) Exec(_ context.Context, _, _ string, opts api.ExecOptions) (int, 
 	return f.exitCode, f.err
 }
 
-func (f *fake) BackupVolume(_ context.Context, req api.VolumeBackupRequest) error {
-	_, _ = io.WriteString(req.W, f.backup)
+func (f *fake) BackupVolume(_ context.Context, _ api.VolumeBackupRequest, w io.Writer) error {
+	_, _ = io.WriteString(w, f.backup)
 	return f.err
 }
 
-func (f *fake) RestoreVolume(_ context.Context, req api.VolumeRestoreRequest) error {
-	b, _ := io.ReadAll(req.R)
+func (f *fake) RestoreVolume(_ context.Context, _ api.VolumeRestoreRequest, r io.Reader) error {
+	b, _ := io.ReadAll(r)
 	f.restored = string(b)
 	return f.err
 }
@@ -171,7 +177,7 @@ func (f *fake) Pause(_ context.Context, _ string, paused bool) error {
 	return f.err
 }
 
-func (f *fake) Events(_ context.Context, _ string, after int64, _ int) ([]release.Operation, error) {
+func (f *fake) Events(_ context.Context, _ string, after int64, _ int) ([]api.Operation, error) {
 	if after > 0 {
 		return nil, f.err
 	}
@@ -230,7 +236,7 @@ func newCLIEnv(t *testing.T) *cliEnv {
 	if err != nil {
 		t.Fatal(err)
 	}
-	hs := &http.Server{Handler: api.NewServer(e.f, "dev"), ReadHeaderTimeout: 5 * time.Second}
+	hs := &http.Server{Handler: api.NewServer(e.f, "dev", api.Options{}), ReadHeaderTimeout: 5 * time.Second}
 	go func() { _ = hs.Serve(l) }()
 	t.Cleanup(func() { _ = hs.Close() })
 	return e

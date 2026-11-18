@@ -8,19 +8,20 @@ import (
 	"os/signal"
 	"syscall"
 
-	"github.com/hasankaradmir/karga/internal/cli"
+	"github.com/hasankaradmir/karga-cli/internal/cli"
 )
 
 func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	go func() {
+		<-ctx.Done()
+		stop() // a second Ctrl-C ends karga at once
+	}()
 	err := cli.NewRootCmd(os.Stdout, os.Stderr).ExecuteContext(ctx)
 	stop()
 	var exit *cli.ExitCodeError
-	switch {
-	case errors.As(err, &exit):
-		os.Exit(exit.Code) // the command's own exit code; it printed what it had to say
-	case err != nil:
+	if err != nil && !errors.As(err, &exit) { // with its own exit code, a command printed what it had to say
 		fmt.Fprintln(os.Stderr, "Error:", err)
-		os.Exit(1)
 	}
+	os.Exit(cli.ExitCode(err))
 }
