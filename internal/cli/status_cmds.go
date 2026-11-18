@@ -204,9 +204,6 @@ func newReconcileCmds(a *app) []*cobra.Command {
 			slices.Reverse(ops) // oldest first, so a followed stream continues below
 			switch {
 			case a.structured() && !follow:
-				if ops == nil {
-					ops = []api.Operation{}
-				}
 				return a.write(ops)
 			case a.structured():
 				for _, op := range ops {

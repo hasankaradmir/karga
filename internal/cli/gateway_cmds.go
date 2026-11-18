@@ -33,7 +33,7 @@ func newGatewayCmd(a *app) *cobra.Command {
 				return err
 			}
 			if a.structured() {
-				if routes == nil {
+				if routes == nil { // inside an object: write only turns a top-level list into []
 					routes = []api.Exposed{}
 				}
 				return a.write(map[string]any{"gateway": health, "routes": routes})

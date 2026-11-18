@@ -6,6 +6,8 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Changed
+- `-o json`/`-o yaml` print an empty list as `[]` in every command (some printed `null`);
+  `karga logs` refuses them instead of ignoring them.
 - Exit codes: an unknown subcommand of a group (`karga gateway nope`) exits 2 instead of showing
   the help with 0, as do an invalid `--strategy` or `--log-format` and a request karga-server
   refuses as invalid. Ctrl-C during an operation exits 7, with a hint to follow it. `karga status`

@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"reflect"
 	"strings"
 	"unicode/utf8"
 
@@ -22,15 +23,13 @@ func writeJSON(w io.Writer, v any) error {
 // structured reports whether the output is for programs (json or yaml).
 func (a *app) structured() bool { return a.output == outputJSON || a.output == outputYAML }
 
-// write prints v as JSON or YAML, as --output says.
+// write prints v as JSON or YAML, as --output says. An empty list is [], never null.
 func (a *app) write(v any) error {
+	if rv := reflect.ValueOf(v); rv.Kind() == reflect.Slice && rv.IsNil() {
+		v = []any{}
+	}
 	if a.output == outputYAML {
-		b, err := toYAMLViaJSON(v)
-		if err != nil {
-			return err
-		}
-		_, err = a.stdout.Write(b)
-		return err
+		return a.writeYAML(v, "")
 	}
 	return writeJSON(a.stdout, v)
 }
@@ -38,14 +37,18 @@ func (a *app) write(v any) error {
 // writeStreamed prints one item of a stream: a line of JSON, or a YAML document.
 func (a *app) writeStreamed(v any) error {
 	if a.output == outputYAML {
-		b, err := toYAMLViaJSON(v)
-		if err != nil {
-			return err
-		}
-		_, err = fmt.Fprintf(a.stdout, "---\n%s", b)
-		return err
+		return a.writeYAML(v, "---\n")
 	}
 	return json.NewEncoder(a.stdout).Encode(v)
+}
+
+func (a *app) writeYAML(v any, prefix string) error {
+	b, err := toYAMLViaJSON(v)
+	if err != nil {
+		return err
+	}
+	_, err = io.WriteString(a.stdout, prefix+string(b))
+	return err
 }
 
 // toYAMLViaJSON prints v as YAML using its JSON field names (resources only have json tags).
