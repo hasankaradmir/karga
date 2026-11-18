@@ -40,7 +40,7 @@ func newGatewayCmd(a *app) *cobra.Command {
 			}
 			state := health.Container
 			switch {
-			case health.Container == "missing":
+			case health.Container == api.ActualMissing:
 				state = "not running (nothing is exposed)"
 			case health.Ready:
 				state += ", ready (Envoy " + health.Version + ")"

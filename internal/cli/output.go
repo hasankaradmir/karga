@@ -9,6 +9,7 @@ import (
 	"strings"
 	"unicode/utf8"
 
+	"github.com/hasankaradmir/karga-sdk/api"
 	"go.yaml.in/yaml/v3"
 )
 
@@ -85,15 +86,18 @@ func stateColor(cell string) string {
 	switch {
 	case cell == "":
 		return ""
-	case strings.Contains(cell, "oom-killed") || strings.Contains(cell, "unhealthy"):
+	case strings.Contains(cell, oomKilled) || strings.Contains(cell, api.HealthUnhealthy):
 		return colorRed
 	}
+	// The API's words, and Docker's container states the gateway's health shows (dead, restarting).
 	switch strings.SplitN(cell, ",", 2)[0] {
-	case "healthy", "running", "deployed", "applied", "present", "succeeded", "ready", "routed":
+	case api.HealthHealthy, api.ActualRunning, api.StatusDeployed, api.DesiredApplied, api.ActualPresent,
+		api.OperationSucceeded, api.ActualRouted:
 		return colorGreen
-	case "failed", "missing", "exited", "dead", "aborted":
+	case api.StatusFailed, api.ActualMissing, api.ActualExited, "dead", api.OperationAborted:
 		return colorRed
-	case "starting", "pending", "deploying", "upgrading", "uninstalling", "created", "restarting":
+	case api.HealthStarting, api.StatusPending, api.StatusDeploying, api.StatusUpgrading, api.StatusUninstalling,
+		api.ActualCreated, "restarting":
 		return colorYellow
 	}
 	return ""
