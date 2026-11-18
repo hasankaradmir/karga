@@ -427,6 +427,9 @@ Error: Service "postgres": expose postgres on listener pg: no such gateway liste
 ```
 
 Applications behind http and https listeners receive the client address in `x-forwarded-for`.
+Requests may take as long as they need (uploads, server-sent events, long polls) and WebSocket
+connections pass through; a request or WebSocket that sends nothing either way for 5 minutes is
+closed.
 
 ### TLS
 
