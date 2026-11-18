@@ -6,6 +6,15 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Changed
+- API 3.0 (karga-sdk): this karga works with karga-server of API 3 only; `karga version` shows
+  both. Release names that are not DNS labels, or that start with `karga`, are refused by every
+  command, not only `install`; USAGE §1.
+- Template loops are limited to 1,000,000 iterations per render.
+- `--set` and `--set-string` apply in the order given, and `--set a[1]=x` edits the default list
+  instead of replacing it with `[null, x]`; USAGE §4.
+- Networks of a package are `bridge` and Volumes `local` (karga-sdk): other drivers are refused.
+- `karga lint` prints warnings (`[WARNING]`, `warnings` in JSON) that do not fail it: a variable
+  set from a Secret is visible to anyone who can inspect the container; USAGE §9.
 - `karga history` shows `superseded` for deployed revisions a later one replaced (karga-server
   with this change); USAGE §5.
 

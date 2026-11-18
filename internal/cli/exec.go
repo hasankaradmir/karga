@@ -71,7 +71,7 @@ func newExecCmd(a *app) *cobra.Command {
 				opts.Resize = resize
 			}
 			s := a.backend()
-			code, err := s.Exec(cmd.Context(), args[0], args[1], opts)
+			code, err := s.Exec(cmd.Context(), api.ExecRequest{Release: args[0], Workload: args[1], ExecOptions: opts})
 			if err != nil {
 				return err
 			}

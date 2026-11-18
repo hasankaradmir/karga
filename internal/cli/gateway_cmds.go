@@ -28,7 +28,7 @@ func newGatewayCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			routes, err := s.Gateway(cmd.Context())
+			routes, err := s.GatewayRoutes(cmd.Context())
 			if err != nil {
 				return err
 			}
@@ -74,7 +74,7 @@ func newGatewayCmd(a *app) *cobra.Command {
 		ValidArgs: []string{"on", "off"},
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s := a.backend()
-			if err := s.SetGatewayAccessLog(cmd.Context(), args[0] == "on"); err != nil {
+			if err := s.SetGatewayAccessLog(cmd.Context(), api.GatewayAccessLogRequest{Enabled: args[0] == "on"}); err != nil {
 				return err
 			}
 			return a.report(map[string]any{"accessLog": args[0] == "on"}, "gateway access log %s\n", args[0])
@@ -95,7 +95,7 @@ func newGatewayCmd(a *app) *cobra.Command {
 				}
 			}
 			s := a.backend()
-			if err := s.SetGatewayListen(cmd.Context(), addrs); err != nil {
+			if err := s.SetGatewayListen(cmd.Context(), api.GatewayListenRequest{Addresses: addrs}); err != nil {
 				return err
 			}
 			return a.report(map[string]any{"listen": addrs}, "gateway listens on %s\n", strings.Join(addrs, ", "))
@@ -154,7 +154,7 @@ func newListenerCmd(a *app) *cobra.Command {
 				return err
 			}
 			s := a.backend()
-			if err := s.RemoveGatewayListener(cmd.Context(), args[0]); err != nil {
+			if err := s.RemoveGatewayListener(cmd.Context(), api.GatewayListenerRequest{Name: args[0]}); err != nil {
 				return err
 			}
 			return a.report(map[string]any{"listener": args[0], "removed": true}, "listener %s removed\n", args[0])

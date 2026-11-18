@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"reflect"
 	"regexp"
 	"strings"
 	"testing"
@@ -36,7 +37,7 @@ func TestDeploySendsPackageAndValues(t *testing.T) {
 	if err := os.WriteFile(vals, []byte("replicas: 3\n"), 0o600); err != nil {
 		t.Fatal(err)
 	}
-	out := e.mustRun("upgrade", "r", demo, "-f", vals, "--set", "a=1", "--set-string", "b=007",
+	out := e.mustRun("upgrade", "r", demo, "-f", vals, "--set-string", "b=007", "--set", "a=1",
 		"--reuse-values", "--strategy", "recreate", "--delete-volumes", "--timeout", "1m", "--yes")
 	u := e.f.upgrade
 	if u == nil || u.Name != "r" || !u.ReuseValues || u.Strategy != "recreate" || !u.DeleteVolumes || u.Timeout != api.Duration(time.Minute) || u.HistoryMax != nil {
@@ -46,8 +47,9 @@ func TestDeploySendsPackageAndValues(t *testing.T) {
 	if e.f.pkg == nil || e.f.pkg.Metadata.Name != "demo" {
 		t.Fatalf("package archive not received: %+v", e.f.pkg)
 	}
+	// --set and --set-string travel in the order given.
 	if len(u.Values.Files) != 1 || string(u.Values.Files[0]) != "replicas: 3\n" ||
-		u.Values.Set[0] != "a=1" || u.Values.SetString[0] != "b=007" {
+		!reflect.DeepEqual(u.Values.Sets, []api.Set{{Expr: "b=007", String: true}, {Expr: "a=1"}}) {
 		t.Fatalf("values: %+v", u.Values)
 	}
 	for _, want := range []string{`Release "r" upgraded (revision 2).`, "update workload web (replace)",
@@ -93,7 +95,7 @@ func TestProgressAndErrors(t *testing.T) {
 	if !strings.Contains(e.stderr, "workload web: creating r-web") {
 		t.Fatalf("progress on stderr:\n%s", e.stderr)
 	}
-	if _, err := e.run("upgrade", "x", demo, "--strategy", "rolling"); err == nil || !strings.Contains(err.Error(), `invalid --strategy "rolling"`) {
+	if _, err := e.run("upgrade", "x", demo, "--strategy", "rolling"); err == nil || !strings.Contains(err.Error(), `invalid --strategy: "rolling" must be recreate or replace`) {
 		t.Fatalf("strategy checked locally: %v", err)
 	}
 	if _, err := e.run("install", "d", "does/not/exist"); err == nil || !strings.Contains(err.Error(), "does/not/exist") {

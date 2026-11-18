@@ -23,7 +23,7 @@ func newHistoryCmd(a *app) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s := a.backend()
-			revs, err := s.History(cmd.Context(), args[0])
+			revs, err := s.History(cmd.Context(), api.ReleaseRequest{Name: args[0]})
 			if err != nil {
 				return err
 			}
@@ -54,7 +54,7 @@ func changeSummary(ctx context.Context, s api.Backend, revs []api.Revision, i in
 	if i == 0 {
 		return "first"
 	}
-	d, err := s.Diff(ctx, revs[i].Release, revs[i-1].Number, revs[i].Number)
+	d, err := s.Diff(ctx, api.DiffRequest{Name: revs[i].Release, From: revs[i-1].Number, To: revs[i].Number})
 	if err != nil {
 		return "?"
 	}
@@ -116,7 +116,7 @@ func newGetCmd(a *app) *cobra.Command {
 				return err
 			}
 			s := a.backend()
-			v, err := s.GetValues(cmd.Context(), args[0], revision, all)
+			v, err := s.Values(cmd.Context(), api.ValuesRequest{Name: args[0], Revision: revision, All: all})
 			if err != nil {
 				return err
 			}
@@ -143,7 +143,7 @@ func newGetCmd(a *app) *cobra.Command {
 				return err
 			}
 			s := a.backend()
-			rs, err := s.GetManifest(cmd.Context(), args[0], revision)
+			rs, err := s.Manifest(cmd.Context(), api.RevisionRequest{Name: args[0], Revision: revision})
 			if err != nil {
 				return err
 			}
@@ -172,7 +172,7 @@ func newGetCmd(a *app) *cobra.Command {
 				return err
 			}
 			s := a.backend()
-			n, err := s.GetNotes(cmd.Context(), args[0], revision)
+			n, err := s.Notes(cmd.Context(), api.RevisionRequest{Name: args[0], Revision: revision})
 			if err != nil {
 				return err
 			}
@@ -205,7 +205,7 @@ func newDiffCmd(a *app) *cobra.Command {
 				return err
 			}
 			s := a.backend()
-			d, err := s.Diff(cmd.Context(), args[0], from, to)
+			d, err := s.Diff(cmd.Context(), api.DiffRequest{Name: args[0], From: from, To: to})
 			if err != nil {
 				return err
 			}

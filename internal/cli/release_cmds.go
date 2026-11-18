@@ -8,7 +8,6 @@ import (
 	"github.com/spf13/cobra"
 
 	"github.com/hasankaradmir/karga-sdk/api"
-	"github.com/hasankaradmir/karga-sdk/resource"
 )
 
 type commonFlags struct {
@@ -144,9 +143,10 @@ func addStrategyFlag(cmd *cobra.Command, strategy *string) {
 	cmd.Flags().StringVar(strategy, "strategy", "", "override every workload's updateStrategy: recreate|replace")
 }
 
+// validStrategy checks --strategy before the package is packed and sent.
 func validStrategy(s string) error {
-	if s != "" && s != resource.StrategyRecreate && s != resource.StrategyReplace {
-		return fmt.Errorf("invalid --strategy %q: must be recreate or replace", s)
+	if err := api.ValidateStrategy(s); err != nil {
+		return fmt.Errorf("invalid --%w", err)
 	}
 	return nil
 }

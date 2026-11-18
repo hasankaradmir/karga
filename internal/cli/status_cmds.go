@@ -28,7 +28,7 @@ func newStatusCmd(a *app) *cobra.Command {
 			s := a.backend()
 			if !watch {
 				rep, err := a.printStatus(cmd.Context(), s, args[0])
-				if err == nil && !healthy(rep) {
+				if err == nil && !rep.Healthy() {
 					return errUnhealthy
 				}
 				return err
@@ -36,7 +36,7 @@ func newStatusCmd(a *app) *cobra.Command {
 			tty := isTerminal(a.stdout)
 			for n := 1; ; n++ {
 				if a.structured() { // one document per refresh
-					rep, err := s.Status(cmd.Context(), args[0])
+					rep, err := s.Status(cmd.Context(), api.ReleaseRequest{Name: args[0]})
 					if err != nil {
 						return err
 					}
@@ -71,21 +71,8 @@ func newStatusCmd(a *app) *cobra.Command {
 	return cmd
 }
 
-// healthy reports whether a release is deployed and every resource is applied and running well.
-func healthy(rep *api.StatusReport) bool {
-	if rep.Release.Status != api.StatusDeployed || rep.Interrupted != "" {
-		return false
-	}
-	for _, x := range rep.Resources {
-		if x.Desired != "applied" || x.Actual == "missing" || x.Actual == "exited" || x.Health == "unhealthy" || x.Health == "starting" {
-			return false
-		}
-	}
-	return true
-}
-
 func (a *app) printStatus(ctx context.Context, s api.Backend, name string) (*api.StatusReport, error) {
-	rep, err := s.Status(ctx, name)
+	rep, err := s.Status(ctx, api.ReleaseRequest{Name: name})
 	if err != nil {
 		return nil, err
 	}
@@ -151,7 +138,7 @@ func newReconcileCmds(a *app) []*cobra.Command {
 		Args: cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			s := a.backend()
-			res, err := s.Reconcile(cmd.Context(), args[0], true)
+			res, err := s.Reconcile(cmd.Context(), api.ReconcileRequest{Name: args[0], Force: true})
 			if err != nil {
 				return err
 			}
@@ -183,7 +170,11 @@ func newReconcileCmds(a *app) []*cobra.Command {
 			Args:  cobra.ExactArgs(1),
 			RunE: func(cmd *cobra.Command, args []string) error {
 				s := a.backend()
-				if err := s.Pause(cmd.Context(), args[0], paused); err != nil {
+				set := s.Resume
+				if paused {
+					set = s.Pause
+				}
+				if err := set(cmd.Context(), api.ReleaseRequest{Name: args[0]}); err != nil {
 					return err
 				}
 				return a.report(map[string]any{"release": args[0], "paused": paused},
@@ -203,7 +194,7 @@ func newReconcileCmds(a *app) []*cobra.Command {
 				name = args[0]
 			}
 			s := a.backend()
-			ops, err := s.Events(cmd.Context(), name, 0, limit)
+			ops, err := s.Events(cmd.Context(), api.EventsRequest{Name: name, Limit: limit})
 			if err != nil {
 				return err
 			}
@@ -235,7 +226,7 @@ func newReconcileCmds(a *app) []*cobra.Command {
 					return nil
 				case <-time.After(2 * time.Second):
 				}
-				more, err := s.Events(cmd.Context(), name, last, 100)
+				more, err := s.Events(cmd.Context(), api.EventsRequest{Name: name, AfterID: last, Limit: 100})
 				if err != nil {
 					return err
 				}

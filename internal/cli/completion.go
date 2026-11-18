@@ -38,7 +38,7 @@ func completeRelease(a *app, _ []string) ([]string, cobra.ShellCompDirective) {
 func completeResource(kind string) completer {
 	return func(a *app, args []string) ([]string, cobra.ShellCompDirective) {
 		return a.ask(func(ctx context.Context, b api.Backend) []string {
-			applied, _ := b.Resources(ctx, args[0])
+			applied, _ := b.Resources(ctx, api.ReleaseRequest{Name: args[0]})
 			var out []string
 			for _, r := range applied {
 				if r.Kind == kind {
@@ -52,7 +52,7 @@ func completeResource(kind string) completer {
 
 func completeRevision(a *app, args []string) ([]string, cobra.ShellCompDirective) {
 	return a.ask(func(ctx context.Context, b api.Backend) []string {
-		revs, _ := b.History(ctx, args[0])
+		revs, _ := b.History(ctx, api.ReleaseRequest{Name: args[0]})
 		var out []string
 		for i := len(revs) - 1; i >= 0; i-- {
 			out = append(out, strconv.Itoa(revs[i].Number)+"\t"+string(revs[i].Status)+" "+revs[i].PackageVersion)

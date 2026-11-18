@@ -29,19 +29,15 @@ func newVersionCmd(a *app) *cobra.Command {
 		Args:  cobra.NoArgs,
 		RunE: func(cmd *cobra.Command, _ []string) error {
 			v := versionReport{Info: version.Current(), API: api.Version}
-			if c, ok := a.backend().(interface {
-				Version(context.Context) (api.ServerVersion, error)
-			}); ok {
-				ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Second)
-				if sv, err := c.Version(ctx); err == nil {
-					v.Server = &sv
-				} else if errors.Is(err, api.ErrNotRunning) {
-					v.ServerError = "not running (" + a.socket + ")"
-				} else {
-					v.ServerError = err.Error() // e.g. permission denied on the socket
-				}
-				cancel()
+			ctx, cancel := context.WithTimeout(cmd.Context(), 2*time.Second)
+			if sv, err := a.backend().Version(ctx); err == nil {
+				v.Server = &sv
+			} else if errors.Is(err, api.ErrNotRunning) {
+				v.ServerError = "not running (" + a.socket + ")"
+			} else {
+				v.ServerError = err.Error() // e.g. permission denied on the socket
 			}
+			cancel()
 			var mismatch error
 			if v.Server != nil && !api.Compatible(v.Server.API) {
 				mismatch = fmt.Errorf("%w: karga speaks API %s and karga-server API %s: upgrade the older one", api.ErrIncompatible, v.API, v.Server.API)
