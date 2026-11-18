@@ -24,6 +24,9 @@ func newLogsCmd(a *app) *cobra.Command {
 			return nil
 		},
 		RunE: func(cmd *cobra.Command, args []string) error {
+			if a.structured() {
+				return usageError{errors.New("logs are the containers' own lines: -o json and -o yaml do not apply")}
+			}
 			if len(args) > 0 {
 				req.Release, req.Workloads = args[0], args[1:]
 			}

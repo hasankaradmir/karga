@@ -97,9 +97,11 @@ func positional(a *app, repeat bool, byPos ...completer) func(*cobra.Command, []
 // addCompletion attaches dynamic completion to the command tree.
 func addCompletion(a *app, root *cobra.Command) {
 	set := func(path string, repeat bool, byPos ...completer) {
-		if cmd, _, err := root.Find(strings.Fields(path)); err == nil && cmd != root {
-			cmd.ValidArgsFunction = positional(a, repeat, byPos...)
+		cmd, _, err := root.Find(strings.Fields(path))
+		if err != nil || cmd == root || cmd.CommandPath() != "karga "+path {
+			panic("completion for a command that does not exist: " + path) // renamed: every test fails
 		}
+		cmd.ValidArgsFunction = positional(a, repeat, byPos...)
 	}
 	workload := completeResource(resource.KindWorkload)
 	volume := completeResource(resource.KindVolume)

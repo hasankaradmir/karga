@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -40,21 +41,14 @@ type app struct {
 	cancel         context.CancelFunc
 
 	log *slog.Logger
-
-	// backend returns karga-server's client; tests replace it.
-	backend func() api.Remote
 }
+
+// backend is karga-server's client, on --socket (tests serve a fake there).
+func (a *app) backend() api.Remote { return api.NewClient(a.socket) }
 
 // NewRootCmd builds the karga command tree.
 func NewRootCmd(stdout, stderr io.Writer) *cobra.Command {
-	return newRootCmd(stdout, stderr, nil)
-}
-
-func newRootCmd(stdout, stderr io.Writer, backend func() api.Remote) *cobra.Command {
-	a := &app{stdout: stdout, stderr: stderr, backend: backend}
-	if a.backend == nil {
-		a.backend = func() api.Remote { return api.NewClient(a.socket) }
-	}
+	a := &app{stdout: stdout, stderr: stderr}
 
 	root := &cobra.Command{
 		Use:           "karga",
@@ -85,7 +79,7 @@ func newRootCmd(stdout, stderr io.Writer, backend func() api.Remote) *cobra.Comm
 			case "json":
 				a.log = slog.New(slog.NewJSONHandler(a.stderr, opts))
 			default:
-				return fmt.Errorf("invalid --log-format %q: must be \"text\" or \"json\"", a.logFormat)
+				return usageError{fmt.Errorf("invalid --log-format %q: must be text or json", a.logFormat)}
 			}
 			if a.socket == "" {
 				a.socket = api.DefaultSocket
@@ -126,6 +120,11 @@ func newRootCmd(stdout, stderr io.Writer, backend func() api.Remote) *cobra.Comm
 	addCompletion(a, root)
 	for flag, values := range map[string][]string{"output": {outputText, outputJSON, outputYAML}, "color": {"auto", "always", "never"}, "log-format": {"text", "json"}} {
 		_ = root.RegisterFlagCompletionFunc(flag, cobra.FixedCompletions(values, cobra.ShellCompDirectiveNoFileComp))
+	}
+	for path := range untimedCommands {
+		if c, _, err := root.Find(strings.Fields(path)[1:]); err != nil || c.CommandPath() != path {
+			panic("untimed command that does not exist: " + path) // renamed: every test fails
+		}
 	}
 	markUsageErrors(root)
 	return root

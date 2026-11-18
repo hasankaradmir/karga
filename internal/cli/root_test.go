@@ -11,6 +11,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/hasankaradmir/karga-sdk/api"
 )
 
 // run runs karga with args. Without --socket it points at a socket nothing listens on, so the tests
@@ -110,5 +112,23 @@ func TestRequestTimeout(t *testing.T) {
 		if got := untimed(c); got != want {
 			t.Errorf("%s: untimed %v, want %v", path, got, want)
 		}
+	}
+}
+
+// Logs are raw lines: asking for structured output is refused instead of ignored.
+func TestLogsRefuseStructuredOutput(t *testing.T) {
+	e := newCLIEnv(t)
+	if _, err := e.run("logs", "shop", "-o", "json"); ExitCode(err) != ExitUsage {
+		t.Fatalf("logs -o json: %v", err)
+	}
+}
+
+// An empty list prints as [] in every command, never null.
+func TestEmptyListsAreEmpty(t *testing.T) {
+	var b strings.Builder
+	a := &app{stdout: &b, output: outputJSON}
+	var none []api.Release
+	if err := a.write(none); err != nil || strings.TrimSpace(b.String()) != "[]" {
+		t.Fatalf("%q %v", b.String(), err)
 	}
 }

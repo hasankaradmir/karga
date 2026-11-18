@@ -16,6 +16,9 @@ import (
 	"github.com/hasankaradmir/karga-sdk/resource"
 )
 
+// oomKilled marks, in the health column, a container whose last run hit its memory limit.
+const oomKilled = "oom-killed"
+
 func newStatusCmd(a *app) *cobra.Command {
 	var watch bool
 	var interval time.Duration
@@ -29,7 +32,7 @@ func newStatusCmd(a *app) *cobra.Command {
 			if !watch {
 				rep, err := a.printStatus(cmd.Context(), s, args[0])
 				if err == nil && !rep.Healthy() {
-					return errUnhealthy
+					return &ExitCodeError{Code: ExitUnhealthy} // the report says why
 				}
 				return err
 			}
@@ -103,7 +106,7 @@ func (a *app) printStatus(ctx context.Context, s api.Backend, name string) (*api
 			health = "-> " + x.Backend
 		}
 		if x.OOMKilled {
-			health = strings.TrimPrefix(health+", oom-killed", ", ")
+			health = strings.TrimPrefix(health+", "+oomKilled, ", ")
 		}
 		restarts := ""
 		if x.Kind == resource.KindWorkload || x.Kind == api.KindProxy {
@@ -201,9 +204,6 @@ func newReconcileCmds(a *app) []*cobra.Command {
 			slices.Reverse(ops) // oldest first, so a followed stream continues below
 			switch {
 			case a.structured() && !follow:
-				if ops == nil {
-					ops = []api.Operation{}
-				}
 				return a.write(ops)
 			case a.structured():
 				for _, op := range ops {

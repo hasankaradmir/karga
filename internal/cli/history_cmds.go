@@ -77,9 +77,6 @@ func newListCmd(a *app) *cobra.Command {
 				return err
 			}
 			if a.structured() {
-				if rels == nil {
-					return a.write([]any{})
-				}
 				return a.write(rels)
 			}
 			var rows [][]string

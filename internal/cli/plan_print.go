@@ -27,16 +27,22 @@ func planCounts(p api.Plan) (create, update, del, unchanged int) {
 
 var actionSymbol = map[string]string{api.ActionCreate: "+", api.ActionUpdate: "~", api.ActionDelete: "-"}
 
+// planHeader names the release and the revision a plan moves it to (from 0: a first one).
+func planHeader(b *strings.Builder, releaseName string, from, to int) {
+	fmt.Fprintf(b, "Deployment Plan\n\nRelease:  %s\n", releaseName)
+	if from == 0 {
+		fmt.Fprintf(b, "Revision: %d\n", to)
+	} else {
+		fmt.Fprintf(b, "Revision: %d -> %d\n", from, to)
+	}
+}
+
 // printPlanSummary writes one line per change (+ create, ~ update, - delete; unchanged resources are left
 // out) and the counts. printPlan shows the changed fields too.
 func printPlanSummary(w io.Writer, p api.Plan, releaseName string, from, to int) error {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Deployment Plan\n\nRelease:  %s\n", releaseName)
-	if from == 0 {
-		fmt.Fprintf(&b, "Revision: %d\n\n", to)
-	} else {
-		fmt.Fprintf(&b, "Revision: %d -> %d\n\n", from, to)
-	}
+	planHeader(&b, releaseName, from, to)
+	b.WriteString("\n")
 	for _, c := range p.Changes {
 		sym, ok := actionSymbol[c.Action]
 		if !ok {
@@ -67,12 +73,7 @@ func printPlanSummary(w io.Writer, p api.Plan, releaseName string, from, to int)
 // printPlan writes the plan with every changed field.
 func printPlan(w io.Writer, p api.Plan, releaseName string, from, to int) error {
 	var b strings.Builder
-	fmt.Fprintf(&b, "Deployment Plan\n\nRelease: %s\n", releaseName)
-	if from == 0 {
-		fmt.Fprintf(&b, "Revision: %d\n", to)
-	} else {
-		fmt.Fprintf(&b, "Revision: %d -> %d\n", from, to)
-	}
+	planHeader(&b, releaseName, from, to)
 	b.WriteString("\nChanges:\n")
 	for _, c := range p.Changes {
 		if c.Strategy != "" {

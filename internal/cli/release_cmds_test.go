@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -355,7 +356,9 @@ func TestExitCodes(t *testing.T) {
 	if c := code("status", "r"); c != ExitUnhealthy {
 		t.Fatalf("unhealthy status: %d", c)
 	}
-	for _, args := range [][]string{{"status"}, {"list", "--nope"}, {"nope"}} {
+	// A typo in a group's subcommand must not pass as done; nor a wrong strategy or log format.
+	for _, args := range [][]string{{"status"}, {"list", "--nope"}, {"nope"}, {"gateway", "nope"}, {"get", "nope"},
+		{"gateway", "listener", "nope"}, {"upgrade", "r", ".", "--strategy", "blue"}, {"list", "--log-format", "xml"}} {
 		if c := code(args...); c != ExitUsage {
 			t.Errorf("%v: %d, want %d", args, c, ExitUsage)
 		}
@@ -371,6 +374,14 @@ func TestExitCodes(t *testing.T) {
 	e.f.err = fmt.Errorf("%w: karga-server (API 2.0) does not know field x; upgrade karga-server", api.ErrIncompatible)
 	if c := code("list"); c != ExitUnavailable {
 		t.Fatalf("incompatible: %d", c)
+	}
+	e.f.err = fmt.Errorf("%w: values: bad", api.ErrInvalid)
+	if c := code("list"); c != ExitUsage {
+		t.Fatalf("invalid request: %d", c)
+	}
+	// The client's own: it stopped waiting (Ctrl-C) while the server goes on.
+	if err := fmt.Errorf("%w: %w", api.ErrDetached, context.Canceled); ExitCode(err) != ExitDetached || Hint(err) == "" {
+		t.Fatalf("detached: %d %q", ExitCode(err), Hint(err))
 	}
 	e.f.err = errors.New("boom")
 	if c := code("list"); c != ExitFailure {

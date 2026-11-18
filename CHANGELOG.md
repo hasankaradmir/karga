@@ -6,6 +6,16 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Changed
+- `-o json`/`-o yaml` print an empty list as `[]` in every command (some printed `null`);
+  `karga logs` refuses them instead of ignoring them.
+- Exit codes: an unknown subcommand of a group (`karga gateway nope`) exits 2 instead of showing
+  the help with 0, as do an invalid `--strategy` or `--log-format` and a request karga-server
+  refuses as invalid. Ctrl-C during an operation exits 7, with a hint to follow it. `karga status`
+  and `karga lint` no longer print an `Error:` line after the report that already says what is
+  wrong.
+- The questions before commands that delete data or expose services come from the SDK, the same
+  rule karga-server checks. A failed read of the answer is an error instead of a "no";
+  `gateway set listen` refuses an address that is not an IP.
 - API 3.0 (karga-sdk): this karga works with karga-server of API 3 only; `karga version` shows
   both. Release names that are not DNS labels, or that start with `karga`, are refused by every
   command, not only `install`; USAGE §1.
@@ -19,6 +29,8 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
   with this change); USAGE §5.
 
 ### Added
+- `karga template --revision N` renders as revision N (`.Release.Revision`); its help says that
+  `upgrade --dry-run -o yaml` shows what an upgrade would deploy.
 - `make dist` builds the release archives and `checksums.txt` without a release; `install.sh`
   installs them from `file://`. USAGE: requirements, installing from source, and a new section 15
   that puts an API and its database online on a domain.

@@ -20,23 +20,13 @@ type commonFlags struct {
 	deleteVolumes bool
 }
 
-// confirmDeleteVolumes asks before a deployment that may delete volumes; a dry run shows which.
-func (a *app) confirmDeleteVolumes(cmd *cobra.Command, c commonFlags, release string) error {
-	if !c.deleteVolumes || c.dryRun {
-		return nil
-	}
-	return a.confirm(cmd, fmt.Sprintf("With --delete-volumes, %s deletes the volumes the new revision no longer has and their data (--dry-run shows which)", release))
-}
-
 func addDeleteVolumesFlag(cmd *cobra.Command, c *commonFlags) {
 	cmd.Flags().BoolVar(&c.deleteVolumes, "delete-volumes", false, "allow deleting volumes the new revision no longer has and that have retention: delete (their data is lost)")
 }
 
-func addCommonFlags(cmd *cobra.Command, c *commonFlags, dryRun bool) {
+func addCommonFlags(cmd *cobra.Command, c *commonFlags) {
 	f := cmd.Flags()
-	if dryRun {
-		f.BoolVar(&c.dryRun, "dry-run", false, "show the deployment plan without changing anything")
-	}
+	f.BoolVar(&c.dryRun, "dry-run", false, "show the deployment plan without changing anything")
 	f.BoolVarP(&c.verbose, "verbose", "v", false, "show every changed field of the plan")
 	f.DurationVar(&c.timeout, "timeout", 0, "how long to wait for workloads to become ready (default: karga-server's, 5m)")
 	f.IntVar(&c.historyMax, "history-max", 0, "revisions to keep per release, 0 = unlimited (default: karga-server's, 10)")
@@ -135,7 +125,7 @@ func newInstallCmd(a *app) *cobra.Command {
 		},
 	}
 	addValueFlags(cmd, &vals)
-	addCommonFlags(cmd, &common, true)
+	addCommonFlags(cmd, &common)
 	return cmd
 }
 
@@ -146,7 +136,7 @@ func addStrategyFlag(cmd *cobra.Command, strategy *string) {
 // validStrategy checks --strategy before the package is packed and sent.
 func validStrategy(s string) error {
 	if err := api.ValidateStrategy(s); err != nil {
-		return fmt.Errorf("invalid --%w", err)
+		return usageError{fmt.Errorf("invalid --%w", err)}
 	}
 	return nil
 }
@@ -169,14 +159,16 @@ func newUpgradeCmd(a *app) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			if err := a.confirmDeleteVolumes(cmd, common, args[0]); err != nil {
-				return err
-			}
 			opts, progress, done := a.optionsFor(cmd, common)
-			res, err := s.Upgrade(cmd.Context(), api.UpgradeRequest{
+			req := api.UpgradeRequest{
 				CommonOptions: opts, Name: args[0], Package: args[1], Values: values,
 				ReuseValues: reuse, Install: install, Strategy: strategy,
-			}, progress)
+			}
+			if err := a.confirm(cmd, req.Risk()); err != nil {
+				return err
+			}
+			req.Confirmed = true
+			res, err := s.Upgrade(cmd.Context(), req, progress)
 			done()
 			if err != nil {
 				return err
@@ -185,7 +177,7 @@ func newUpgradeCmd(a *app) *cobra.Command {
 		},
 	}
 	addValueFlags(cmd, &vals)
-	addCommonFlags(cmd, &common, true)
+	addCommonFlags(cmd, &common)
 	cmd.Flags().BoolVar(&reuse, "reuse-values", false, "start from the current revision's values")
 	cmd.Flags().BoolVarP(&install, "install", "i", false, "install the release if it does not exist")
 	addStrategyFlag(cmd, &strategy)
@@ -209,11 +201,13 @@ func newRollbackCmd(a *app) *cobra.Command {
 				return err
 			}
 			s := a.backend()
-			if err := a.confirmDeleteVolumes(cmd, common, args[0]); err != nil {
+			opts, progress, done := a.optionsFor(cmd, common)
+			req := api.RollbackRequest{CommonOptions: opts, Name: args[0], Revision: rev, Strategy: strategy}
+			if err := a.confirm(cmd, req.Risk()); err != nil {
 				return err
 			}
-			opts, progress, done := a.optionsFor(cmd, common)
-			res, err := s.Rollback(cmd.Context(), api.RollbackRequest{CommonOptions: opts, Name: args[0], Revision: rev, Strategy: strategy}, progress)
+			req.Confirmed = true
+			res, err := s.Rollback(cmd.Context(), req, progress)
 			done()
 			if err != nil {
 				return err
@@ -221,7 +215,7 @@ func newRollbackCmd(a *app) *cobra.Command {
 			return a.printResult("rolled back", res, common.verbose)
 		},
 	}
-	addCommonFlags(cmd, &common, true)
+	addCommonFlags(cmd, &common)
 	addStrategyFlag(cmd, &strategy)
 	addDeleteVolumesFlag(cmd, &common)
 	return cmd
@@ -235,15 +229,10 @@ func newUninstallCmd(a *app) *cobra.Command {
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			req.Name = args[0]
-			if !req.DryRun {
-				what := fmt.Sprintf("This removes release %s and its containers", req.Name)
-				if req.DeleteVolumes {
-					what = fmt.Sprintf("This removes release %s, its containers and ALL ITS VOLUMES AND THEIR DATA", req.Name)
-				}
-				if err := a.confirm(cmd, what); err != nil {
-					return err
-				}
+			if err := a.confirm(cmd, req.Risk()); err != nil {
+				return err
 			}
+			req.Confirmed = true
 			s := a.backend()
 			res, err := s.Uninstall(cmd.Context(), req)
 			if err != nil {
@@ -253,7 +242,7 @@ func newUninstallCmd(a *app) *cobra.Command {
 				return a.write(res)
 			}
 			if req.DryRun {
-				return printPlanSummary(a.stdout, res.Plan, res.Release, res.From, res.From)
+				return printPlanSummary(a.stdout, res.Plan, res.Release, 0, res.From) // no new revision: the current one
 			}
 			_, err = fmt.Fprintf(a.stdout, "Release %q uninstalled.\n", req.Name)
 			return err

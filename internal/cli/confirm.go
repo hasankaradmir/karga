@@ -4,7 +4,7 @@ import (
 	"bufio"
 	"errors"
 	"fmt"
-	"net"
+	"io"
 	"os"
 	"strings"
 
@@ -15,12 +15,14 @@ import (
 // errAborted is returned when the user does not confirm.
 var errAborted = errors.New("aborted")
 
-// confirm asks before a command that loses data or exposes services: on a terminal it asks the user,
-// otherwise (a script) it needs --yes.
-func (a *app) confirm(cmd *cobra.Command, what string) error {
-	if a.yes {
+// confirm asks the user to agree to risk, a request's Risk (what it changes that cannot be changed
+// back; empty: nothing to ask): on a terminal it asks, otherwise (a script) it needs --yes. The
+// caller then sets the request's Confirmed, which karga-server requires.
+func (a *app) confirm(cmd *cobra.Command, risk string) error {
+	if a.yes || risk == "" {
 		return nil
 	}
+	what := strings.ToUpper(risk[:1]) + risk[1:]
 	f, ok := cmd.InOrStdin().(*os.File)
 	if !ok || !term.IsTerminal(int(f.Fd())) {
 		return usageError{fmt.Errorf("%s; pass --yes to confirm (stdin is not a terminal)", what)}
@@ -28,20 +30,13 @@ func (a *app) confirm(cmd *cobra.Command, what string) error {
 	if _, err := fmt.Fprintf(a.stderr, "%s. Continue? [y/N] ", what); err != nil {
 		return err
 	}
-	answer, _ := bufio.NewReader(f).ReadString('\n')
+	answer, err := bufio.NewReader(f).ReadString('\n')
+	if err != nil && !errors.Is(err, io.EOF) { // EOF, no answer: not agreed
+		return err
+	}
 	switch strings.ToLower(strings.TrimSpace(answer)) {
 	case "y", "yes":
 		return nil
 	}
 	return errAborted
-}
-
-// exposesHost reports whether addrs include an address other machines can reach.
-func exposesHost(addrs []string) bool {
-	for _, a := range addrs {
-		if ip := net.ParseIP(strings.TrimSpace(a)); ip == nil || !ip.IsLoopback() {
-			return true
-		}
-	}
-	return false
 }

@@ -74,16 +74,25 @@ func (v *valueOpts) input() (api.ValuesInput, error) {
 func newTemplateCmd(a *app) *cobra.Command {
 	var vals valueOpts
 	var showSecrets bool
+	var revision int
 	cmd := &cobra.Command{
 		Use:   "template <release> <package>",
 		Short: "Render a package locally without touching the runtime",
-		Args:  cobra.ExactArgs(2),
+		Long: "Render a package locally without touching the runtime, as revision 1 of the release (--revision\n" +
+			"another). It does not read the release's stored values: 'karga upgrade --dry-run -o yaml' shows\n" +
+			"what an upgrade would deploy.",
+		Args: cobra.ExactArgs(2),
 		RunE: func(_ *cobra.Command, args []string) error {
+			if revision < 1 {
+				return usageError{fmt.Errorf("invalid --revision %d: revisions start at 1", revision)}
+			}
 			p, err := packages.Load(args[1])
 			if err != nil {
 				return err
 			}
-			m, err := packages.Render(p, vals.options(args[0]))
+			opts := vals.options(args[0])
+			opts.Revision = revision
+			m, err := packages.Render(p, opts)
 			if err != nil {
 				return err
 			}
@@ -113,6 +122,7 @@ func newTemplateCmd(a *app) *cobra.Command {
 		},
 	}
 	addValueFlags(cmd, &vals)
+	cmd.Flags().IntVar(&revision, "revision", 1, "the revision number templates see as .Release.Revision")
 	cmd.Flags().BoolVar(&showSecrets, "show-secrets", false, "print secret values (Secret resources and writeOnly values) instead of <redacted>")
 	return cmd
 }
@@ -159,7 +169,7 @@ func newLintCmd(a *app) *cobra.Command {
 				_, _ = fmt.Fprintf(a.stdout, "\n%d package(s) linted, %d failed\n", len(results), failed)
 			}
 			if failed > 0 {
-				return fmt.Errorf("lint failed for %d package(s)", failed)
+				return &ExitCodeError{Code: ExitFailure} // the report says which and why
 			}
 			return nil
 		},

@@ -58,7 +58,10 @@ func TestGoldenOutput(t *testing.T) {
 		{"install-dry-run", func(f *fake) { r := installed(); r.DryRun = true; f.result = r }, []string{"install", "r", demo, "--dry-run"}},
 		{"install-dry-run-verbose", func(f *fake) { r := installed(); r.DryRun = true; f.result = r }, []string{"install", "r", demo, "--dry-run", "--verbose"}},
 		{"upgrade", func(f *fake) { f.result = installed() }, []string{"upgrade", "r", demo}},
-		{"uninstall-dry-run", func(f *fake) {}, []string{"uninstall", "r", "--dry-run"}},
+		{"uninstall-dry-run", func(f *fake) {
+			f.result = &api.Result{Release: "r", Revision: 3, From: 3, DryRun: true, Status: api.StatusDeployed, Plan: api.Plan{Changes: []api.Change{
+				{Kind: "Workload", Name: "web", Action: api.ActionDelete}, {Kind: "Volume", Name: "data", Action: api.ActionDelete}}}}
+		}, []string{"uninstall", "r", "--dry-run"}},
 		{"status", func(f *fake) { f.status = status }, []string{"status", "r"}},
 		{"list", func(f *fake) {
 			f.releases = []api.Release{

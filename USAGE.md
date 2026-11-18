@@ -759,17 +759,19 @@ Commands that only ask karga-server something give up after `--request-timeout` 
 Commands that delete data or expose services ask first on a terminal: `uninstall`, `volume
 restore`, `gateway set listen` with an address other than loopback, `gateway listener remove`, and
 `upgrade`/`rollback` with `--delete-volumes`. In a script (stdin is not a terminal) they need
-`--yes` (`-y`); `--dry-run` shows what they would do.
+`--yes` (`-y`); `--dry-run` shows what they would do. karga-server refuses these requests unless
+the client says the user agreed, so no client skips the question.
 
 | Exit code | Meaning |
 |---|---|
 | 0 | Done; `karga status`: the release is deployed and healthy |
-| 1 | Any other failure |
-| 2 | Wrong arguments or flags, or a confirmation needs `--yes` |
+| 1 | Any other failure (`karga lint`: a package has errors; a question answered no) |
+| 2 | Wrong arguments, flags or subcommand, a confirmation needs `--yes`, or karga-server refused the request as given (an invalid name, package or values) |
 | 3 | karga-server is not running, did not answer in time, went away, or is too old for the request (another API major, or a field or endpoint it does not know) |
 | 4 | The release, revision or resource does not exist |
 | 5 | Another operation holds the release, or it exists already |
 | 6 | `karga status`: the release is not deployed and healthy (failed, missing, unhealthy or starting) |
+| 7 | karga stopped waiting (Ctrl-C) for an operation that goes on in karga-server: `karga events <release> -f` follows it |
 | other | `karga exec`: the command's own exit code |
 
 ### Common errors
@@ -913,7 +915,10 @@ $ karga install demo shop --dry-run    # what it would do
 ```
 
 A resource that does not decode names its file, document and line in the rendered output; look at
-that line with `karga template`. The package format is `karga.io/v1alpha1` and may still change.
+that line with `karga template`. It renders revision 1 of the release (`--revision N` another, as
+`.Release.Revision`) from the values given, not the release's stored ones: `karga upgrade <release>
+<package> --dry-run -o yaml` shows what an upgrade would deploy. The package format is
+`karga.io/v1alpha1` and may still change.
 
 A workload that needs another one at start (an application and its database) waits for its
 Service with `dependsOn`:

@@ -24,7 +24,7 @@ func TestPrintPlan(t *testing.T) {
 	}
 	want := `Deployment Plan
 
-Release: cache
+Release:  cache
 Revision: 2 -> 3
 
 Changes:
