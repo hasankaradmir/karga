@@ -648,7 +648,9 @@ volume postgres-data of db restored from db.tar.gz
 ```
 
 - `--stop` stops the workloads that mount the volume during the copy, so the files are consistent;
-  without it the copy is taken live. For databases prefer `--stop`, or the database's own dump:
+  the server copies to a temporary file under its `KARGA_HOME` (as large as the backup), starts the
+  workloads again and then sends it, so a slow download does not lengthen the downtime. Without
+  `--stop` the copy is taken live. For databases prefer `--stop`, or the database's own dump:
   `karga exec db postgres -- pg_dump -U app app > app.sql`.
 - Restore asks first (`--yes` in scripts), receives the whole backup, then stops those workloads,
   writes the files and starts them again, to the end even if the CLI goes away. Files in the
