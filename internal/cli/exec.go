@@ -4,7 +4,6 @@ import (
 	"errors"
 	"os"
 	"os/signal"
-	"strconv"
 	"syscall"
 
 	"github.com/spf13/cobra"
@@ -12,11 +11,6 @@ import (
 
 	"github.com/hasankaradmir/karga-sdk/api"
 )
-
-// ExitCodeError makes karga exit with Code without printing anything (e.g. a command's own code).
-type ExitCodeError struct{ Code int }
-
-func (e *ExitCodeError) Error() string { return "exit status " + strconv.Itoa(e.Code) }
 
 func newExecCmd(a *app) *cobra.Command {
 	var interactive, tty bool

@@ -24,11 +24,9 @@ func addDeleteVolumesFlag(cmd *cobra.Command, c *commonFlags) {
 	cmd.Flags().BoolVar(&c.deleteVolumes, "delete-volumes", false, "allow deleting volumes the new revision no longer has and that have retention: delete (their data is lost)")
 }
 
-func addCommonFlags(cmd *cobra.Command, c *commonFlags, dryRun bool) {
+func addCommonFlags(cmd *cobra.Command, c *commonFlags) {
 	f := cmd.Flags()
-	if dryRun {
-		f.BoolVar(&c.dryRun, "dry-run", false, "show the deployment plan without changing anything")
-	}
+	f.BoolVar(&c.dryRun, "dry-run", false, "show the deployment plan without changing anything")
 	f.BoolVarP(&c.verbose, "verbose", "v", false, "show every changed field of the plan")
 	f.DurationVar(&c.timeout, "timeout", 0, "how long to wait for workloads to become ready (default: karga-server's, 5m)")
 	f.IntVar(&c.historyMax, "history-max", 0, "revisions to keep per release, 0 = unlimited (default: karga-server's, 10)")
@@ -127,7 +125,7 @@ func newInstallCmd(a *app) *cobra.Command {
 		},
 	}
 	addValueFlags(cmd, &vals)
-	addCommonFlags(cmd, &common, true)
+	addCommonFlags(cmd, &common)
 	return cmd
 }
 
@@ -179,7 +177,7 @@ func newUpgradeCmd(a *app) *cobra.Command {
 		},
 	}
 	addValueFlags(cmd, &vals)
-	addCommonFlags(cmd, &common, true)
+	addCommonFlags(cmd, &common)
 	cmd.Flags().BoolVar(&reuse, "reuse-values", false, "start from the current revision's values")
 	cmd.Flags().BoolVarP(&install, "install", "i", false, "install the release if it does not exist")
 	addStrategyFlag(cmd, &strategy)
@@ -217,7 +215,7 @@ func newRollbackCmd(a *app) *cobra.Command {
 			return a.printResult("rolled back", res, common.verbose)
 		},
 	}
-	addCommonFlags(cmd, &common, true)
+	addCommonFlags(cmd, &common)
 	addStrategyFlag(cmd, &strategy)
 	addDeleteVolumesFlag(cmd, &common)
 	return cmd

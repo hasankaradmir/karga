@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strconv"
 	"strings"
 
 	"github.com/spf13/cobra"
@@ -22,6 +23,12 @@ const (
 	ExitUnhealthy   = 6 // karga status: the release is not deployed and healthy
 	ExitDetached    = 7 // karga stopped waiting (Ctrl-C); the operation goes on in karga-server
 )
+
+// ExitCodeError makes karga exit with Code without printing anything: the command said what it
+// had to (a report, or the exec'd command's own output).
+type ExitCodeError struct{ Code int }
+
+func (e *ExitCodeError) Error() string { return "exit status " + strconv.Itoa(e.Code) }
 
 // usageError marks wrong arguments or flags.
 type usageError struct{ error }

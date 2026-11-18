@@ -7,6 +7,7 @@ import (
 	"io"
 	"log/slog"
 	"os"
+	"strings"
 	"time"
 
 	"github.com/spf13/cobra"
@@ -119,6 +120,11 @@ func NewRootCmd(stdout, stderr io.Writer) *cobra.Command {
 	addCompletion(a, root)
 	for flag, values := range map[string][]string{"output": {outputText, outputJSON, outputYAML}, "color": {"auto", "always", "never"}, "log-format": {"text", "json"}} {
 		_ = root.RegisterFlagCompletionFunc(flag, cobra.FixedCompletions(values, cobra.ShellCompDirectiveNoFileComp))
+	}
+	for path := range untimedCommands {
+		if c, _, err := root.Find(strings.Fields(path)[1:]); err != nil || c.CommandPath() != path {
+			panic("untimed command that does not exist: " + path) // renamed: every test fails
+		}
 	}
 	markUsageErrors(root)
 	return root
