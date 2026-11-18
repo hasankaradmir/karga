@@ -5,6 +5,10 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Changed
+- `karga history` shows `superseded` for deployed revisions a later one replaced (karga-server
+  with this change); USAGE §5.
+
 ### Added
 - `make dist` builds the release archives and `checksums.txt` without a release; `install.sh`
   installs them from `file://`. USAGE: requirements, installing from source, and a new section 15

@@ -340,10 +340,10 @@ marked failed and the previous revision stays current; go back with a rollback.
 
 ```console
 $ karga history demo --diff
-REVISION  STATUS    PACKAGE  VERSION  CREATED              DESCRIPTION       CHANGES
-1         deployed  shop     0.1.0    2026-11-17 13:18:00  Install complete  first
-2         deployed  shop     0.1.0    2026-11-17 13:18:06  Upgrade complete  +0 ~1 -0, 1 values
-3         failed    shop     0.1.0    2026-11-17 13:18:21  Upgrade failed: ...
+REVISION  STATUS      PACKAGE  VERSION  CREATED              DESCRIPTION       CHANGES
+1         superseded  shop     0.1.0    2026-11-17 13:18:00  Install complete  first
+2         deployed    shop     0.1.0    2026-11-17 13:18:06  Upgrade complete  +0 ~1 -0, 1 values
+3         failed      shop     0.1.0    2026-11-17 13:18:21  Upgrade failed: ...
 
 $ karga diff demo 1
 Release demo: revision 1 -> 2
@@ -359,6 +359,10 @@ $ karga rollback demo --dry-run
 Revision: 2 -> 4
   ~ WORKLOAD web (replace)
 ```
+
+`deployed` is the revision that runs (the newest one that deployed: a failed upgrade after it
+leaves it running), `superseded` an earlier one a later deployment replaced, `failed` one that did
+not deploy. Rollback goes back to superseded revisions, never to failed ones.
 
 `karga rollback demo` returns to the last good revision before the current one; `karga rollback
 demo 1` to a given one. A rollback is a new revision. It re-applies configuration; it cannot undo
@@ -1211,9 +1215,9 @@ Release "notes" upgraded (revision 2).
   update workload api (replace)
 
 $ karga history notes
-REVISION  STATUS    PACKAGE  VERSION  CREATED              DESCRIPTION
-1         deployed  notes    1.0.0    2026-11-18 12:00:42  Install complete
-2         deployed  notes    1.0.0    2026-11-18 12:02:36  Upgrade complete
+REVISION  STATUS      PACKAGE  VERSION  CREATED              DESCRIPTION
+1         superseded  notes    1.0.0    2026-11-18 12:00:42  Install complete
+2         deployed    notes    1.0.0    2026-11-18 12:02:36  Upgrade complete
 $ karga rollback notes 1
 Release "notes" rolled back (revision 3).
   update workload api (replace)
