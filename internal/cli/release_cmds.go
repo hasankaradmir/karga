@@ -244,7 +244,7 @@ func newUninstallCmd(a *app) *cobra.Command {
 				return a.write(res)
 			}
 			if req.DryRun {
-				return printPlanSummary(a.stdout, res.Plan, res.Release, res.From, res.From)
+				return printPlanSummary(a.stdout, res.Plan, res.Release, 0, res.From) // no new revision: the current one
 			}
 			_, err = fmt.Fprintf(a.stdout, "Release %q uninstalled.\n", req.Name)
 			return err

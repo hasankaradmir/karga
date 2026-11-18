@@ -1,8 +1,9 @@
 Deployment Plan
 
 Release:  r
-Revision: 0
+Revision: 3
 
-  No changes.
+  - WORKLOAD web
+  - VOLUME data
 
-0 to create, 0 to update, 0 to delete, 0 unchanged.
+0 to create, 0 to update, 2 to delete, 0 unchanged.

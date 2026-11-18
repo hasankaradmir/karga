@@ -92,6 +92,9 @@ func (f *fake) Rollback(_ context.Context, req api.RollbackRequest, progress fun
 func (f *fake) Uninstall(_ context.Context, req api.UninstallRequest) (*api.Result, error) {
 	f.call("uninstall")
 	f.uninst = &req
+	if f.result != nil {
+		return f.result, f.err
+	}
 	return &api.Result{Release: req.Name, DryRun: req.DryRun, Status: api.StatusUninstalled}, f.err
 }
 
