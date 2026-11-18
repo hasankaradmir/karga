@@ -3,7 +3,7 @@ module github.com/hasankaradmir/karga-cli
 go 1.27.3
 
 require (
-	github.com/hasankaradmir/karga-sdk v0.0.0-20261117202628-841339224217
+	github.com/hasankaradmir/karga-sdk v0.1.0
 	github.com/spf13/cobra v1.10.2
 	go.yaml.in/yaml/v3 v3.0.6
 	golang.org/x/term v0.48.0
