@@ -89,13 +89,13 @@ func newGatewayCmd(a *app) *cobra.Command {
 			for _, ip := range strings.Split(args[0], ",") {
 				addrs = append(addrs, strings.TrimSpace(ip))
 			}
-			if exposesHost(addrs) {
-				if err := a.confirm(cmd, fmt.Sprintf("Every exposed service becomes reachable on %s, from other machines too", strings.Join(addrs, ", "))); err != nil {
-					return err
-				}
+			req := api.GatewayListenRequest{Addresses: addrs}
+			if err := a.confirm(cmd, req.Risk()); err != nil {
+				return err
 			}
+			req.Confirmed = true
 			s := a.backend()
-			if err := s.SetGatewayListen(cmd.Context(), api.GatewayListenRequest{Addresses: addrs}); err != nil {
+			if err := s.SetGatewayListen(cmd.Context(), req); err != nil {
 				return err
 			}
 			return a.report(map[string]any{"listen": addrs}, "gateway listens on %s\n", strings.Join(addrs, ", "))
@@ -150,11 +150,13 @@ func newListenerCmd(a *app) *cobra.Command {
 		Short: "Remove a listener no service uses",
 		Args:  cobra.ExactArgs(1),
 		RunE: func(cmd *cobra.Command, args []string) error {
-			if err := a.confirm(cmd, fmt.Sprintf("This removes listener %s from the gateway", args[0])); err != nil {
+			req := api.GatewayListenerRequest{Name: args[0]}
+			if err := a.confirm(cmd, req.Risk()); err != nil {
 				return err
 			}
+			req.Confirmed = true
 			s := a.backend()
-			if err := s.RemoveGatewayListener(cmd.Context(), api.GatewayListenerRequest{Name: args[0]}); err != nil {
+			if err := s.RemoveGatewayListener(cmd.Context(), req); err != nil {
 				return err
 			}
 			return a.report(map[string]any{"listener": args[0], "removed": true}, "listener %s removed\n", args[0])

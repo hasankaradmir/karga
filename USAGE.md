@@ -759,7 +759,8 @@ Commands that only ask karga-server something give up after `--request-timeout` 
 Commands that delete data or expose services ask first on a terminal: `uninstall`, `volume
 restore`, `gateway set listen` with an address other than loopback, `gateway listener remove`, and
 `upgrade`/`rollback` with `--delete-volumes`. In a script (stdin is not a terminal) they need
-`--yes` (`-y`); `--dry-run` shows what they would do.
+`--yes` (`-y`); `--dry-run` shows what they would do. karga-server refuses these requests unless
+the client says the user agreed, so no client skips the question.
 
 | Exit code | Meaning |
 |---|---|

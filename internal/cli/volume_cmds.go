@@ -1,7 +1,6 @@
 package cli
 
 import (
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -44,10 +43,10 @@ func newVolumeCmd(a *app) *cobra.Command {
 		Args: cobra.ExactArgs(3),
 		RunE: func(cmd *cobra.Command, args []string) error {
 			restore.Release, restore.Volume, restore.Name = args[0], args[1], filepath.Base(args[2])
-			what := fmt.Sprintf("This stops the workloads mounting volume %s of %s and overwrites its files with %s", restore.Volume, restore.Release, args[2])
-			if err := a.confirm(cmd, what); err != nil {
+			if err := a.confirm(cmd, restore.Risk()); err != nil {
 				return err
 			}
+			restore.Confirmed = true
 			f, err := os.Open(args[2])
 			if err != nil {
 				return err

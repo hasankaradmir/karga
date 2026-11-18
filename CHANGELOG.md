@@ -6,6 +6,9 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Changed
+- The questions before commands that delete data or expose services come from the SDK, the same
+  rule karga-server checks. A failed read of the answer is an error instead of a "no";
+  `gateway set listen` refuses an address that is not an IP.
 - API 3.0 (karga-sdk): this karga works with karga-server of API 3 only; `karga version` shows
   both. Release names that are not DNS labels, or that start with `karga`, are refused by every
   command, not only `install`; USAGE §1.
