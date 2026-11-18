@@ -242,10 +242,11 @@ release proxy, Envoy checks the same HTTP path before switching traffic to a new
 Releases installed by an earlier karga apply their workloads once more for these defaults; the plan
 lists the new fields.
 
-**Volume**: `driver` (default `local`) and `retention: retain | delete` (default `retain`). A retained
+**Volume**: `driver` (`local`, the only one a package may use) and `retention: retain | delete` (default `retain`). A retained
 volume survives uninstall and is reused by the next install of the same release. An upgrade or
 rollback that would delete a `retention: delete` volume stops unless given `--delete-volumes`.
-**Network**: `driver` (default `bridge`) and `internal`.
+**Network**: `driver` (`bridge`, the only one: other drivers would put containers on the host's
+network, past the gateway) and `internal`.
 **Config**: `files: {name: content}`, mounted read-only.
 **Secret**: `values: {name: content}`, mounted read-only as files.
 

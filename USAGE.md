@@ -678,7 +678,8 @@ spec:
 karga stores and shows only the reference; the value is set when the container is created, and a
 new value in the Secret recreates the container (`update` in the plan). The value is visible to
 anyone who can inspect the container through Docker (`docker inspect`): the host's administrators,
-who can read the mounted files too. Prefer a mounted file where the image supports one (`*_FILE`).
+who can read the mounted files too. Prefer a mounted file where the image supports one (`*_FILE`);
+`karga lint` and the plans of `install` and `upgrade` warn about every variable set this way.
 
 What karga keeps:
 

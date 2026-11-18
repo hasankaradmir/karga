@@ -92,8 +92,9 @@ func newTemplateCmd(a *app) *cobra.Command {
 }
 
 type lintResult struct {
-	Path   string   `json:"path"`
-	Errors []string `json:"errors"`
+	Path     string   `json:"path"`
+	Errors   []string `json:"errors"`
+	Warnings []string `json:"warnings,omitempty"`
 }
 
 func newLintCmd(a *app) *cobra.Command {
@@ -106,14 +107,14 @@ func newLintCmd(a *app) *cobra.Command {
 			results := make([]lintResult, 0, len(args))
 			failed := 0
 			for _, path := range args {
-				issues := packages.Lint(path, vals.options(""))
+				issues, warnings := packages.Lint(path, vals.options(""))
 				if issues == nil {
 					issues = []string{}
 				}
 				if len(issues) > 0 {
 					failed++
 				}
-				results = append(results, lintResult{Path: path, Errors: issues})
+				results = append(results, lintResult{Path: path, Errors: issues, Warnings: warnings})
 			}
 			if a.structured() {
 				if err := a.write(results); err != nil {
@@ -124,6 +125,9 @@ func newLintCmd(a *app) *cobra.Command {
 					_, _ = fmt.Fprintf(a.stdout, "==> Linting %s\n", r.Path)
 					for _, e := range r.Errors {
 						_, _ = fmt.Fprintf(a.stdout, "[ERROR] %s\n", e)
+					}
+					for _, w := range r.Warnings {
+						_, _ = fmt.Fprintf(a.stdout, "[WARNING] %s\n", w)
 					}
 				}
 				_, _ = fmt.Fprintf(a.stdout, "\n%d package(s) linted, %d failed\n", len(results), failed)

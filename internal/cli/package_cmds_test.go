@@ -2,6 +2,7 @@ package cli
 
 import (
 	"encoding/json"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -63,6 +64,40 @@ func TestLintCmd(t *testing.T) {
 	}
 	if len(res) != 2 || len(res[0].Errors) != 0 || len(res[1].Errors) != 1 {
 		t.Fatalf("unexpected results: %+v", res)
+	}
+}
+
+// A package without problems may still get warnings; they do not fail lint.
+func TestLintWarnings(t *testing.T) {
+	dir := t.TempDir()
+	for name, content := range map[string]string{
+		"Package.yaml": "apiVersion: karga.io/v1alpha1\nname: api\nversion: 1.0.0\nruntime:\n  supported: [docker]\n",
+		"values.yaml":  "{}\n",
+		"templates/api.yaml": `apiVersion: karga.io/v1alpha1
+kind: Secret
+metadata: {name: db}
+spec:
+  values: {uri: postgres://db}
+---
+apiVersion: karga.io/v1alpha1
+kind: Workload
+metadata: {name: api}
+spec:
+  image: postgrest/postgrest:v12
+  environmentFrom:
+    - {name: PGRST_DB_URI, secret: db, key: uri}
+`,
+	} {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.Dir(name)), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	out, _, err := run(t, "lint", dir)
+	if err != nil || !strings.Contains(out, `[WARNING] Workload "api" sets PGRST_DB_URI from Secret "db"`) {
+		t.Fatalf("lint: %v\n%s", err, out)
 	}
 }
 
