@@ -262,8 +262,11 @@ See a package's defaults with `karga show values <package>`. Override them, late
 $ karga install db examples/postgres -f prod.yaml --set service.listener=pg --set database.password=s3cret-pw
 ```
 
-- `-f file.yaml` (repeatable), then `--set a.b=c`, then `--set-string a=007`. `--set` makes `true`, `false`, `null` and integers typed; decimals such as `7.4` stay strings (an image tag), so put a number-typed decimal in a `-f` file.
+- `-f file.yaml` (repeatable), then `--set a.b=c` and `--set-string a=007` in the order you give
+  them (the last one wins). `--set` makes `true`, `false`, `null` and integers typed; decimals such as `7.4` stay strings (an image tag), so put a number-typed decimal in a `-f` file.
 - `--set key=null` removes a default.
+- Maps merge key by key; a list replaces the default list as a whole (`-f` with `hosts: [a]`
+  leaves only `a`). An index edits the list instead: `--set hosts[1]=b` keeps `hosts[0]`.
 - `upgrade` starts from the package defaults; add `--reuse-values` to keep the last revision's
   overrides and change only what you pass.
 

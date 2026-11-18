@@ -3,6 +3,7 @@ package cli
 import (
 	"fmt"
 	"os"
+	"strings"
 
 	"github.com/hasankaradmir/karga-sdk/api"
 
@@ -14,27 +15,52 @@ import (
 
 // valueOpts holds the value override flags shared by template, lint, install and upgrade.
 type valueOpts struct {
-	files      []string
-	sets       []string
-	setStrings []string
-	strict     bool
+	files  []string
+	sets   []packages.Set // --set and --set-string, in the order given
+	strict bool
 }
 
 func addValueFlags(cmd *cobra.Command, v *valueOpts) {
 	f := cmd.Flags()
 	f.StringArrayVarP(&v.files, "values", "f", nil, "values file (repeatable, later files win)")
-	f.StringArrayVar(&v.sets, "set", nil, "set values on the command line (a.b=c, repeatable)")
-	f.StringArrayVar(&v.setStrings, "set-string", nil, "set string values on the command line (repeatable)")
+	f.Var(&setFlag{sets: &v.sets}, "set", "set values on the command line (a.b=c, repeatable; with --set-string, in the order given)")
+	f.Var(&setFlag{sets: &v.sets, string: true}, "set-string", "set string values on the command line (repeatable)")
 	f.BoolVar(&v.strict, "strict", false, "reject values not declared in values.schema.json")
 }
 
+// setFlag is --set or --set-string: both append to one list, so they apply in the order given.
+type setFlag struct {
+	sets   *[]packages.Set
+	string bool
+}
+
+func (f *setFlag) Set(expr string) error {
+	*f.sets = append(*f.sets, packages.Set{Expr: expr, String: f.string})
+	return nil
+}
+
+func (f *setFlag) String() string {
+	var exprs []string
+	for _, s := range *f.sets {
+		if s.String == f.string {
+			exprs = append(exprs, s.Expr)
+		}
+	}
+	return "[" + strings.Join(exprs, ",") + "]"
+}
+
+func (*setFlag) Type() string { return "stringArray" }
+
 func (v *valueOpts) options(release string) packages.Options {
-	return packages.Options{ReleaseName: release, ValueFiles: v.files, Sets: v.sets, SetStrings: v.setStrings, Strict: v.strict}
+	return packages.Options{ReleaseName: release, Values: packages.ValueSources{Files: v.files, Sets: v.sets}, Strict: v.strict}
 }
 
 // input reads the values files: karga-server cannot read the client's files.
 func (v *valueOpts) input() (api.ValuesInput, error) {
-	in := api.ValuesInput{Set: v.sets, SetString: v.setStrings, Strict: v.strict}
+	in := api.ValuesInput{Strict: v.strict}
+	for _, s := range v.sets {
+		in.Sets = append(in.Sets, api.Set{Expr: s.Expr, String: s.String})
+	}
 	for _, f := range v.files {
 		data, err := os.ReadFile(f)
 		if err != nil {
