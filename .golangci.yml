@@ -15,8 +15,6 @@ linters:
               desc: the CLI must not depend on karga-server
             - pkg: github.com/docker
               desc: the CLI never talks to Docker
-            - pkg: modernc.org/sqlite
-              desc: the CLI never opens the state database
 
 formatters:
   enable:

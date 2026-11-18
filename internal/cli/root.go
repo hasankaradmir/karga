@@ -135,7 +135,7 @@ func newRootCmd(stdout, stderr io.Writer, backend func() api.Backend) *cobra.Com
 var untimedCommands = map[string]bool{
 	"karga install": true, "karga upgrade": true, "karga rollback": true, "karga uninstall": true,
 	"karga reconcile": true, "karga logs": true, "karga exec": true,
-	"karga volume backup": true, "karga volume restore": true, "karga state backup": true,
+	"karga volume backup": true, "karga volume restore": true,
 }
 
 // untimed reports whether cmd is left unbounded by --request-timeout.
