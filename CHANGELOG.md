@@ -6,6 +6,11 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Changed
+- Exit codes: an unknown subcommand of a group (`karga gateway nope`) exits 2 instead of showing
+  the help with 0, as do an invalid `--strategy` or `--log-format` and a request karga-server
+  refuses as invalid. Ctrl-C during an operation exits 7, with a hint to follow it. `karga status`
+  and `karga lint` no longer print an `Error:` line after the report that already says what is
+  wrong.
 - The questions before commands that delete data or expose services come from the SDK, the same
   rule karga-server checks. A failed read of the answer is an error instead of a "no";
   `gateway set listen` refuses an address that is not an IP.

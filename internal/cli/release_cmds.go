@@ -138,7 +138,7 @@ func addStrategyFlag(cmd *cobra.Command, strategy *string) {
 // validStrategy checks --strategy before the package is packed and sent.
 func validStrategy(s string) error {
 	if err := api.ValidateStrategy(s); err != nil {
-		return fmt.Errorf("invalid --%w", err)
+		return usageError{fmt.Errorf("invalid --%w", err)}
 	}
 	return nil
 }

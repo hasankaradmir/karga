@@ -85,7 +85,7 @@ func newRootCmd(stdout, stderr io.Writer, backend func() api.Remote) *cobra.Comm
 			case "json":
 				a.log = slog.New(slog.NewJSONHandler(a.stderr, opts))
 			default:
-				return fmt.Errorf("invalid --log-format %q: must be \"text\" or \"json\"", a.logFormat)
+				return usageError{fmt.Errorf("invalid --log-format %q: must be text or json", a.logFormat)}
 			}
 			if a.socket == "" {
 				a.socket = api.DefaultSocket

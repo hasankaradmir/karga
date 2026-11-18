@@ -159,7 +159,7 @@ func newLintCmd(a *app) *cobra.Command {
 				_, _ = fmt.Fprintf(a.stdout, "\n%d package(s) linted, %d failed\n", len(results), failed)
 			}
 			if failed > 0 {
-				return fmt.Errorf("lint failed for %d package(s)", failed)
+				return &ExitCodeError{Code: ExitFailure} // the report says which and why
 			}
 			return nil
 		},

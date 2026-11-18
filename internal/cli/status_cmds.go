@@ -32,7 +32,7 @@ func newStatusCmd(a *app) *cobra.Command {
 			if !watch {
 				rep, err := a.printStatus(cmd.Context(), s, args[0])
 				if err == nil && !rep.Healthy() {
-					return errUnhealthy
+					return &ExitCodeError{Code: ExitUnhealthy} // the report says why
 				}
 				return err
 			}
