@@ -34,7 +34,7 @@ replaced by documentation addresses.
 | **Plan** | What a command will change: created (`+`), updated (`~`) and deleted (`-`) resources, and for workloads how (recreate or replace). |
 | **Service** | The only way to reach a workload: a name inside the release (`web:80`), and optionally an exposure on a gateway listener. A workload alone publishes nothing. |
 | **Release proxy** | One Envoy per release with Services (`<release>-karga-proxy-<hash>`). It answers to the Service names and forwards to the current container, so upgrades switch without losing requests. |
-| **Gateway** | One Envoy per host (`karga-gateway`), the only way in from outside. The host's administrator defines where it listens and its **listeners** (a name, a port, a protocol); packages can only expose Services on them. |
+| **Gateway** | One Envoy per host (`karga-gateway-<hash>`), the only way in from outside. The host's administrator defines where it listens and its **listeners** (a name, a port, a protocol); packages can only expose Services on them. |
 
 Where things live:
 
