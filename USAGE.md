@@ -405,9 +405,9 @@ A workload publishes nothing. Two things make it reachable:
 
 ```console
 $ karga gateway listener list
-NAME       PORT  PROTOCOL  OPTIONS  SERVICES
-web        80    http      -
-websecure  443   https     -
+NAME   PORT  PROTOCOL  OPTIONS            SERVICES
+http   80    http      redirect-https=on
+https  443   https     -
 
 $ karga gateway listener add pg --port 15432 --protocol tcp
 listener pg added (tcp on port 15432)
@@ -430,8 +430,8 @@ listener pg added (tcp on port 15432)
   one):
 
   ```console
-  $ karga gateway listener set web --timeout 30s --max-body 10Mi --rate-limit 100/s
-  listener web: timeout=30s max-body=10Mi rate-limit=100/s
+  $ karga gateway listener set http --timeout 30s --max-body 10Mi --rate-limit 100/s
+  listener http: timeout=30s max-body=10Mi rate-limit=100/s redirect-https=on
   $ karga gateway listener set pg --proxy-protocol v2 --idle-timeout 8h
   listener pg: idle-timeout=8h proxy-protocol=v2
   ```
@@ -443,6 +443,7 @@ listener pg added (tcp on port 15432)
   | `--max-body` | http, https | Largest request body, at most `16Mi` (the gateway holds it in memory); 413 beyond it. Larger uploads are limited by the application. |
   | `--rate-limit` | http, https | Requests per second or minute (`100/s`, `600/m`) for the whole listener (an https listener counts each host on its own); 429 beyond it. |
   | `--proxy-protocol` | tcp | Sends the client's address first on every connection (`v1` or `v2`). The backend must expect it (PostgreSQL does not; HAProxy, nginx `proxy_protocol` and most mail servers do). |
+  | `--redirect-https` | http | Answers plain requests for the hosts an https listener serves (and this one does not) with a redirect to that listener's port. The default `http` listener has it. |
 - A listener a Service uses cannot be removed:
 
   ```console
@@ -466,18 +467,18 @@ spec:
   listen: [127.0.0.1]
   accessLog: false
   listeners:
-    - {name: web, port: 80, protocol: http, timeout: 30s, rateLimit: 100/s}
-    - {name: websecure, port: 443, protocol: https}
+    - {name: http, port: 80, protocol: http, redirectHTTPS: true, timeout: 30s, rateLimit: 100/s}
+    - {name: https, port: 443, protocol: https}
     - {name: pg, port: 15432, protocol: tcp, proxyProtocol: v2, idleTimeout: 8h}
 ```
 
 ```console
 $ karga gateway diff -f gateway.yaml
-~ listener web: timeout: - -> 30s, rateLimit: - -> 100/s
+~ listener http: timeout: - -> 30s, rateLimit: - -> 100/s
 + listener pg: port: 15432, protocol: tcp, proxyProtocol: v2, idleTimeout: 8h
 
 $ karga gateway apply -f gateway.yaml
-~ listener web: timeout: - -> 30s, rateLimit: - -> 100/s
+~ listener http: timeout: - -> 30s, rateLimit: - -> 100/s
 + listener pg: port: 15432, protocol: tcp, proxyProtocol: v2, idleTimeout: 8h
 gateway settings applied (revision 4)
 
@@ -493,8 +494,8 @@ $ karga gateway edit              # the settings in force, in $KARGA_EDITOR or $
 ```
 
 - The document is the whole desired state: a listener it does not name is removed. Fields it
-  leaves out take their defaults (`listen: [127.0.0.1]`; no `listeners` at all: `web` and
-  `websecure`).
+  leaves out take their defaults (`listen: [127.0.0.1]`; no `listeners` at all: `http` on 80
+  with `redirectHTTPS` and `https` on 443).
 - `diff` and `apply` refuse a document with problems (exit 2): YAML that does not parse, an
   unknown field (a typo), another `apiVersion` or `kind`, a value that does not check (the option
   table above), a listener a Service uses removed or changed to another protocol, a port another
@@ -521,7 +522,7 @@ $ karga gateway edit              # the settings in force, in $KARGA_EDITOR or $
 ```yaml
 spec:
   expose:
-    - {port: http, listener: web, host: shop.local}        # path defaults to /
+    - {port: http, listener: http, host: shop.local}       # path defaults to /
     - {port: postgres, listener: pg}                         # tcp: no host
 ```
 
@@ -548,7 +549,7 @@ Listen:     127.0.0.1
 Access log: off
 
 LISTENER  ROUTE        RELEASE  SERVICE  UPSTREAM
-web:80    shop.local/  demo     web:80   127.0.0.1:34359
+http:80   shop.local/  demo     web:80   127.0.0.1:34359
 ```
 
 Exposing a new port needs a new release proxy container (it publishes the port on a loopback
@@ -560,7 +561,7 @@ cannot serve is refused before anything changes:
 
 ```console
 $ karga install other shop --set expose.host=shop.local
-Error: Service "web": expose http on listener web: shop.local/ is already routed to demo/web: port already in use
+Error: Service "web": expose http on listener http: shop.local/ is already routed to demo/web: port already in use
 revision 1 failed; nothing was installed. Fix the problem and run 'karga install' again
 
 $ karga install db examples/postgres --set database.password=s3cret-pw --set service.listener=pg
@@ -575,9 +576,10 @@ listener's `--idle-timeout`) is closed.
 
 ### TLS
 
-Expose on an https listener (`websecure` on a new host) with a Secret that holds the PEM certificate
-chain as `tls.crt` and the key as `tls.key`. Plain HTTP on the port-80 http listener redirects to it,
-unless that listener serves the host itself:
+Expose on an https listener (`https` on a new host) with a Secret that holds the PEM certificate
+chain as `tls.crt` and the key as `tls.key`. Plain HTTP on an http listener with `redirectHTTPS`
+(the default `http` has it) redirects to it, unless that listener serves the host itself; each host
+goes to the port of the https listener serving it:
 
 ```yaml
 kind: Secret
@@ -589,7 +591,7 @@ spec:
 ---
 # in the Service
   expose:
-    - {port: http, listener: websecure, host: blog.local, tls: {secret: blog-cert}}
+    - {port: http, listener: https, host: blog.local, tls: {secret: blog-cert}}
 ```
 
 ```console
@@ -1092,7 +1094,7 @@ runtime:
 image: postgrest/postgrest:v12.2.3
 # Where it is served: a host name on a gateway listener (karga gateway listener list).
 host: notes.example.com
-listener: web
+listener: http
 database:
   # Required: --set database.password=... or a values file kept out of git.
   password: ""
@@ -1227,9 +1229,9 @@ Once per host, as a member of the `karga` group:
 
 ```console
 $ karga gateway listener list
-NAME       PORT  PROTOCOL  SERVICES
-web        80    http
-websecure  443   https
+NAME   PORT  PROTOCOL  OPTIONS            SERVICES
+http   80    http      redirect-https=on
+https  443   https     -
 $ karga gateway set listen 0.0.0.0        # every interface; the default 127.0.0.1 is local only
 ```
 
@@ -1279,7 +1281,7 @@ Release "notes" installed (revision 1).
   ...
 
 NOTES:
-notes serves http://notes.example.com/ through the gateway listener web.
+notes serves http://notes.example.com/ through the gateway listener http.
 
 $ karga status notes
 KIND      NAME      RUNTIME NAME                REVISION  DESIRED  ACTUAL   RESTARTS  HEALTH/BACKEND
@@ -1338,7 +1340,7 @@ A new package version (a new `version` in `Package.yaml`) is upgraded the same w
 - `karga status notes` (exit code 6 when something is not as declared) and `karga logs notes -f`.
 - karga-server repairs what goes missing (section 11, "Repairs").
 - Back up the database volume (section 8) and `$KARGA_HOME` (section 12).
-- HTTPS: add an exposure on `websecure` with a certificate Secret (section 6, "TLS").
+- HTTPS: add an exposure on `https` with a certificate Secret (section 6, "TLS").
 - Remove it all: `karga uninstall notes` keeps the volume; `--delete-volumes` removes it too.
 
 ## 16. Limits to know

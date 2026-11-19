@@ -236,9 +236,9 @@ func TestStreams(t *testing.T) {
 func TestGatewayCommands(t *testing.T) {
 	e := newCLIEnv(t)
 	e.f.health = api.State{Container: "running", Ready: true, Version: "1.36.13", Listen: []string{"127.0.0.1"}}
-	e.f.exposed = []api.Exposed{{Listener: "web:80", Route: "shop.local/", Release: "shop", Service: "web:80", Upstream: "127.0.0.1:4001"}}
+	e.f.exposed = []api.Exposed{{Listener: "http:80", Route: "shop.local/", Release: "shop", Service: "web:80", Upstream: "127.0.0.1:4001"}}
 	out := e.mustRun("gateway", "status")
-	for _, want := range []string{"running, ready (Envoy 1.36.13)", "Listen:     127.0.0.1", "Access log: off", "web:80", "shop.local/", "127.0.0.1:4001"} {
+	for _, want := range []string{"running, ready (Envoy 1.36.13)", "Listen:     127.0.0.1", "Access log: off", "http:80", "shop.local/", "127.0.0.1:4001"} {
 		if !strings.Contains(out, want) {
 			t.Errorf("missing %q in:\n%s", want, out)
 		}
@@ -248,16 +248,16 @@ func TestGatewayCommands(t *testing.T) {
 	if out := e.mustRun("gateway", "status", "-o", "json"); !strings.Contains(out, `"routes": []`) {
 		t.Fatalf("json:\n%s", out)
 	}
-	e.f.settings = api.Settings{Listen: []string{"127.0.0.1"}, Listeners: []api.Listener{{Name: "web", Port: 80, Protocol: api.ProtocolHTTP}, {Name: "websecure", Port: 443, Protocol: api.ProtocolHTTPS}}}
-	e.f.users = map[string][]string{"web": {"shop/web"}}
+	e.f.settings = api.Settings{Listen: []string{"127.0.0.1"}, Listeners: []api.Listener{{Name: "http", Port: 80, Protocol: api.ProtocolHTTP}, {Name: "https", Port: 443, Protocol: api.ProtocolHTTPS}}}
+	e.f.users = map[string][]string{"http": {"shop/web"}}
 	e.f.settings.Listeners[0].RateLimit = "100/s"
-	if out := e.mustRun("gateway", "listener", "list"); !strings.Contains(out, "web        80    http      rate-limit=100/s  shop/web") {
+	if out := e.mustRun("gateway", "listener", "list"); !strings.Contains(out, "http   80    http      rate-limit=100/s  shop/web") {
 		t.Fatalf("listeners:\n%s", out)
 	}
 	e.mustRun("gateway", "listener", "add", "pg", "--port", "5432", "--protocol", "tcp")
 	// set changes only the options given; 0 removes one.
-	e.mustRun("gateway", "listener", "set", "web", "--timeout", "30s", "--rate-limit", "0")
-	if o := e.f.settings.Listeners[0].ListenerOptions; o != (api.ListenerOptions{Timeout: "30s"}) {
+	e.mustRun("gateway", "listener", "set", "http", "--timeout", "30s", "--rate-limit", "0", "--redirect-https")
+	if o := e.f.settings.Listeners[0].ListenerOptions; o != (api.ListenerOptions{Timeout: "30s", RedirectHTTPS: true}) {
 		t.Fatalf("options after set: %+v", o)
 	}
 	if _, err := e.run("gateway", "listener", "set", "nope", "--timeout", "1s"); err == nil {
@@ -266,7 +266,7 @@ func TestGatewayCommands(t *testing.T) {
 	e.mustRun("gateway", "listener", "remove", "pg", "--yes")
 	e.mustRun("gateway", "set", "listen", "10.0.0.5,127.0.0.1", "--yes")
 	e.mustRun("gateway", "set", "access-log", "on")
-	if got := strings.Join(e.f.calls, ","); got != "add pg,set web,remove pg,listen,access-log on" || len(e.f.settings.Listen) != 2 {
+	if got := strings.Join(e.f.calls, ","); got != "add pg,set http,remove pg,listen,access-log on" || len(e.f.settings.Listen) != 2 {
 		t.Fatalf("calls: %s %v", got, e.f.settings.Listen)
 	}
 	if _, err := e.run("gateway", "set", "access-log", "maybe"); err == nil {
