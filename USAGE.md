@@ -308,7 +308,9 @@ Revision: 1 -> 2
 `--verbose` lists every changed field. The text in parentheses is the update strategy and, when a
 workload asked for `replace` but cannot have it, why:
 
-- **recreate**: the old container stops, then the new one starts. A short outage.
+- **recreate**: the new container is created next to the old one, then the old one stops and the
+  new one starts. A short outage, from the stop to the start; a container Docker refuses (a bad
+  mount or option) leaves the old one running.
 - **replace**: the new container starts next to the old one and takes over once healthy. Needs a
   health check and read-only volumes (see [section 7](#7-upgrades-without-downtime)).
 
@@ -1282,8 +1284,8 @@ A new package version (a new `version` in `Package.yaml`) is upgraded the same w
 - Packages come from local directories or archives; there is no repository or dependency support.
 - There are no lifecycle tasks (e.g. running migrations before an upgrade) yet.
 - A workload is one container; there are no replicas.
-- An upgrade that recreates a workload stops the old container first: if the new one does not get
-  ready, the workload is down (stopped, so its logs can be read) until you upgrade again or
+- An upgrade that recreates a workload stops the old container before the new one starts: if the
+  new one does not get ready, the workload is down (stopped, so its logs can be read) until you upgrade again or
   `karga rollback`. The `replace` strategy avoids this where it applies (section 7).
 - TLS certificates come from Secrets: you get and renew them yourself (renew by upgrading with the
   new one); there is no ACME.
