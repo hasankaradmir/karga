@@ -4,7 +4,9 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"strconv"
+	"strings"
 
 	"github.com/spf13/cobra"
 	"go.yaml.in/yaml/v3"
@@ -73,7 +75,7 @@ func addDocumentCmds(a *app, cmd *cobra.Command) {
 	apply.Flags().StringVarP(&file, "file", "f", "", "gateway document (- for stdin)")
 	_ = apply.MarkFlagRequired("file")
 
-	cmd.AddCommand(get, diff, apply, &cobra.Command{
+	cmd.AddCommand(get, diff, apply, newGatewayEditCmd(a), &cobra.Command{
 		Use:   "history",
 		Short: "List the gateway settings revisions kept (the last 10)",
 		Args:  cobra.NoArgs,
@@ -162,4 +164,111 @@ func readDocument(cmd *cobra.Command, path string) ([]byte, error) {
 		err = fmt.Errorf("%s: more than %d bytes", path, api.MaxGatewayDocument)
 	}
 	return data, err
+}
+
+// problemPrefix marks the lines edit adds to say what is wrong with the document.
+const problemPrefix = "# problem: "
+
+// newGatewayEditCmd edits the gateway settings in force like kubectl edit: in $KARGA_EDITOR or
+// $EDITOR (default vi); a document with problems opens again with them on top; saving it
+// unchanged gives up.
+func newGatewayEditCmd(a *app) *cobra.Command {
+	return &cobra.Command{
+		Use:   "edit",
+		Short: "Edit the gateway settings in force in your editor, then apply them as a new revision",
+		Args:  cobra.NoArgs,
+		RunE: func(cmd *cobra.Command, _ []string) error {
+			s := a.backend()
+			doc, err := s.ExportGateway(cmd.Context(), api.GatewayExportRequest{})
+			if err != nil {
+				return err
+			}
+			f, err := os.CreateTemp("", "karga-gateway-*.yaml")
+			if err != nil {
+				return err
+			}
+			path := f.Name()
+			_ = f.Close()
+			keep := false
+			defer func() {
+				if !keep {
+					_ = os.Remove(path)
+				}
+			}()
+			content := doc.Content
+			for {
+				if err := os.WriteFile(path, content, 0o600); err != nil {
+					return err
+				}
+				if err := runEditor(cmd, path); err != nil {
+					return err
+				}
+				edited, err := os.ReadFile(path)
+				if err != nil {
+					return err
+				}
+				if string(edited) == string(content) {
+					if string(content) == string(doc.Content) {
+						_, _ = fmt.Fprintln(a.stdout, "edit cancelled, no changes")
+						return nil
+					}
+					keep = true
+					return fmt.Errorf("edit cancelled; your changes are in %s (karga gateway apply -f %s)", path, path)
+				}
+				clean := withoutProblems(edited)
+				plan, err := s.DiffGateway(cmd.Context(), api.GatewayDocument{Content: clean})
+				if err != nil {
+					keep = true
+					return fmt.Errorf("%w; your changes are in %s", err, path)
+				}
+				if len(plan.Problems) > 0 {
+					content = withProblems(clean, plan.Problems)
+					continue
+				}
+				if err := a.applyDocument(cmd, clean, "edit"); err != nil {
+					keep = true
+					return fmt.Errorf("%w; your changes are in %s", err, path)
+				}
+				return nil
+			}
+		},
+	}
+}
+
+// runEditor opens path in $KARGA_EDITOR, $EDITOR or vi, on the terminal.
+func runEditor(cmd *cobra.Command, path string) error {
+	editor := os.Getenv("KARGA_EDITOR")
+	if editor == "" {
+		editor = os.Getenv("EDITOR")
+	}
+	if editor == "" {
+		editor = "vi"
+	}
+	args := strings.Fields(editor)
+	c := exec.CommandContext(cmd.Context(), args[0], append(args[1:], path)...)
+	c.Stdin, c.Stdout, c.Stderr = os.Stdin, cmd.OutOrStdout(), cmd.ErrOrStderr()
+	if err := c.Run(); err != nil {
+		return fmt.Errorf("editor %s: %w", editor, err)
+	}
+	return nil
+}
+
+// withProblems puts the problems on top of a document, as comments.
+func withProblems(doc []byte, problems []string) []byte {
+	var b strings.Builder
+	for _, p := range problems {
+		b.WriteString(problemPrefix + p + "\n")
+	}
+	b.WriteString("# Fix them and save, or save without a change to give up.\n")
+	b.Write(doc)
+	return []byte(b.String())
+}
+
+// withoutProblems removes the lines withProblems added.
+func withoutProblems(doc []byte) []byte {
+	lines := strings.SplitAfter(string(doc), "\n")
+	for len(lines) > 0 && (strings.HasPrefix(lines[0], problemPrefix) || strings.HasPrefix(lines[0], "# Fix them and save")) {
+		lines = lines[1:]
+	}
+	return []byte(strings.Join(lines, ""))
 }

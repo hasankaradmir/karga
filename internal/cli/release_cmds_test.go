@@ -536,3 +536,63 @@ func TestGatewayDocuments(t *testing.T) {
 		t.Fatal("rollback without an earlier revision")
 	}
 }
+
+// gateway edit opens the document in the editor; a document with problems opens again with them
+// on top; saving without a change gives up.
+func TestGatewayEdit(t *testing.T) {
+	e := newCLIEnv(t)
+	dir := t.TempDir()
+	editor := filepath.Join(dir, "editor.sh")
+	// Run 1 writes "accessLog: bad"; run 2 records what it saw, then (if fix exists) fixes it.
+	script := `n=$(cat "$D/count" 2>/dev/null || echo 0); n=$((n+1)); echo $n > "$D/count"
+if [ $n = 1 ]; then sed -i.bak 's/accessLog: true/accessLog: bad/' "$1"; exit; fi
+cp "$1" "$D/seen"
+if [ -e "$D/fix" ]; then sed -i.bak 's/accessLog: bad/accessLog: false/' "$1"; fi`
+	if err := os.WriteFile(editor, []byte(script), 0o700); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("D", dir)
+	t.Setenv("KARGA_EDITOR", "sh "+editor)
+	e.f.gatewayDiff = func(content string) api.GatewayPlan {
+		if strings.Contains(content, "accessLog: bad") {
+			return api.GatewayPlan{Problems: []string{"spec.accessLog: cannot unmarshal bad"}}
+		}
+		return api.GatewayPlan{Changes: []api.GatewayChange{{Kind: "accessLog", Action: "change", Fields: []string{"on -> off"}}}}
+	}
+
+	// Problems, then fixed: the second run sees them on top; the fixed document is applied.
+	if err := os.WriteFile(filepath.Join(dir, "fix"), nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if out := e.mustRun("gateway", "edit"); !strings.Contains(out, "gateway settings applied (revision 7)") {
+		t.Fatalf("edit:\n%s", out)
+	}
+	seen, _ := os.ReadFile(filepath.Join(dir, "seen"))
+	if !strings.HasPrefix(string(seen), "# problem: spec.accessLog: cannot unmarshal bad\n") {
+		t.Fatalf("the second run must show the problems on top:\n%s", seen)
+	}
+	if !slices.ContainsFunc(e.f.calls, func(c string) bool {
+		return strings.HasPrefix(c, "apply edit ") && strings.Contains(c, "accessLog: false") && !strings.Contains(c, "# problem")
+	}) {
+		t.Fatalf("applied: %v", e.f.calls)
+	}
+
+	// Problems, then saved unchanged: given up, the file is kept.
+	_ = os.Remove(filepath.Join(dir, "fix"))
+	_ = os.Remove(filepath.Join(dir, "count"))
+	_, err := e.run("gateway", "edit")
+	if err == nil || !strings.Contains(err.Error(), "your changes are in") {
+		t.Fatalf("given up: %v", err)
+	}
+	kept := strings.Fields(strings.SplitN(err.Error(), "your changes are in ", 2)[1])[0]
+	if _, serr := os.Stat(kept); serr != nil {
+		t.Fatalf("kept file: %v", serr)
+	}
+	_ = os.Remove(kept)
+
+	// Nothing changed at all.
+	t.Setenv("KARGA_EDITOR", "true")
+	if out := e.mustRun("gateway", "edit"); !strings.Contains(out, "edit cancelled, no changes") {
+		t.Fatalf("no change:\n%s", out)
+	}
+}

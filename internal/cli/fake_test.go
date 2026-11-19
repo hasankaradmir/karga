@@ -42,6 +42,7 @@ type fake struct {
 	settings    api.Settings
 	gatewayPlan api.GatewayPlan
 	gatewayRevs []api.GatewayRevision
+	gatewayDiff func(content string) api.GatewayPlan
 	users       map[string][]string
 	recon       *api.ReconcileResult
 
@@ -228,6 +229,9 @@ func (f *fake) SetGatewayListener(_ context.Context, req api.GatewayListenerSetR
 
 func (f *fake) DiffGateway(_ context.Context, doc api.GatewayDocument) (api.GatewayPlan, error) {
 	f.call("diff " + string(doc.Content))
+	if f.gatewayDiff != nil {
+		return f.gatewayDiff(string(doc.Content)), f.err
+	}
 	return f.gatewayPlan, f.err
 }
 

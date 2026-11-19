@@ -488,6 +488,8 @@ REVISION        TIME                 ACTOR  SOURCE
 4 (in force)    2026-11-19 10:31:05  alice  apply
 
 $ karga gateway rollback          # the revision before; or: karga gateway rollback 2
+
+$ karga gateway edit              # the settings in force, in $KARGA_EDITOR or $EDITOR (vi)
 ```
 
 - The document is the whole desired state: a listener it does not name is removed. Fields it
@@ -497,7 +499,12 @@ $ karga gateway rollback          # the revision before; or: karga gateway rollb
   unknown field (a typo), another `apiVersion` or `kind`, a value that does not check (the option
   table above), a listener a Service uses removed or changed to another protocol, a port another
   process holds. `-f -` reads stdin.
-- `apply` and `rollback` ask before listening beyond loopback or removing a listener (`--yes`).
+- Before anything changes, Envoy itself checks the configuration in a container of its own (a
+  certificate it cannot load, a value it refuses); what it refuses is a problem too. It cannot
+  check that an address or port can be bound: that shows on apply (below).
+- `edit` opens the document again with the problems on top until it has none; saving it without a
+  change gives up and says where your edit is kept.
+- `apply`, `rollback` and `edit` ask before listening beyond loopback or removing a listener (`--yes`).
 - If the gateway does not serve the new revision (Envoy cannot bind an address, it does not become
   ready), the revision is dropped and the one before keeps serving:
 
