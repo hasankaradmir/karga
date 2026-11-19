@@ -6,6 +6,7 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Added
+- USAGE: exposure `pathType` (prefix, by segment, or exact) and `to` (karga-server D43).
 - `karga gateway edit`: the settings in force in `$KARGA_EDITOR`/`$EDITOR`; a document with
   problems opens again with them on top; saving it unchanged gives up and keeps the file.
 - The gateway settings as a document you keep (kind `Gateway`): `karga gateway get`, `diff -f`,

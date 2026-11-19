@@ -413,7 +413,7 @@ $ karga gateway listener add pg --port 15432 --protocol tcp
 listener pg added (tcp on port 15432)
 ```
 
-- `http` and `https` listeners are shared: each exposure selects a Service by host name and path
+- `http` and `https` listeners are shared: each exposure selects a Service by host name and path (`pathType` prefix or exact; below)
   prefix. A `tcp` listener belongs to one Service.
 - Every listener binds the addresses of `karga gateway set listen`, by default `127.0.0.1` only:
   nothing is reachable from other machines until you say so.
@@ -522,9 +522,30 @@ $ karga gateway edit              # the settings in force, in $KARGA_EDITOR or $
 ```yaml
 spec:
   expose:
-    - {port: http, listener: http, host: shop.local}       # path defaults to /
+    - {port: http, listener: http, host: shop.local}       # path / (prefix): everything
     - {port: postgres, listener: pg}                         # tcp: no host
 ```
+
+On http and https listeners `path` and `pathType` choose what a host sends to the Service:
+
+| `path` | `pathType` | Takes | Not |
+|--------|------------|-------|-----|
+| `/` (default) | `prefix` (default) | everything on the host | |
+| `/api` | `prefix` | `/api`, `/api/`, `/api/orders` (by segment; `/api/` is the same) | `/apix` |
+| `/healthz` | `exact` | `/healthz` only | `/healthz/x` |
+
+The most precise wins: exact paths first, then the longest prefix, then `/`. With `to`, a
+prefix is replaced in what the Service receives, so an application written for
+`/` serves under a sub-path; the removed prefix comes in `x-forwarded-prefix` (an application that
+writes absolute links needs it, or links that are relative):
+
+```yaml
+    - {port: http, listener: http, host: shop.local, path: /api, to: /}                   # /api/orders -> /orders
+    - {port: http, listener: http, host: shop.local, path: /old, to: /v2}                 # /old/x -> /v2/x
+    - {port: http, listener: http, host: shop.local, path: /healthz, pathType: exact}     # /healthz only
+```
+
+`karga gateway status` shows a route with its `to` (`shop.local/api → /`) or `(exact)`.
 
 The scaffold from `karga create` exposes its Service with `--set expose.host=...`; the examples with
 `--set service.listener=...`:
