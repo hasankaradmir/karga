@@ -44,7 +44,7 @@ Where things live:
 - Docker runs the containers, the gateway and the release proxies, and restarts them.
 - The server's `KARGA_HOME` (`/var/lib/karga` for the service) holds the state (YAML files under
   `state/`), the key `state.key`, rendered Config and Secret files, the gateway settings
-  `gateway.yaml` and the Envoy configuration. Only the `karga` user can read it (mode 0700).
+  revisions `gateway-settings/` and the Envoy configuration. Only the `karga` user can read it (mode 0700).
 
 ## 2. Install karga
 
@@ -450,49 +450,64 @@ listener pg added (tcp on port 15432)
   Error: gateway listener "pg" is used by db/postgres; remove those exposures first
   ```
 
-### Gateway settings in a file
+### Gateway settings as a document
 
-The settings live in `$KARGA_HOME/gateway.yaml` (as the karga-server user). Edit it, then check
-and apply it; the commands above write the same file:
+The gateway settings are also a document you keep where you like (a git repository, `/etc`),
+like a Kubernetes manifest. karga never writes it: it keeps the revisions applied (the last 10).
+
+```console
+$ karga gateway get > gateway.yaml          # the settings in force, to start from
+```
 
 ```yaml
-listen: [127.0.0.1]
-accessLog: false
-listeners:
-  - {name: web, port: 80, protocol: http, timeout: 30s, rateLimit: 100/s}
-  - {name: websecure, port: 443, protocol: https}
-  - {name: pg, port: 15432, protocol: tcp, proxyProtocol: v2, idleTimeout: 8h}
+apiVersion: karga.io/v1alpha1
+kind: Gateway
+spec:
+  listen: [127.0.0.1]
+  accessLog: false
+  listeners:
+    - {name: web, port: 80, protocol: http, timeout: 30s, rateLimit: 100/s}
+    - {name: websecure, port: 443, protocol: https}
+    - {name: pg, port: 15432, protocol: tcp, proxyProtocol: v2, idleTimeout: 8h}
 ```
 
 ```console
-$ karga gateway validate
+$ karga gateway diff -f gateway.yaml
 ~ listener web: timeout: - -> 30s, rateLimit: - -> 100/s
 + listener pg: port: 15432, protocol: tcp, proxyProtocol: v2, idleTimeout: 8h
 
-$ karga gateway apply
+$ karga gateway apply -f gateway.yaml
 ~ listener web: timeout: - -> 30s, rateLimit: - -> 100/s
 + listener pg: port: 15432, protocol: tcp, proxyProtocol: v2, idleTimeout: 8h
-gateway settings applied
+gateway settings applied (revision 4)
+
+$ karga gateway history
+REVISION        TIME                 ACTOR  SOURCE
+2               2026-11-19 10:02:11  alice  listener add pg
+3               2026-11-19 10:14:40  alice  apply
+4 (in force)    2026-11-19 10:31:05  alice  apply
+
+$ karga gateway rollback          # the revision before; or: karga gateway rollback 2
 ```
 
-- Nothing in the file takes effect until `apply`: the gateway runs on the settings last applied
-  (`$KARGA_HOME/gateway.applied.yaml`, karga's own copy). `karga gateway status` says when the
-  file has changes not applied.
-- `validate` and `apply` refuse a file with problems (exit 2): YAML that does not parse or has an
-  unknown field, a value that does not check (the option table above), a listener a Service uses
-  removed or changed to another protocol, a port another process holds.
-- `apply` asks before it listens beyond loopback or removes a listener (`--yes` to confirm), and
-  applies the file it showed: one changed meanwhile is refused.
-- If the gateway does not serve the new settings (Envoy refuses to bind an address, it does not
-  become ready), the previous settings are put back and keep serving; the file stays as written:
+- The document is the whole desired state: a listener it does not name is removed. Fields it
+  leaves out take their defaults (`listen: [127.0.0.1]`; no `listeners` at all: `web` and
+  `websecure`).
+- `diff` and `apply` refuse a document with problems (exit 2): YAML that does not parse, an
+  unknown field (a typo), another `apiVersion` or `kind`, a value that does not check (the option
+  table above), a listener a Service uses removed or changed to another protocol, a port another
+  process holds. `-f -` reads stdin.
+- `apply` and `rollback` ask before listening beyond loopback or removing a listener (`--yes`).
+- If the gateway does not serve the new revision (Envoy cannot bind an address, it does not become
+  ready), the revision is dropped and the one before keeps serving:
 
   ```console
-  $ karga gateway apply --yes
+  $ karga gateway apply -f gateway.yaml --yes
   ~ listen: 127.0.0.1 -> 127.0.0.1,10.0.0.9
-  Error: ... rejected listener http_10.0.0.9_80: cannot bind '10.0.0.9:80': Cannot assign requested address; the gateway kept the previous settings
+  Error: ... rejected listener http_10.0.0.9_80: cannot bind '10.0.0.9:80': Cannot assign requested address; the gateway kept revision 4
   ```
-- While the file has changes not applied, the commands that change settings (`listener add|set|remove`,
-  `set listen|access-log`) are refused: apply the file or undo the edit first.
+- The gateway commands above (`listener add|set|remove`, `set listen|access-log`) apply a revision
+  the same way; `karga gateway get` shows the result to keep your document current.
 
 ### Expose a Service (the package)
 

@@ -478,33 +478,61 @@ func TestStructuredOutput(t *testing.T) {
 	}
 }
 
-// gateway validate shows what gateway.yaml changes; apply asks for a risk and applies the digest
-// it validated; problems stop both (exit 2).
-func TestGatewayValidateAndApply(t *testing.T) {
+// gateway diff shows what a document changes; apply asks for a risk and applies it; problems stop
+// both (exit 2); get prints the document; rollback applies an earlier revision.
+func TestGatewayDocuments(t *testing.T) {
 	e := newCLIEnv(t)
-	e.f.gatewayPlan = api.GatewayPlan{Digest: "sha256:d", Changes: []api.GatewayChange{
+	file := filepath.Join(t.TempDir(), "gateway.yaml")
+	if err := os.WriteFile(file, []byte("DOC"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	e.f.gatewayPlan = api.GatewayPlan{Changes: []api.GatewayChange{
 		{Kind: "listener", Name: "web", Action: "change", Fields: []string{"timeout: - -> 30s"}},
 		{Kind: "listener", Name: "api", Action: "add", Fields: []string{"port: 8081", "protocol: http"}},
 	}}
-	if out := e.mustRun("gateway", "validate"); !strings.Contains(out, "~ listener web: timeout: - -> 30s") || !strings.Contains(out, "+ listener api: port: 8081, protocol: http") {
-		t.Fatalf("validate:\n%s", out)
+	if out := e.mustRun("gateway", "diff", "-f", file); !strings.Contains(out, "~ listener web: timeout: - -> 30s") || !strings.Contains(out, "+ listener api: port: 8081, protocol: http") {
+		t.Fatalf("diff:\n%s", out)
 	}
-	if out := e.mustRun("gateway", "apply"); !strings.Contains(out, "gateway settings applied") || !slices.Contains(e.f.calls, "apply sha256:d") {
+	if out := e.mustRun("gateway", "apply", "-f", file); !strings.Contains(out, "gateway settings applied (revision 7)") || !slices.Contains(e.f.calls, "apply apply DOC") {
 		t.Fatalf("apply: %s %v", out, e.f.calls)
 	}
 	e.f.calls = nil
 	e.f.gatewayPlan.Risk = "this removes listener spare"
-	if _, err := e.run("gateway", "apply"); err == nil || slices.Contains(e.f.calls, "apply sha256:d") {
+	if _, err := e.run("gateway", "apply", "-f", file); err == nil || slices.Contains(e.f.calls, "apply apply DOC") {
 		t.Fatalf("a risk without --yes: %v %v", err, e.f.calls)
 	}
-	e.mustRun("gateway", "apply", "--yes")
+	e.mustRun("gateway", "apply", "-f", file, "--yes")
 	e.f.gatewayPlan.Problems = []string{"listener web is used by site/web; remove those exposures first"}
 	e.f.calls = nil
-	if _, err := e.run("gateway", "apply", "--yes"); ExitCode(err) != 2 || slices.Contains(e.f.calls, "apply sha256:d") {
+	if _, err := e.run("gateway", "apply", "-f", file, "--yes"); ExitCode(err) != 2 || slices.Contains(e.f.calls, "apply apply DOC") {
 		t.Fatalf("problems: exit %d %v", ExitCode(err), e.f.calls)
 	}
-	e.f.gatewayPlan = api.GatewayPlan{Digest: "sha256:d"}
-	if out := e.mustRun("gateway", "validate"); !strings.Contains(out, "no changes") {
+	if _, err := e.run("gateway", "apply"); err == nil {
+		t.Fatal("apply without -f")
+	}
+	e.f.gatewayPlan = api.GatewayPlan{}
+	if out := e.mustRun("gateway", "diff", "-f", file); !strings.Contains(out, "no changes") {
 		t.Fatalf("no changes:\n%s", out)
+	}
+
+	if out := e.mustRun("gateway", "get"); !strings.HasPrefix(out, "apiVersion: karga.io/v1alpha1\nkind: Gateway") {
+		t.Fatalf("get:\n%s", out)
+	}
+	if out := e.mustRun("gateway", "get", "-o", "json"); !strings.Contains(out, `"accessLog": true`) {
+		t.Fatalf("get -o json:\n%s", out)
+	}
+	e.f.gatewayRevs = []api.GatewayRevision{{Revision: 3, Source: "apply", Actor: "alice"}, {Revision: 4, Source: "listener add pg"}}
+	if out := e.mustRun("gateway", "history"); !strings.Contains(out, "4 (in force)") || !strings.Contains(out, "alice") {
+		t.Fatalf("history:\n%s", out)
+	}
+	e.f.calls = nil
+	e.f.gatewayPlan = api.GatewayPlan{Changes: []api.GatewayChange{{Kind: "accessLog", Action: "change", Fields: []string{"off -> on"}}}}
+	e.mustRun("gateway", "rollback")
+	if !slices.Contains(e.f.calls, "export 3") || !slices.ContainsFunc(e.f.calls, func(c string) bool { return strings.HasPrefix(c, "apply rollback 3 ") }) {
+		t.Fatalf("rollback: %v", e.f.calls)
+	}
+	e.f.gatewayRevs = e.f.gatewayRevs[1:]
+	if _, err := e.run("gateway", "rollback"); err == nil {
+		t.Fatal("rollback without an earlier revision")
 	}
 }

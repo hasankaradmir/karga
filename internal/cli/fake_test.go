@@ -5,6 +5,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"strconv"
 	"sync"
 	"testing"
 	"time"
@@ -40,6 +41,7 @@ type fake struct {
 	health      api.State
 	settings    api.Settings
 	gatewayPlan api.GatewayPlan
+	gatewayRevs []api.GatewayRevision
 	users       map[string][]string
 	recon       *api.ReconcileResult
 
@@ -224,14 +226,23 @@ func (f *fake) SetGatewayListener(_ context.Context, req api.GatewayListenerSetR
 	return f.err
 }
 
-func (f *fake) ValidateGateway(context.Context) (api.GatewayPlan, error) {
-	f.call("validate")
+func (f *fake) DiffGateway(_ context.Context, doc api.GatewayDocument) (api.GatewayPlan, error) {
+	f.call("diff " + string(doc.Content))
 	return f.gatewayPlan, f.err
 }
 
-func (f *fake) ApplyGateway(_ context.Context, req api.GatewayApplyRequest) error {
-	f.call("apply " + req.Digest)
-	return f.err
+func (f *fake) ApplyGateway(_ context.Context, req api.GatewayApplyRequest) (api.GatewayRevision, error) {
+	f.call("apply " + req.Source + " " + string(req.Content))
+	return api.GatewayRevision{Revision: 7, Source: req.Source}, f.err
+}
+
+func (f *fake) ExportGateway(_ context.Context, req api.GatewayExportRequest) (api.GatewayDocument, error) {
+	f.call("export " + strconv.Itoa(req.Revision))
+	return api.GatewayDocument{Content: []byte("apiVersion: karga.io/v1alpha1\nkind: Gateway\nspec:\n  accessLog: true\n")}, f.err
+}
+
+func (f *fake) GatewayHistory(context.Context) ([]api.GatewayRevision, error) {
+	return f.gatewayRevs, f.err
 }
 
 func (f *fake) RemoveGatewayListener(_ context.Context, req api.GatewayListenerRequest) error {
