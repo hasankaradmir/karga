@@ -403,9 +403,9 @@ A workload publishes nothing. Two things make it reachable:
 
 ```console
 $ karga gateway listener list
-NAME       PORT  PROTOCOL  SERVICES
-web        80    http
-websecure  443   https
+NAME       PORT  PROTOCOL  OPTIONS  SERVICES
+web        80    http      -
+websecure  443   https     -
 
 $ karga gateway listener add pg --port 15432 --protocol tcp
 listener pg added (tcp on port 15432)
@@ -422,6 +422,25 @@ listener pg added (tcp on port 15432)
   ```
 
   Then make sure DNS points the host names at the server and the firewall lets the ports through.
+- A listener's options bound what reaches the Services on it. They are the administrator's, shared
+  by every route on the listener, and change without restarting the gateway. Give them to
+  `listener add` or change them with `listener set` (options not given stay; `0` or `off` removes
+  one):
+
+  ```console
+  $ karga gateway listener set web --timeout 30s --max-body 10Mi --rate-limit 100/s
+  listener web: timeout=30s max-body=10Mi rate-limit=100/s
+  $ karga gateway listener set pg --proxy-protocol v2 --idle-timeout 8h
+  listener pg: idle-timeout=8h proxy-protocol=v2
+  ```
+
+  | Option | Listeners | Effect |
+  |--------|-----------|--------|
+  | `--timeout` | http, https | Longest a request may take; the gateway answers 504 after it. Default: none. |
+  | `--idle-timeout` | all | Closes a request, a WebSocket or a tcp connection that sends nothing either way for that long. Default: 5m (http), 1h (tcp). |
+  | `--max-body` | http, https | Largest request body, at most `16Mi` (the gateway holds it in memory); 413 beyond it. Larger uploads are limited by the application. |
+  | `--rate-limit` | http, https | Requests per second or minute (`100/s`, `600/m`) for the whole listener (an https listener counts each host on its own); 429 beyond it. |
+  | `--proxy-protocol` | tcp | Sends the client's address first on every connection (`v1` or `v2`). The backend must expect it (PostgreSQL does not; HAProxy, nginx `proxy_protocol` and most mail servers do). |
 - A listener a Service uses cannot be removed:
 
   ```console
@@ -477,10 +496,11 @@ $ karga install db examples/postgres --set database.password=s3cret-pw --set ser
 Error: Service "postgres": expose postgres on listener pg: no such gateway listener; the host's administrator adds it with 'karga gateway listener add pg --port <port> --protocol tcp|http|https'
 ```
 
-Applications behind http and https listeners receive the client address in `x-forwarded-for`.
-Requests may take as long as they need (uploads, server-sent events, long polls) and WebSocket
-connections pass through; a request or WebSocket that sends nothing either way for 5 minutes is
-closed.
+Applications behind http and https listeners receive the client address in `x-forwarded-for`; tcp
+backends receive it with the listener's `--proxy-protocol`. Unless the listener sets a `--timeout`,
+requests may take as long as they need (uploads, server-sent events, long polls) and WebSocket
+connections pass through; a request or WebSocket that sends nothing either way for 5 minutes (the
+listener's `--idle-timeout`) is closed.
 
 ### TLS
 

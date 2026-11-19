@@ -2,6 +2,7 @@ package cli
 
 import (
 	"fmt"
+	"slices"
 	"strconv"
 	"strings"
 
@@ -105,6 +106,38 @@ func newGatewayCmd(a *app) *cobra.Command {
 	return cmd
 }
 
+// optionFlags adds the listener option flags to cmd, written to o.
+func optionFlags(cmd *cobra.Command, o *api.ListenerOptions) {
+	cmd.Flags().StringVar(&o.Timeout, "timeout", "", "http, https: longest a request may take, e.g. 30s (504 after it; default none)")
+	cmd.Flags().StringVar(&o.IdleTimeout, "idle-timeout", "", "close a request or tcp connection idle this long, e.g. 10m (default 5m for http, 1h for tcp)")
+	cmd.Flags().StringVar(&o.MaxBody, "max-body", "", "http, https: largest request body, e.g. 10Mi, at most 16Mi (413 beyond it; default none)")
+	cmd.Flags().StringVar(&o.RateLimit, "rate-limit", "", "http, https: requests per second or minute, e.g. 100/s (429 beyond it; default none)")
+	cmd.Flags().StringVar(&o.ProxyProtocol, "proxy-protocol", "", "tcp: send the client address first, v1 or v2 (the backend must expect it)")
+}
+
+// unset turns the values that remove an option into none.
+func unset(v string) string {
+	if v == "0" || v == "off" {
+		return ""
+	}
+	return v
+}
+
+// optionsText lists the options that are set, or "-".
+func optionsText(o api.ListenerOptions) string {
+	var out []string
+	for _, kv := range [][2]string{{"timeout", o.Timeout}, {"idle-timeout", o.IdleTimeout}, {"max-body", o.MaxBody},
+		{"rate-limit", o.RateLimit}, {"proxy-protocol", o.ProxyProtocol}} {
+		if kv[1] != "" {
+			out = append(out, kv[0]+"="+kv[1])
+		}
+	}
+	if len(out) == 0 {
+		return "-"
+	}
+	return strings.Join(out, " ")
+}
+
 func newListenerCmd(a *app) *cobra.Command {
 	cmd := &cobra.Command{Use: "listener", Short: "Define the ports services can be exposed on"}
 	cmd.AddCommand(&cobra.Command{
@@ -122,9 +155,9 @@ func newListenerCmd(a *app) *cobra.Command {
 			}
 			var rows [][]string
 			for _, l := range settings.Listeners {
-				rows = append(rows, []string{l.Name, strconv.Itoa(l.Port), l.Protocol, strings.Join(users[l.Name], ", ")})
+				rows = append(rows, []string{l.Name, strconv.Itoa(l.Port), l.Protocol, optionsText(l.ListenerOptions), strings.Join(users[l.Name], ", ")})
 			}
-			return a.table("NAME\tPORT\tPROTOCOL\tSERVICES", rows)
+			return a.table("NAME\tPORT\tPROTOCOL\tOPTIONS\tSERVICES", rows)
 		},
 	})
 	var l api.Listener
@@ -145,7 +178,38 @@ func newListenerCmd(a *app) *cobra.Command {
 	add.Flags().StringVar(&l.Protocol, "protocol", "", "tcp, http or https")
 	_ = add.MarkFlagRequired("port")
 	_ = add.MarkFlagRequired("protocol")
-	cmd.AddCommand(add, &cobra.Command{
+	optionFlags(add, &l.ListenerOptions)
+	var opts api.ListenerOptions
+	set := &cobra.Command{
+		Use:   "set <name> [--timeout d] [--idle-timeout d] [--max-body size] [--rate-limit n/s] [--proxy-protocol v1|v2]",
+		Short: "Change the options of a listener (0 or off removes one); options not given stay",
+		Args:  cobra.ExactArgs(1),
+		RunE: func(cmd *cobra.Command, args []string) error {
+			s := a.backend()
+			settings, _, err := s.GatewaySettings(cmd.Context())
+			if err != nil {
+				return err
+			}
+			i := slices.IndexFunc(settings.Listeners, func(l api.Listener) bool { return l.Name == args[0] })
+			if i < 0 {
+				return fmt.Errorf("gateway listener %q: %w", args[0], api.ErrNotFound)
+			}
+			req := api.GatewayListenerSetRequest{Name: args[0], ListenerOptions: settings.Listeners[i].ListenerOptions}
+			for flag, field := range map[string]*string{"timeout": &req.Timeout, "idle-timeout": &req.IdleTimeout,
+				"max-body": &req.MaxBody, "rate-limit": &req.RateLimit, "proxy-protocol": &req.ProxyProtocol} {
+				if cmd.Flags().Changed(flag) {
+					v, _ := cmd.Flags().GetString(flag)
+					*field = unset(v)
+				}
+			}
+			if err := s.SetGatewayListener(cmd.Context(), req); err != nil {
+				return err
+			}
+			return a.report(req, "listener %s: %s\n", req.Name, optionsText(req.ListenerOptions))
+		},
+	}
+	optionFlags(set, &opts)
+	cmd.AddCommand(add, set, &cobra.Command{
 		Use:   "remove <name>",
 		Short: "Remove a listener no service uses",
 		Args:  cobra.ExactArgs(1),

@@ -249,14 +249,23 @@ func TestGatewayCommands(t *testing.T) {
 	}
 	e.f.settings = api.Settings{Listen: []string{"127.0.0.1"}, Listeners: []api.Listener{{Name: "web", Port: 80, Protocol: api.ProtocolHTTP}, {Name: "websecure", Port: 443, Protocol: api.ProtocolHTTPS}}}
 	e.f.users = map[string][]string{"web": {"shop/web"}}
-	if out := e.mustRun("gateway", "listener", "list"); !strings.Contains(out, "web        80    http      shop/web") {
+	e.f.settings.Listeners[0].RateLimit = "100/s"
+	if out := e.mustRun("gateway", "listener", "list"); !strings.Contains(out, "web        80    http      rate-limit=100/s  shop/web") {
 		t.Fatalf("listeners:\n%s", out)
 	}
 	e.mustRun("gateway", "listener", "add", "pg", "--port", "5432", "--protocol", "tcp")
+	// set changes only the options given; 0 removes one.
+	e.mustRun("gateway", "listener", "set", "web", "--timeout", "30s", "--rate-limit", "0")
+	if o := e.f.settings.Listeners[0].ListenerOptions; o != (api.ListenerOptions{Timeout: "30s"}) {
+		t.Fatalf("options after set: %+v", o)
+	}
+	if _, err := e.run("gateway", "listener", "set", "nope", "--timeout", "1s"); err == nil {
+		t.Fatal("set on a missing listener")
+	}
 	e.mustRun("gateway", "listener", "remove", "pg", "--yes")
 	e.mustRun("gateway", "set", "listen", "10.0.0.5,127.0.0.1", "--yes")
 	e.mustRun("gateway", "set", "access-log", "on")
-	if got := strings.Join(e.f.calls, ","); got != "add pg,remove pg,listen,access-log on" || len(e.f.settings.Listen) != 2 {
+	if got := strings.Join(e.f.calls, ","); got != "add pg,set web,remove pg,listen,access-log on" || len(e.f.settings.Listen) != 2 {
 		t.Fatalf("calls: %s %v", got, e.f.settings.Listen)
 	}
 	if _, err := e.run("gateway", "set", "access-log", "maybe"); err == nil {
