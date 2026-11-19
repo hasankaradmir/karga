@@ -233,11 +233,11 @@ Release:  demo
 Status:   deployed
 Revision: 1
 
-KIND      NAME   RUNTIME NAME      REVISION  DESIRED  ACTUAL   RESTARTS  HEALTH/BACKEND
-Network   net    demo-net          1         applied  present
-Proxy     proxy  demo-karga-proxy  1         applied  running  0         -> karga-web-r1
-Service   web    demo-karga-proxy  1         applied  routed             -> karga-web-r1
-Workload  web    demo-web-8b1d04   1         applied  running  0         healthy
+KIND      NAME   RUNTIME NAME       REVISION  DESIRED  ACTUAL   RESTARTS  HEALTH/BACKEND
+Network   net    demo-net           1         applied  present
+Proxy     proxy  demo-karga-proxy   1         applied  running  0         -> karga-web-r1
+Service   web    demo-karga-proxy   1         applied  routed             -> karga-web-r1
+Workload  web    demo-web-8b1d04e7  1         applied  running  0         healthy
 
 $ karga list
 NAME  REVISION  STATUS    PACKAGE  VERSION  UPDATED
@@ -312,7 +312,7 @@ workload asked for `replace` but cannot have it, why:
 - **replace**: the new container starts next to the old one and takes over once healthy. Needs a
   health check and read-only volumes (see [section 7](#7-upgrades-without-downtime)).
 
-A workload's container is named `<release>-<workload>-<hash>` (e.g. `demo-web-3f9a2c`), the hash
+A workload's container is named `<release>-<workload>-<hash>` (e.g. `demo-web-3f9a2c1b`), the hash
 coming from the workload's spec: an update gives it a new name, an upgrade that changes nothing
 keeps it. `karga status` shows the current one, and Docker finds it by label:
 `docker ps --filter label=io.karga.release=demo --filter label=io.karga.name=web`.
@@ -324,10 +324,10 @@ keeps it. `karga status` shows the current one, and Docker finds it by label:
 ```console
 $ karga upgrade demo shop --set image.tag=1.27.3-alpine
 [  0s] workload web: image nginx:1.27.3-alpine (if-not-present)
-[  0s] workload web: starting demo-web-3f9a2c next to demo-web-8b1d04
-[  5s] workload web: switching traffic to demo-web-3f9a2c
-[  5s] workload web: waiting up to 10s for connections to demo-web-8b1d04 to finish
-[  5s] workload web: stopping demo-web-8b1d04
+[  0s] workload web: starting demo-web-3f9a2c1b next to demo-web-8b1d04e7
+[  5s] workload web: switching traffic to demo-web-3f9a2c1b
+[  5s] workload web: waiting up to 10s for connections to demo-web-8b1d04e7 to finish
+[  5s] workload web: stopping demo-web-8b1d04e7
 Release "demo" upgraded (revision 2).
   update workload web (replace)
 ```
@@ -541,11 +541,11 @@ A replace:
 
 ```console
 $ karga upgrade demo shop --set image.tag=1.27.3-alpine
-[  0s] workload web: starting demo-web-3f9a2c next to demo-web-8b1d04
-[  2s] workload demo-web-3f9a2c: waiting for demo-web-3f9a2c to be ready (...)
-[  5s] workload web: switching traffic to demo-web-3f9a2c
-[  5s] workload web: waiting up to 10s for connections to demo-web-8b1d04 to finish
-[  5s] workload web: stopping demo-web-8b1d04
+[  0s] workload web: starting demo-web-3f9a2c1b next to demo-web-8b1d04e7
+[  2s] workload demo-web-3f9a2c1b: waiting for demo-web-3f9a2c1b to be ready (...)
+[  5s] workload web: switching traffic to demo-web-3f9a2c1b
+[  5s] workload web: waiting up to 10s for connections to demo-web-8b1d04e7 to finish
+[  5s] workload web: stopping demo-web-8b1d04e7
 Release "demo" upgraded (revision 2).
   update workload web (replace)
 ```
@@ -729,7 +729,7 @@ security:
 A container that runs out of memory is killed and restarted; `karga status` shows it:
 
 ```
-Workload  worker  shop-worker-6d2e90  3  applied  running  4  healthy, oom-killed
+Workload  worker  shop-worker-6d2e9041  3  applied  running  4  healthy, oom-killed
 ```
 
 An image that needs setuid (e.g. one calling `sudo`) needs `noNewPrivileges: false`. Upgrading a
@@ -1191,15 +1191,15 @@ NOTES:
 notes serves http://notes.example.com/ through the gateway listener web.
 
 $ karga status notes
-KIND      NAME      RUNTIME NAME           REVISION  DESIRED  ACTUAL   RESTARTS  HEALTH/BACKEND
-Network   backend   notes-backend          1         applied  present
-Proxy     proxy     notes-karga-proxy      1         applied  running  0         -> karga-api-r1, karga-postgres-r1
-Secret    db        notes-db               1         applied  file
-Service   api       notes-karga-proxy      1         applied  routed             -> karga-api-r1
-Service   postgres  notes-karga-proxy      1         applied  routed             -> karga-postgres-r1
-Volume    db-data   notes-db-data          1         applied  present
-Workload  api       notes-api-5c07e1       1         applied  running  0         healthy
-Workload  postgres  notes-postgres-a71c3e  1         applied  running  0         healthy
+KIND      NAME      RUNTIME NAME             REVISION  DESIRED  ACTUAL   RESTARTS  HEALTH/BACKEND
+Network   backend   notes-backend            1         applied  present
+Proxy     proxy     notes-karga-proxy        1         applied  running  0         -> karga-api-r1, karga-postgres-r1
+Secret    db        notes-db                 1         applied  file
+Service   api       notes-karga-proxy        1         applied  routed             -> karga-api-r1
+Service   postgres  notes-karga-proxy        1         applied  routed             -> karga-postgres-r1
+Volume    db-data   notes-db-data            1         applied  present
+Workload  api       notes-api-5c07e19a       1         applied  running  0         healthy
+Workload  postgres  notes-postgres-a71c3e05  1         applied  running  0         healthy
 ```
 
 Create a table and use the API (PostgREST reloads its schema on `NOTIFY pgrst`):

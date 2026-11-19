@@ -6,7 +6,7 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Changed
-- Workload containers are named after their digest (`demo-web-3f9a2c`, karga-server D34); USAGE's
+- Workload containers are named after their digest (`demo-web-3f9a2c1b`, karga-server D34); USAGE's
   examples follow, and say how to find one by label.
 - `karga status` exits 6 when a Service is routed to no backend (`not routed`, now shown in red).
 - `-o json`/`-o yaml` print an empty list as `[]` in every command (some printed `null`);
