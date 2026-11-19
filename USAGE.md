@@ -450,6 +450,50 @@ listener pg added (tcp on port 15432)
   Error: gateway listener "pg" is used by db/postgres; remove those exposures first
   ```
 
+### Gateway settings in a file
+
+The settings live in `$KARGA_HOME/gateway.yaml` (as the karga-server user). Edit it, then check
+and apply it; the commands above write the same file:
+
+```yaml
+listen: [127.0.0.1]
+accessLog: false
+listeners:
+  - {name: web, port: 80, protocol: http, timeout: 30s, rateLimit: 100/s}
+  - {name: websecure, port: 443, protocol: https}
+  - {name: pg, port: 15432, protocol: tcp, proxyProtocol: v2, idleTimeout: 8h}
+```
+
+```console
+$ karga gateway validate
+~ listener web: timeout: - -> 30s, rateLimit: - -> 100/s
++ listener pg: port: 15432, protocol: tcp, proxyProtocol: v2, idleTimeout: 8h
+
+$ karga gateway apply
+~ listener web: timeout: - -> 30s, rateLimit: - -> 100/s
++ listener pg: port: 15432, protocol: tcp, proxyProtocol: v2, idleTimeout: 8h
+gateway settings applied
+```
+
+- Nothing in the file takes effect until `apply`: the gateway runs on the settings last applied
+  (`$KARGA_HOME/gateway.applied.yaml`, karga's own copy). `karga gateway status` says when the
+  file has changes not applied.
+- `validate` and `apply` refuse a file with problems (exit 2): YAML that does not parse or has an
+  unknown field, a value that does not check (the option table above), a listener a Service uses
+  removed or changed to another protocol, a port another process holds.
+- `apply` asks before it listens beyond loopback or removes a listener (`--yes` to confirm), and
+  applies the file it showed: one changed meanwhile is refused.
+- If the gateway does not serve the new settings (Envoy refuses to bind an address, it does not
+  become ready), the previous settings are put back and keep serving; the file stays as written:
+
+  ```console
+  $ karga gateway apply --yes
+  ~ listen: 127.0.0.1 -> 127.0.0.1,10.0.0.9
+  Error: ... rejected listener http_10.0.0.9_80: cannot bind '10.0.0.9:80': Cannot assign requested address; the gateway kept the previous settings
+  ```
+- While the file has changes not applied, the commands that change settings (`listener add|set|remove`,
+  `set listen|access-log`) are refused: apply the file or undo the edit first.
+
 ### Expose a Service (the package)
 
 ```yaml

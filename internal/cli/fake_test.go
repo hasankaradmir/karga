@@ -23,24 +23,25 @@ import (
 type fake struct {
 	mu sync.Mutex
 
-	result   *api.Result
-	err      error
-	events   []api.Event
-	releases []api.Release
-	history  []api.Revision
-	status   *api.StatusReport
-	diff     *api.RevisionDiff
-	slow     time.Duration // List takes this long
-	applied  []api.AppliedResource
-	ops      []api.Operation
-	logs     string
-	backup   string
-	exitCode int
-	exposed  []api.Exposed
-	health   api.State
-	settings api.Settings
-	users    map[string][]string
-	recon    *api.ReconcileResult
+	result      *api.Result
+	err         error
+	events      []api.Event
+	releases    []api.Release
+	history     []api.Revision
+	status      *api.StatusReport
+	diff        *api.RevisionDiff
+	slow        time.Duration // List takes this long
+	applied     []api.AppliedResource
+	ops         []api.Operation
+	logs        string
+	backup      string
+	exitCode    int
+	exposed     []api.Exposed
+	health      api.State
+	settings    api.Settings
+	gatewayPlan api.GatewayPlan
+	users       map[string][]string
+	recon       *api.ReconcileResult
 
 	// What the CLI sent.
 	install  *api.InstallRequest
@@ -220,6 +221,16 @@ func (f *fake) SetGatewayListener(_ context.Context, req api.GatewayListenerSetR
 		}
 	}
 	f.call("set " + req.Name)
+	return f.err
+}
+
+func (f *fake) ValidateGateway(context.Context) (api.GatewayPlan, error) {
+	f.call("validate")
+	return f.gatewayPlan, f.err
+}
+
+func (f *fake) ApplyGateway(_ context.Context, req api.GatewayApplyRequest) error {
+	f.call("apply " + req.Digest)
 	return f.err
 }
 
