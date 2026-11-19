@@ -770,7 +770,7 @@ the client says the user agreed, so no client skips the question.
 | 3 | karga-server is not running, did not answer in time, went away, or is too old for the request (another API major, or a field or endpoint it does not know) |
 | 4 | The release, revision or resource does not exist |
 | 5 | Another operation holds the release, or it exists already |
-| 6 | `karga status`: the release is not deployed and healthy (failed, missing, unhealthy or starting) |
+| 6 | `karga status`: the release is not deployed and healthy (failed, missing, unhealthy or starting, or a Service routed nowhere) |
 | 7 | karga stopped waiting (Ctrl-C) for an operation that goes on in karga-server: `karga events <release> -f` follows it |
 | other | `karga exec`: the command's own exit code |
 
