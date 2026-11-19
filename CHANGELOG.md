@@ -6,6 +6,8 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Added
+- `karga gateway validate` and `karga gateway apply [--yes]` check and apply
+  `$KARGA_HOME/gateway.yaml` edited by hand; `gateway status` says when it has changes not applied.
 - `karga gateway listener add` takes `--timeout`, `--idle-timeout`, `--max-body`, `--rate-limit` and
   `--proxy-protocol`; `karga gateway listener set <name>` changes them (`0` or `off` removes one);
   `listener list` shows them in OPTIONS.

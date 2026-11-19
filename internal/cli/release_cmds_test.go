@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"reflect"
 	"regexp"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -474,5 +475,36 @@ func TestStructuredOutput(t *testing.T) {
 	var ops []api.Operation
 	if err := json.Unmarshal([]byte(e.mustRun("events", "r", "-o", "json")), &ops); err != nil || ops[0].ID != 1 {
 		t.Fatalf("events order: %+v %v", ops, err)
+	}
+}
+
+// gateway validate shows what gateway.yaml changes; apply asks for a risk and applies the digest
+// it validated; problems stop both (exit 2).
+func TestGatewayValidateAndApply(t *testing.T) {
+	e := newCLIEnv(t)
+	e.f.gatewayPlan = api.GatewayPlan{Digest: "sha256:d", Changes: []api.GatewayChange{
+		{Kind: "listener", Name: "web", Action: "change", Fields: []string{"timeout: - -> 30s"}},
+		{Kind: "listener", Name: "api", Action: "add", Fields: []string{"port: 8081", "protocol: http"}},
+	}}
+	if out := e.mustRun("gateway", "validate"); !strings.Contains(out, "~ listener web: timeout: - -> 30s") || !strings.Contains(out, "+ listener api: port: 8081, protocol: http") {
+		t.Fatalf("validate:\n%s", out)
+	}
+	if out := e.mustRun("gateway", "apply"); !strings.Contains(out, "gateway settings applied") || !slices.Contains(e.f.calls, "apply sha256:d") {
+		t.Fatalf("apply: %s %v", out, e.f.calls)
+	}
+	e.f.calls = nil
+	e.f.gatewayPlan.Risk = "this removes listener spare"
+	if _, err := e.run("gateway", "apply"); err == nil || slices.Contains(e.f.calls, "apply sha256:d") {
+		t.Fatalf("a risk without --yes: %v %v", err, e.f.calls)
+	}
+	e.mustRun("gateway", "apply", "--yes")
+	e.f.gatewayPlan.Problems = []string{"listener web is used by site/web; remove those exposures first"}
+	e.f.calls = nil
+	if _, err := e.run("gateway", "apply", "--yes"); ExitCode(err) != 2 || slices.Contains(e.f.calls, "apply sha256:d") {
+		t.Fatalf("problems: exit %d %v", ExitCode(err), e.f.calls)
+	}
+	e.f.gatewayPlan = api.GatewayPlan{Digest: "sha256:d"}
+	if out := e.mustRun("gateway", "validate"); !strings.Contains(out, "no changes") {
+		t.Fatalf("no changes:\n%s", out)
 	}
 }
