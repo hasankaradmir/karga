@@ -11,6 +11,8 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
   `listener list` shows them in OPTIONS.
 
 ### Changed
+- USAGE: the release proxy is `<release>-karga-proxy-<hash>` and is replaced without an outage
+  (karga-server D37); the plan shows `PROXY proxy (replace)`.
 - USAGE: a recreate creates the new container before stopping the old one, and adding a Service to
   a workload no longer recreates it (karga-server D36).
 - Workload containers are named after their digest (`demo-web-3f9a2c1b`, karga-server D34); USAGE's
