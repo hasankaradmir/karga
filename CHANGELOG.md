@@ -6,6 +6,7 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Changed
+- `karga status` exits 6 when a Service is routed to no backend (`not routed`, now shown in red).
 - `-o json`/`-o yaml` print an empty list as `[]` in every command (some printed `null`);
   `karga logs` refuses them instead of ignoring them.
 - Exit codes: an unknown subcommand of a group (`karga gateway nope`) exits 2 instead of showing

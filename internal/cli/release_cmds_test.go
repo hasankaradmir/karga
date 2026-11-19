@@ -356,6 +356,11 @@ func TestExitCodes(t *testing.T) {
 	if c := code("status", "r"); c != ExitUnhealthy {
 		t.Fatalf("unhealthy status: %d", c)
 	}
+	e.f.status.Resources[0].Health = "healthy"
+	e.f.status.Resources = append(e.f.status.Resources, api.ResourceStatus{Kind: "Service", Name: "web", Desired: "applied", Actual: api.ActualNotRouted})
+	if c := code("status", "r"); c != ExitUnhealthy {
+		t.Fatalf("service routed nowhere: %d", c)
+	}
 	// A typo in a group's subcommand must not pass as done; nor a wrong strategy or log format.
 	for _, args := range [][]string{{"status"}, {"list", "--nope"}, {"nope"}, {"gateway", "nope"}, {"get", "nope"},
 		{"gateway", "listener", "nope"}, {"upgrade", "r", ".", "--strategy", "blue"}, {"list", "--log-format", "xml"}} {
