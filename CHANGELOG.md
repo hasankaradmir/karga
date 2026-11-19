@@ -5,6 +5,11 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 
 ## [Unreleased]
 
+### Added
+- `karga gateway listener add` takes `--timeout`, `--idle-timeout`, `--max-body`, `--rate-limit` and
+  `--proxy-protocol`; `karga gateway listener set <name>` changes them (`0` or `off` removes one);
+  `listener list` shows them in OPTIONS.
+
 ### Changed
 - Workload containers are named after their digest (`demo-web-3f9a2c1b`, karga-server D34); USAGE's
   examples follow, and say how to find one by label.

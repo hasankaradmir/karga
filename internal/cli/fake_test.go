@@ -213,6 +213,16 @@ func (f *fake) AddGatewayListener(_ context.Context, l api.Listener) error {
 	return f.err
 }
 
+func (f *fake) SetGatewayListener(_ context.Context, req api.GatewayListenerSetRequest) error {
+	for i, l := range f.settings.Listeners {
+		if l.Name == req.Name {
+			f.settings.Listeners[i].ListenerOptions = req.ListenerOptions
+		}
+	}
+	f.call("set " + req.Name)
+	return f.err
+}
+
 func (f *fake) RemoveGatewayListener(_ context.Context, req api.GatewayListenerRequest) error {
 	f.call("remove " + req.Name)
 	return f.err
