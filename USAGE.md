@@ -532,12 +532,10 @@ The scaffold from `karga create` exposes its Service with `--set expose.host=...
 ```console
 $ karga upgrade demo shop --reuse-values --set expose.host=shop.local --dry-run
   ~ SERVICE web
-  ~ PROXY proxy (replace)
 
 $ karga upgrade demo shop --reuse-values --set expose.host=shop.local
 Release "demo" upgraded (revision 3).
   update service web
-  update proxy proxy (replace)
 
 $ curl -s -o /dev/null -w "%{http_code}\n" -H "Host: shop.local" http://127.0.0.1/
 200
@@ -549,14 +547,15 @@ Listen:     127.0.0.1
 Access log: off
 
 LISTENER  ROUTE        RELEASE  SERVICE  UPSTREAM
-http:80   shop.local/  demo     web:80   127.0.0.1:34359
+http:80   shop.local/  demo     web:80   10.213.0.2:80
 ```
 
-Exposing a new port needs a new release proxy container (it publishes the port on a loopback
-upstream for the gateway, which Docker cannot add to a running container), and so does adding or
-removing a Service (Docker sets a container's aliases when it joins a network). The new proxy
-starts next to the old one, the gateway switches to it, and the old one drains (up to 30s) and
-goes: no request is lost. Changing a host or path only rewrites files. An exposure the gateway
+The release proxy publishes no port: the gateway reaches it on the `karga-edge` network at the
+release's address (UPSTREAM above; `curl 10.213.0.2:80` from the host reaches the proxy directly).
+Exposing a port, or changing a host or path, changes nothing of the proxy. Adding or removing a
+Service needs a new proxy container (Docker sets a container's aliases when it joins a network): it
+starts next to the old one at the release's other address, the gateway switches to it, and the
+old one drains (up to 30s) and goes; no request is lost. An exposure the gateway
 cannot serve is refused before anything changes:
 
 ```console
@@ -685,8 +684,7 @@ Release "db" installed (revision 1).
   create proxy proxy
 
 $ docker port db-postgres-a71c3e05         # the database publishes nothing
-$ docker port db-karga-proxy-6e2b9f14      # the proxy: only a loopback upstream for the gateway
-5432/tcp -> 127.0.0.1:37115
+$ docker port db-karga-proxy-6e2b9f14      # nor does the proxy: the gateway reaches it on karga-edge
 ```
 
 Other workloads of the release connect to `postgres:5432`; outside clients to the `pg` listener
