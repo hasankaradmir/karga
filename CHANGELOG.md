@@ -11,6 +11,8 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
   `listener list` shows them in OPTIONS.
 
 ### Changed
+- USAGE: the gateway is `karga-gateway-<hash>` and changes image without an outage
+  (karga-server D38).
 - USAGE: the release proxy is `<release>-karga-proxy-<hash>` and is replaced without an outage
   (karga-server D37); the plan shows `PROXY proxy (replace)`.
 - USAGE: a recreate creates the new container before stopping the old one, and adding a Service to
