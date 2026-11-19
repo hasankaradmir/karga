@@ -33,7 +33,7 @@ replaced by documentation addresses.
 | **Revision** | Each install, upgrade and rollback is a new, immutable revision of the release. |
 | **Plan** | What a command will change: created (`+`), updated (`~`) and deleted (`-`) resources, and for workloads how (recreate or replace). |
 | **Service** | The only way to reach a workload: a name inside the release (`web:80`), and optionally an exposure on a gateway listener. A workload alone publishes nothing. |
-| **Release proxy** | One Envoy per release with Services (`<release>-karga-proxy`). It answers to the Service names and forwards to the current container, so upgrades switch without losing requests. |
+| **Release proxy** | One Envoy per release with Services (`<release>-karga-proxy-<hash>`). It answers to the Service names and forwards to the current container, so upgrades switch without losing requests. |
 | **Gateway** | One Envoy per host (`karga-gateway`), the only way in from outside. The host's administrator defines where it listens and its **listeners** (a name, a port, a protocol); packages can only expose Services on them. |
 
 Where things live:
@@ -233,11 +233,11 @@ Release:  demo
 Status:   deployed
 Revision: 1
 
-KIND      NAME   RUNTIME NAME       REVISION  DESIRED  ACTUAL   RESTARTS  HEALTH/BACKEND
-Network   net    demo-net           1         applied  present
-Proxy     proxy  demo-karga-proxy   1         applied  running  0         -> karga-web-r1
-Service   web    demo-karga-proxy   1         applied  routed             -> karga-web-r1
-Workload  web    demo-web-8b1d04e7  1         applied  running  0         healthy
+KIND      NAME   RUNTIME NAME               REVISION  DESIRED  ACTUAL   RESTARTS  HEALTH/BACKEND
+Network   net    demo-net                   1         applied  present
+Proxy     proxy  demo-karga-proxy-d41a7c90  1         applied  running  0         -> karga-web-r1
+Service   web    demo-karga-proxy           1         applied  routed             -> karga-web-r1
+Workload  web    demo-web-8b1d04e7          1         applied  running  0         healthy
 
 $ karga list
 NAME  REVISION  STATUS    PACKAGE  VERSION  UPDATED
@@ -465,12 +465,12 @@ The scaffold from `karga create` exposes its Service with `--set expose.host=...
 ```console
 $ karga upgrade demo shop --reuse-values --set expose.host=shop.local --dry-run
   ~ SERVICE web
-  ~ PROXY proxy (recreate: image, limits or exposed ports changed: brief interruption)
+  ~ PROXY proxy (replace)
 
 $ karga upgrade demo shop --reuse-values --set expose.host=shop.local
 Release "demo" upgraded (revision 3).
   update service web
-  update proxy proxy (recreate: image, limits or exposed ports changed: brief interruption)
+  update proxy proxy (replace)
 
 $ curl -s -o /dev/null -w "%{http_code}\n" -H "Host: shop.local" http://127.0.0.1/
 200
@@ -485,9 +485,12 @@ LISTENER  ROUTE        RELEASE  SERVICE  UPSTREAM
 web:80    shop.local/  demo     web:80   127.0.0.1:34359
 ```
 
-Exposing a new port recreates the release proxy (it publishes the port on a loopback upstream for
-the gateway); changing a host or path does not. An exposure the gateway cannot serve is refused
-before anything changes:
+Exposing a new port needs a new release proxy container (it publishes the port on a loopback
+upstream for the gateway, which Docker cannot add to a running container), and so does adding or
+removing a Service (Docker sets a container's aliases when it joins a network). The new proxy
+starts next to the old one, the gateway switches to it, and the old one drains (up to 30s) and
+goes: no request is lost. Changing a host or path only rewrites files. An exposure the gateway
+cannot serve is refused before anything changes:
 
 ```console
 $ karga install other shop --set expose.host=shop.local
@@ -590,8 +593,8 @@ Rules to know:
 - **Release proxy.** `karga status` shows it, and each Service, with the backend it routes to:
 
   ```
-  Proxy     proxy  demo-karga-proxy  1  applied  running  0  -> karga-web-r1
-  Service   web    demo-karga-proxy  1  applied  routed      -> karga-web-r1
+  Proxy    proxy  demo-karga-proxy-d41a7c90  1  applied  running  0  -> karga-web-r1
+  Service  web    demo-karga-proxy           1  applied  routed      -> karga-web-r1
   ```
 
   Adding or removing a Service briefly interrupts the proxy's open connections on that network.
@@ -613,8 +616,8 @@ Release "db" installed (revision 1).
   create service postgres
   create proxy proxy
 
-$ docker port db-postgres                  # the database publishes nothing
-$ docker port db-karga-proxy               # the proxy: only a loopback upstream for the gateway
+$ docker port db-postgres-a71c3e05         # the database publishes nothing
+$ docker port db-karga-proxy-6e2b9f14      # the proxy: only a loopback upstream for the gateway
 5432/tcp -> 127.0.0.1:37115
 ```
 
@@ -1213,15 +1216,15 @@ NOTES:
 notes serves http://notes.example.com/ through the gateway listener web.
 
 $ karga status notes
-KIND      NAME      RUNTIME NAME             REVISION  DESIRED  ACTUAL   RESTARTS  HEALTH/BACKEND
-Network   backend   notes-backend            1         applied  present
-Proxy     proxy     notes-karga-proxy        1         applied  running  0         -> karga-api-r1, karga-postgres-r1
-Secret    db        notes-db                 1         applied  file
-Service   api       notes-karga-proxy        1         applied  routed             -> karga-api-r1
-Service   postgres  notes-karga-proxy        1         applied  routed             -> karga-postgres-r1
-Volume    db-data   notes-db-data            1         applied  present
-Workload  api       notes-api-5c07e19a       1         applied  running  0         healthy
-Workload  postgres  notes-postgres-a71c3e05  1         applied  running  0         healthy
+KIND      NAME      RUNTIME NAME                REVISION  DESIRED  ACTUAL   RESTARTS  HEALTH/BACKEND
+Network   backend   notes-backend               1         applied  present
+Proxy     proxy     notes-karga-proxy-6e2b9f14  1         applied  running  0         -> karga-api-r1, karga-postgres-r1
+Secret    db        notes-db                    1         applied  file
+Service   api       notes-karga-proxy           1         applied  routed             -> karga-api-r1
+Service   postgres  notes-karga-proxy           1         applied  routed             -> karga-postgres-r1
+Volume    db-data   notes-db-data               1         applied  present
+Workload  api       notes-api-5c07e19a          1         applied  running  0         healthy
+Workload  postgres  notes-postgres-a71c3e05     1         applied  running  0         healthy
 ```
 
 Create a table and use the API (PostgREST reloads its schema on `NOTIFY pgrst`):
