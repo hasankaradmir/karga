@@ -6,6 +6,8 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
 ## [Unreleased]
 
 ### Added
+- `karga gateway edit`: the settings in force in `$KARGA_EDITOR`/`$EDITOR`; a document with
+  problems opens again with them on top; saving it unchanged gives up and keeps the file.
 - The gateway settings as a document you keep (kind `Gateway`): `karga gateway get`, `diff -f`,
   `apply -f [--yes]`, `history` and `rollback [revision]`; `gateway status` shows the revision in
   force.
