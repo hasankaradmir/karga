@@ -224,8 +224,8 @@ spec:
   ports:
     - {name: http, port: 80, targetPort: http}   # targetPort: a port name or number of the workload (default: name)
   expose:                                        # optional; listeners are defined by the host's administrator
-    - {port: http, listener: web, host: shop.example.com, path: /}           # http listener: by Host and path prefix
-    - {port: http, listener: websecure, host: shop.example.com, tls: {secret: shop-cert}}   # https; Secret has tls.crt, tls.key
+    - {port: http, listener: http, host: shop.example.com, path: /}          # http listener: by Host and path prefix
+    - {port: http, listener: https, host: shop.example.com, tls: {secret: shop-cert}}   # https; Secret has tls.crt, tls.key
     # - {port: db, listener: pg}                 # tcp listener: belongs to this one service
 ```
 

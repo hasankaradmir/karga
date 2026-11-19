@@ -16,6 +16,8 @@ All notable changes are listed here, newest first ([Keep a Changelog](https://ke
   `listener list` shows them in OPTIONS.
 
 ### Changed
+- Gateway listeners `http` and `https` instead of `web` and `websecure` in `karga create`, the
+  examples and USAGE; `listener add|set --redirect-https` (karga-server D41).
 - USAGE: the gateway is `karga-gateway-<hash>` and changes image without an outage
   (karga-server D38).
 - USAGE: the release proxy is `<release>-karga-proxy-<hash>` and is replaced without an outage

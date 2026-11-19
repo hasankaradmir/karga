@@ -153,6 +153,7 @@ func optionFlags(cmd *cobra.Command, o *api.ListenerOptions) {
 	cmd.Flags().StringVar(&o.MaxBody, "max-body", "", "http, https: largest request body, e.g. 10Mi, at most 16Mi (413 beyond it; default none)")
 	cmd.Flags().StringVar(&o.RateLimit, "rate-limit", "", "http, https: requests per second or minute, e.g. 100/s (429 beyond it; default none)")
 	cmd.Flags().StringVar(&o.ProxyProtocol, "proxy-protocol", "", "tcp: send the client address first, v1 or v2 (the backend must expect it)")
+	cmd.Flags().BoolVar(&o.RedirectHTTPS, "redirect-https", false, "http: redirect plain requests for the hosts an https listener serves to it")
 }
 
 // unset turns the values that remove an option into none.
@@ -166,8 +167,12 @@ func unset(v string) string {
 // optionsText lists the options that are set, or "-".
 func optionsText(o api.ListenerOptions) string {
 	var out []string
+	redirect := ""
+	if o.RedirectHTTPS {
+		redirect = "on"
+	}
 	for _, kv := range [][2]string{{"timeout", o.Timeout}, {"idle-timeout", o.IdleTimeout}, {"max-body", o.MaxBody},
-		{"rate-limit", o.RateLimit}, {"proxy-protocol", o.ProxyProtocol}} {
+		{"rate-limit", o.RateLimit}, {"proxy-protocol", o.ProxyProtocol}, {"redirect-https", redirect}} {
 		if kv[1] != "" {
 			out = append(out, kv[0]+"="+kv[1])
 		}
@@ -241,6 +246,9 @@ func newListenerCmd(a *app) *cobra.Command {
 					v, _ := cmd.Flags().GetString(flag)
 					*field = unset(v)
 				}
+			}
+			if cmd.Flags().Changed("redirect-https") {
+				req.RedirectHTTPS, _ = cmd.Flags().GetBool("redirect-https")
 			}
 			if err := s.SetGatewayListener(cmd.Context(), req); err != nil {
 				return err

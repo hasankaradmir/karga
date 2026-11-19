@@ -10,7 +10,7 @@ service:
 # Expose the service on the host gateway: a listener the host's administrator defined (karga
 # gateway listener list) and a host name. An empty host exposes nothing.
 expose:
-  listener: web
+  listener: http
   host: ""
 
 resources:
