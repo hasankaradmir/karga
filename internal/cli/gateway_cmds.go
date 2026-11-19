@@ -60,8 +60,8 @@ func newGatewayCmd(a *app) *cobra.Command {
 			}
 			_, _ = fmt.Fprintf(a.stdout, "Listen:     %s\n", strings.Join(health.Listen, ", "))
 			_, _ = fmt.Fprintf(a.stdout, "Access log: %s\n", access)
-			if health.Pending {
-				_, _ = fmt.Fprintf(a.stdout, "Settings:   gateway.yaml has changes not applied (karga gateway validate)\n")
+			if health.Revision > 0 {
+				_, _ = fmt.Fprintf(a.stdout, "Settings:   revision %d (karga gateway history)\n", health.Revision)
 			}
 			_, _ = fmt.Fprintln(a.stdout)
 			var rows [][]string
@@ -106,43 +106,13 @@ func newGatewayCmd(a *app) *cobra.Command {
 			return a.report(map[string]any{"listen": addrs}, "gateway listens on %s\n", strings.Join(addrs, ", "))
 		},
 	})
-	cmd.AddCommand(set, newListenerCmd(a), &cobra.Command{
-		Use:   "validate",
-		Short: "Check $KARGA_HOME/gateway.yaml against the running settings; changes nothing",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			plan, err := a.backend().ValidateGateway(cmd.Context())
-			if err != nil {
-				return err
-			}
-			return a.printGatewayPlan(plan)
-		},
-	}, &cobra.Command{
-		Use:   "apply",
-		Short: "Apply $KARGA_HOME/gateway.yaml; if the gateway does not route with it, it keeps the running settings",
-		Args:  cobra.NoArgs,
-		RunE: func(cmd *cobra.Command, _ []string) error {
-			s := a.backend()
-			plan, err := s.ValidateGateway(cmd.Context())
-			if err != nil {
-				return err
-			}
-			if err := a.printGatewayPlan(plan); err != nil || len(plan.Changes) == 0 {
-				return err
-			}
-			if err := a.confirm(cmd, plan.Risk); err != nil {
-				return err
-			}
-			if err := s.ApplyGateway(cmd.Context(), api.GatewayApplyRequest{Digest: plan.Digest, Confirmed: true}); err != nil {
-				return err
-			}
-			return a.report(map[string]any{"applied": true}, "gateway settings applied\n")
-		},
-	})
+	cmd.AddCommand(set, newListenerCmd(a))
+	addDocumentCmds(a, cmd)
 	return cmd
 }
 
-// printGatewayPlan shows what applying gateway.yaml changes; problems make the command fail (exit 2).
+// printGatewayPlan shows what applying a gateway document changes; problems make the command fail
+// (exit 2).
 func (a *app) printGatewayPlan(plan api.GatewayPlan) error {
 	if a.structured() {
 		if err := a.write(plan); err != nil {
@@ -171,7 +141,7 @@ func (a *app) printGatewayPlan(plan api.GatewayPlan) error {
 		}
 	}
 	if len(plan.Problems) > 0 {
-		return usageError{fmt.Errorf("gateway.yaml has %d problem(s); nothing was applied", len(plan.Problems))}
+		return usageError{fmt.Errorf("the gateway document has %d problem(s); nothing was applied", len(plan.Problems))}
 	}
 	return nil
 }

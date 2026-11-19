@@ -117,7 +117,8 @@ logs). The state lives in karga-server's `KARGA_HOME` (`/var/lib/karga` for the 
 | `exec <release> <workload> [-it] [-- cmd]` | Run a command in a workload (default: an interactive `sh`); exits with its code |
 | `logs <release> [workload...]` | Container logs (`--tail`, `-f`); `--proxy` for the release proxy, `--gateway` for the gateway |
 | `gateway status` | Health, version, image and listen addresses of the host gateway, and what it serves |
-| `gateway validate\|apply` | Check, then apply, `$KARGA_HOME/gateway.yaml` edited by hand; a failed apply keeps the running settings |
+| `gateway get\|diff -f\|apply -f` | The gateway settings as a document you keep (kind `Gateway`): print, compare, apply as a new revision (a failed apply keeps the one in force) |
+| `gateway history\|rollback [rev]` | The revisions applied (the last 10), and applying an earlier one again |
 | `gateway listener list\|add\|set\|remove` | The ports Services can be exposed on: `add <name> --port <port> --protocol tcp\|http\|https`; `set <name>` changes its timeouts, body and rate limits and PROXY protocol; a listener in use cannot be removed |
 | `gateway set listen <ip>[,<ip>]` | Where every listener binds (default `127.0.0.1`; `0.0.0.0` is every interface) |
 | `gateway set access-log on\|off` | Log every request and connection the gateway handles (off by default) |
